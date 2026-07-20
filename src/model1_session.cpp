@@ -54,7 +54,8 @@ public:
             m_audio.reset();
         }
         m_input = std::make_unique<arcade_input>();
-        if (!m_input->initialize())
+        if (!m_input->initialize(
+                model1_rom_loader::set_short_name(m_machine->rom_set())))
             std::fprintf(stderr,
                          "Input initialization failed; controls are neutral\n");
         m_fps_epoch = std::chrono::steady_clock::now();
@@ -141,6 +142,9 @@ public:
             !m_machine->set_attract_sound_enabled(attract_sound))
             std::fprintf(stderr,
                          "Could not save Model 1 cabinet settings\n");
+    }
+    void reload_input_mappings() override {
+        if (m_input) m_input->reload_mappings();
     }
     double frame_seconds() const override {
         return 1.0 / model1_machine::refresh_rate();

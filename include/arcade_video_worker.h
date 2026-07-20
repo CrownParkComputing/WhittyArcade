@@ -48,6 +48,7 @@ public:
     void set_rom_choices(std::vector<rom_choice> choices);
     bool take_rom_selection(std::string& path);
     bool take_dip_request();
+    bool take_controls_request();
     bool take_settings_change(emulator_settings& settings);
     void set_f2_opens_dip(bool enabled);
     void apply_display_settings(const emulator_settings& settings);
@@ -94,6 +95,7 @@ private:
     std::string m_selected_rom;
     bool m_rom_pending{};
     bool m_dip_pending{};
+    bool m_controls_pending{};
     bool m_settings_pending{};
     emulator_settings m_changed_settings{};
 

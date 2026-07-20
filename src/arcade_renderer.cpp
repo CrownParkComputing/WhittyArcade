@@ -1091,6 +1091,13 @@ arcade_host_action polygon_renderer_gpu::process_events() {
                 m_dip_requested = true;
                 continue;
             }
+            if (!event.key.repeat && key == SDLK_c) {
+                m_settings_visible = false;
+                m_rom_menu_visible = false;
+                m_controls_requested = true;
+                m_settings_texture_dirty = true;
+                continue;
+            }
             if (!event.key.repeat && key == SDLK_s) {
                 if (m_settings_visible && !m_rom_menu_visible) {
                     m_settings_visible = false;
@@ -1298,6 +1305,12 @@ bool polygon_renderer_gpu::take_rom_selection(std::string& path) {
 bool polygon_renderer_gpu::take_dip_request() {
     const bool requested = m_dip_requested;
     m_dip_requested = false;
+    return requested;
+}
+
+bool polygon_renderer_gpu::take_controls_request() {
+    const bool requested = m_controls_requested;
+    m_controls_requested = false;
     return requested;
 }
 
@@ -2438,7 +2451,7 @@ void polygon_renderer_gpu::update_settings_texture() {
     const SDL_Color accent{70, 208, 255, 255};
     if (m_rom_menu_visible) {
         draw_text(24, 16, "GO ARCADE / GAMES", accent);
-        draw_text(337, 18, "R: CLOSE   S: SETTINGS", muted);
+        draw_text(295, 18, "R: CLOSE   S: SETTINGS   C: CONTROLS", muted);
         if (m_rom_choices.empty()) {
             draw_text(32, 76, "No supported arcade ROM sets found.", muted);
         } else {
@@ -2499,7 +2512,7 @@ void polygon_renderer_gpu::update_settings_texture() {
                   "LEFT/RIGHT: BOARD  UP/DOWN: ROM  ENTER: LOAD", muted);
     } else {
         draw_text(24, 16, "EMULATOR SETTINGS", accent);
-        draw_text(361, 18, "S: CLOSE   ESC: QUIT", muted);
+        draw_text(306, 18, "S: CLOSE   C: CONTROLS   ESC: QUIT", muted);
 
         const std::array<std::string, settings_row_count> labels{
             "Master volume", "Music", "Effects / speech", "Fullscreen",

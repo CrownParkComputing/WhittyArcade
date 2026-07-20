@@ -5,6 +5,8 @@
 #include "arcade_frontend.h"
 #include "arcade_session.h"
 #include "arcade_video_worker.h"
+#include "input_mapper.h"
+#include "launcher_menu.h"
 #include "rom_library.h"
 
 #include <algorithm>
@@ -201,7 +203,10 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<emulator_session> emu = create_emulator_session(
             identity->board, shared_video, cabinet_state);
         if (!emu->initialize(rom_path, bios_path, settings)) return 1;
-        emu->set_rom_choices(discover_rom_choices(rom_path));
+        const std::vector<rom_choice> installed_games =
+            discover_rom_choices(rom_path);
+        emu->set_rom_choices(installed_games);
+        const std::string current_game_short_name(identity->short_name);
 
         auto deadline = std::chrono::steady_clock::now();
         arcade_host_action host_action =
@@ -210,6 +215,23 @@ int main(int argc, char* argv[]) {
                arcade_host_action::continue_running) {
             if (emu->take_operator_settings_request())
                 emu->open_operator_settings();
+
+            if (emu->take_controls_request()) {
+                const bool was_paused = emu->paused();
+                emu->set_paused(true);
+                shared_video->run_modal([
+                    &installed_games, &current_game_short_name] {
+                    // A software launcher avoids stealing the running
+                    // cabinet's OpenGL context while controls are edited.
+                    launcher_menu menu(true);
+                    show_game_input_mapper(menu, installed_games,
+                                           current_game_short_name);
+                });
+                emu->reload_input_mappings();
+                emu->set_paused(was_paused);
+                emu->refresh_output();
+                deadline = std::chrono::steady_clock::now();
+            }
 
             if (emu->take_settings_change(settings) &&
                 !save_settings(settings)) {

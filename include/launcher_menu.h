@@ -17,7 +17,8 @@ struct launcher_controller_info {
 
 class launcher_menu {
 public:
-    launcher_menu();
+    // Compact utility mode is used for menus shown over a running game.
+    explicit launcher_menu(bool compact_utility_window = false);
     ~launcher_menu();
 
     launcher_menu(const launcher_menu&) = delete;
@@ -37,10 +38,12 @@ public:
     std::vector<launcher_controller_info> controllers();
 
     // Waits for one key/button/axis movement. An empty optional means cancel;
-    // an input_binding of type none means the user requested Clear.
+    // an input_binding of type none means Clear. When allow_inherit is true,
+    // Backspace returns an inherit binding for a per-game profile.
     std::optional<input_binding> capture_binding(
         const std::string& title, const std::string& description,
-        bool keyboard, int32_t controller_instance = -1);
+        bool keyboard, int32_t controller_instance = -1,
+        bool allow_inherit = false);
 
 private:
     struct implementation;

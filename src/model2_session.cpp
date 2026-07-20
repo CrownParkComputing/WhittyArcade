@@ -61,7 +61,8 @@ public:
             std::printf("Model 2 audio disabled by WHITTY_MODEL2_AUDIO=0\n");
         }
         m_input = std::make_unique<arcade_input>();
-        if (!m_input->initialize())
+        if (!m_input->initialize(
+                model2_rom_loader::set_short_name(m_machine->rom_set())))
             std::fprintf(stderr,
                          "Input initialization failed; controls are neutral\n");
         // Do not assert the cabinet TEST line in the middle of a race. F2 is
@@ -117,6 +118,9 @@ public:
         m_service_session.store(true, std::memory_order_release);
         m_input->set_test_input_enabled(true);
         m_gpu_renderer->set_f2_opens_dip(false);
+    }
+    void reload_input_mappings() override {
+        if (m_input) m_input->reload_mappings();
     }
     double frame_seconds() const override {
         return 1.0 / model2_machine::refresh_rate;

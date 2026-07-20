@@ -4,6 +4,7 @@
 #include "arcade_frontend.h"
 #include "shinobi_audio.h"
 #include "shinobi_machine.h"
+#include "shinobi_rom.h"
 
 #include <cstdio>
 #include <utility>
@@ -32,7 +33,12 @@ public:
         m_machine      = std::make_unique<shinobi::shinobi_machine_t>();
         m_input        = std::make_unique<arcade_input>();
         if (!m_gpu_renderer->initialize(settings)) return false;
-        if (!m_input->initialize()) return false;
+        const shinobi::shinobi_rom_set set =
+            shinobi::shinobi_rom_loader::identify_set(rom_path);
+        const std::string_view short_name =
+            set == shinobi::shinobi_rom_set::unknown ? std::string_view{} :
+            shinobi::shinobi_rom_loader::set_short_name(set);
+        if (!m_input->initialize(short_name)) return false;
         if (!m_machine->load_roms(rom_path)) return false;
         m_audio = std::make_unique<shinobi_audio_system>(
             make_shinobi_sound_synth());
@@ -86,6 +92,9 @@ public:
     }
     double frame_seconds() const override {
         return 1.0 / m_machine->refresh_rate();
+    }
+    void reload_input_mappings() override {
+        if (m_input) m_input->reload_mappings();
     }
 
 protected:

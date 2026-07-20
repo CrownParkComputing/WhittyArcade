@@ -72,7 +72,7 @@ int arcade_input::watch_cabinet_button_events(void* userdata,
     return 0;
 }
 
-bool arcade_input::initialize() {
+bool arcade_input::initialize(std::string_view game_short_name) {
     std::lock_guard<std::mutex> sdl_lock(arcade_sdl_mutex());
     if (m_initialized) return true;
     // The persistent video worker owns SDL_INIT_EVENTS and is the only thread
@@ -84,8 +84,10 @@ bool arcade_input::initialize() {
         return false;
     }
 
+    m_game_short_name = game_short_name;
     m_mappings = load_input_mappings();
-    m_keyboard_bindings = m_mappings.keyboard;
+    m_keyboard_bindings = keyboard_bindings_for(m_mappings,
+                                                 m_game_short_name);
     m_controller_bindings = default_controller_bindings();
     for (std::size_t slot = 0; slot < cabinet_actions.size(); ++slot) {
         const input_binding& binding = m_keyboard_bindings[
@@ -106,6 +108,42 @@ bool arcade_input::initialize() {
     if (!m_controller)
         std::printf("Input: keyboard active; waiting for an SDL controller\n");
     return true;
+}
+
+void arcade_input::reload_mappings() {
+    std::lock_guard<std::mutex> sdl_lock(arcade_sdl_mutex());
+    if (!m_initialized) return;
+
+    m_mappings = load_input_mappings();
+    m_keyboard_bindings = keyboard_bindings_for(m_mappings,
+                                                 m_game_short_name);
+    for (std::size_t slot = 0; slot < cabinet_actions.size(); ++slot) {
+        const input_binding& binding = m_keyboard_bindings[
+            input_action_index(cabinet_actions[slot])];
+        m_watch_keyboard_codes[slot].store(
+            watch_code(binding, input_binding_type::keyboard),
+            std::memory_order_relaxed);
+    }
+
+    m_controller_bindings = default_controller_bindings();
+    if (m_controller) {
+        SDL_Joystick* joystick = SDL_GameControllerGetJoystick(m_controller);
+        std::array<char, sdl_guid_text_size> guid_text{};
+        SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick),
+                                  guid_text.data(),
+                                  static_cast<int>(guid_text.size()));
+        m_controller_bindings = controller_bindings_for(
+            m_mappings, guid_text.data(), m_game_short_name);
+    }
+    set_controller_watch_bindings();
+
+    // Menu navigation must never leak a stale cabinet edge into gameplay.
+    m_cabinet_pulse_frames.fill(0);
+    m_cabinet_pressed.fill(false);
+    for (auto& event : m_cabinet_events)
+        event.store(false, std::memory_order_relaxed);
+    m_keyboard_steering = 0.0f;
+    m_state = input_state{};
 }
 
 void arcade_input::shutdown() {
@@ -151,8 +189,8 @@ bool arcade_input::open_controller(int joystick_index) {
     std::array<char, sdl_guid_text_size> guid_text{};
     SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), guid_text.data(),
                               static_cast<int>(guid_text.size()));
-    m_controller_bindings = controller_bindings_for(m_mappings,
-                                                     guid_text.data());
+    m_controller_bindings = controller_bindings_for(
+        m_mappings, guid_text.data(), m_game_short_name);
     set_controller_watch_bindings();
     for (int axis = 0; axis < SDL_CONTROLLER_AXIS_MAX; ++axis) {
         m_axis_centers[static_cast<std::size_t>(axis)] =

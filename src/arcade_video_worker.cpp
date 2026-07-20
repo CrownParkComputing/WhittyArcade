@@ -140,14 +140,16 @@ void arcade_video_worker::harvest_frontend(polygon_renderer_gpu& renderer) {
     emulator_settings changed;
     const bool has_rom = renderer.take_rom_selection(selected);
     const bool has_dip = renderer.take_dip_request();
+    const bool has_controls = renderer.take_controls_request();
     const bool has_settings = renderer.take_settings_change(changed);
-    if (!has_rom && !has_dip && !has_settings) return;
+    if (!has_rom && !has_dip && !has_controls && !has_settings) return;
     std::lock_guard<std::mutex> lock(m_frontend_mutex);
     if (has_rom) {
         m_selected_rom = std::move(selected);
         m_rom_pending = true;
     }
     if (has_dip) m_dip_pending = true;
+    if (has_controls) m_controls_pending = true;
     if (has_settings) {
         m_changed_settings = changed;
         m_settings_pending = true;
@@ -179,6 +181,13 @@ bool arcade_video_worker::take_dip_request() {
     std::lock_guard<std::mutex> lock(m_frontend_mutex);
     const bool pending = m_dip_pending;
     m_dip_pending = false;
+    return pending;
+}
+
+bool arcade_video_worker::take_controls_request() {
+    std::lock_guard<std::mutex> lock(m_frontend_mutex);
+    const bool pending = m_controls_pending;
+    m_controls_pending = false;
     return pending;
 }
 

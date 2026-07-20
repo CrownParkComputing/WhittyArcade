@@ -101,6 +101,7 @@ private:
     bool m_headless{false};
     bool m_initialized{false};
     bool m_dip_requested{false};
+    bool m_controls_requested{false};
     bool m_f2_opens_dip{false};
     bool m_settings_visible{false};
     bool m_settings_changed{false};
@@ -158,6 +159,7 @@ public:
     void set_rom_choices(std::vector<rom_choice> choices);
     bool take_rom_selection(std::string& path);
     bool take_dip_request();
+    bool take_controls_request();
     bool take_settings_change(emulator_settings& settings);
     void set_f2_opens_dip(bool enabled) { m_f2_opens_dip = enabled; }
     bool settings_visible() const { return m_settings_visible; }

@@ -36,7 +36,8 @@ public:
                     const emulator_settings& settings) override {
         m_input = std::make_unique<arcade_input>();
         if (!m_gpu_renderer->initialize(settings)) return false;
-        if (!m_input->initialize()) return false;
+        if (!m_input->initialize(galaxian_rom_loader::set_short_name(m_set)))
+            return false;
         std::unique_ptr<galaxian_sound_synth> synth;
         if (m_set == galaxian_rom_set::phoenix) {
             m_machine = std::make_unique<galaxian_machine>(
@@ -94,6 +95,9 @@ public:
 
     double frame_seconds() const override {
         return 1.0 / m_machine->refresh_rate();
+    }
+    void reload_input_mappings() override {
+        if (m_input) m_input->reload_mappings();
     }
 
 protected:

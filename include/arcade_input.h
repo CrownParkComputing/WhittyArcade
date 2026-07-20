@@ -8,12 +8,15 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 class arcade_input {
 public:
     ~arcade_input();
 
-    bool initialize();
+    bool initialize(std::string_view game_short_name = {});
+    void reload_mappings();
     void shutdown();
     void update();
     void set_suppressed(bool suppressed) { m_suppressed = suppressed; }
@@ -36,6 +39,7 @@ private:
 
     SDL_GameController* m_controller{nullptr};
     input_mapping_config m_mappings{};
+    std::string m_game_short_name;
     input_binding_table m_keyboard_bindings{};
     input_binding_table m_controller_bindings{};
     std::array<int, SDL_CONTROLLER_AXIS_MAX> m_axis_centers{};

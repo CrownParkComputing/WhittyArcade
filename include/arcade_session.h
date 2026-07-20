@@ -34,7 +34,9 @@ public:
     virtual void set_rom_choices(const std::vector<rom_choice>& choices) = 0;
     virtual bool take_rom_selection(std::string& path) = 0;
     virtual bool take_operator_settings_request() = 0;
+    virtual bool take_controls_request() = 0;
     virtual void open_operator_settings() = 0;
+    virtual void reload_input_mappings() = 0;
     virtual bool take_settings_change(emulator_settings& settings) = 0;
     virtual bool paused() const = 0;
     virtual void set_paused(bool paused) = 0;

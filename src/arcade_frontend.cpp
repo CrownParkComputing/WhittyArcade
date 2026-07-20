@@ -492,7 +492,7 @@ rom_selection_result show_rom_selector(const std::string& current_path) {
             continue;
         }
         if (selected_page == 2) {
-            show_input_mapper(menu);
+            show_input_mapper(menu, choices);
             continue;
         }
         if (selected_page == 3) {

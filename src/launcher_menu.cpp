@@ -13,6 +13,8 @@
 namespace {
 constexpr int logical_width = 800;
 constexpr int logical_height = 720;
+constexpr int compact_window_width = 560;
+constexpr int compact_window_height = 510;
 constexpr int horizontal_margin = 30;
 constexpr int list_bottom = 652;
 constexpr int row_height = 48;
@@ -101,7 +103,7 @@ struct launcher_menu::implementation {
     bool ttf_initialized{};
     std::vector<SDL_GameController*> controllers;
 
-    implementation() {
+    explicit implementation(bool compact_utility_window) {
         SDL_SetHint("SDL_APP_ID", "WhittyArcade");
         SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "WhittyArcade");
         SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "WhittyArcade");
@@ -121,18 +123,30 @@ struct launcher_menu::implementation {
             ttf_initialized = true;
         }
 
+        const Uint32 window_flags =
+            SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
+            SDL_WINDOW_ALLOW_HIGHDPI |
+            (compact_utility_window ?
+                 static_cast<Uint32>(SDL_WINDOW_ALWAYS_ON_TOP |
+                                     SDL_WINDOW_UTILITY |
+                                     SDL_WINDOW_SKIP_TASKBAR) : 0u);
         window = SDL_CreateWindow(
             "WhittyArcade", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-            logical_width, logical_height,
-            SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+            compact_utility_window ? compact_window_width : logical_width,
+            compact_utility_window ? compact_window_height : logical_height,
+            window_flags);
         if (!window) {
             std::fprintf(stderr, "Launcher window creation failed: %s\n",
                          SDL_GetError());
             return;
         }
-        SDL_SetWindowMinimumSize(window, 560, 500);
-        renderer = SDL_CreateRenderer(
-            window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        SDL_SetWindowMinimumSize(window,
+                                 compact_utility_window ? 480 : 560,
+                                 compact_utility_window ? 438 : 500);
+        if (!compact_utility_window)
+            renderer = SDL_CreateRenderer(
+                window, -1,
+                SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
         if (!renderer)
             renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
         if (!renderer) {
@@ -142,6 +156,11 @@ struct launcher_menu::implementation {
         }
         SDL_RenderSetLogicalSize(renderer, logical_width, logical_height);
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        if (compact_utility_window) {
+            SDL_SetWindowAlwaysOnTop(window, SDL_TRUE);
+            SDL_RaiseWindow(window);
+            SDL_SetWindowInputFocus(window);
+        }
 
         constexpr std::array<const char*, 3> font_paths{
             "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
@@ -422,7 +441,7 @@ struct launcher_menu::implementation {
 
     std::optional<input_binding> capture_binding(
         const std::string& title, const std::string& description,
-        bool keyboard, int32_t controller_instance) {
+        bool keyboard, int32_t controller_instance, bool allow_inherit) {
         SDL_GameController* target = keyboard ? nullptr :
             controller_for_instance(controller_instance);
         if (!keyboard && !target) return std::nullopt;
@@ -444,7 +463,9 @@ struct launcher_menu::implementation {
             if (redraw) {
                 draw_frame(
                     title, description, rows, 0, 0, 1, 152,
-                    "ESC: CANCEL    DELETE/BACKSPACE: CLEAR MAPPING");
+                    allow_inherit ?
+                        "ESC: CANCEL    DELETE: CLEAR    BACKSPACE: USE GENERAL" :
+                        "ESC: CANCEL    DELETE/BACKSPACE: CLEAR MAPPING");
                 redraw = false;
             }
 
@@ -469,9 +490,12 @@ struct launcher_menu::implementation {
             if (event.type == SDL_KEYDOWN && !event.key.repeat) {
                 if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
                     return std::nullopt;
-                if (event.key.keysym.scancode == SDL_SCANCODE_DELETE ||
-                    event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE)
+                if (event.key.keysym.scancode == SDL_SCANCODE_DELETE)
                     return input_binding{};
+                if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE)
+                    return allow_inherit ?
+                        input_binding{input_binding_type::inherit, -1, 0} :
+                        input_binding{};
                 if (keyboard) {
                     return input_binding{
                         input_binding_type::keyboard,
@@ -617,7 +641,8 @@ struct launcher_menu::implementation {
     }
 };
 
-launcher_menu::launcher_menu() : m_impl(std::make_unique<implementation>()) {}
+launcher_menu::launcher_menu(bool compact_utility_window)
+    : m_impl(std::make_unique<implementation>(compact_utility_window)) {}
 launcher_menu::~launcher_menu() = default;
 
 int launcher_menu::select(const std::string& title,
@@ -630,6 +655,7 @@ int launcher_menu::select(const std::string& title,
                                initial_selection);
     SDL_SetWindowTitle(m_impl->window, title.c_str());
     SDL_RaiseWindow(m_impl->window);
+    SDL_SetWindowInputFocus(m_impl->window);
     return m_impl->select(title, description, items, back_label,
                           initial_selection);
 }
@@ -644,6 +670,7 @@ void launcher_menu::show_text(const std::string& title,
     }
     SDL_SetWindowTitle(m_impl->window, title.c_str());
     SDL_RaiseWindow(m_impl->window);
+    SDL_SetWindowInputFocus(m_impl->window);
     m_impl->show_text(title, text, back_label);
 }
 
@@ -654,7 +681,7 @@ std::vector<launcher_controller_info> launcher_menu::controllers() {
 
 std::optional<input_binding> launcher_menu::capture_binding(
     const std::string& title, const std::string& description,
-    bool keyboard, int32_t controller_instance) {
+    bool keyboard, int32_t controller_instance, bool allow_inherit) {
     if (!m_impl->ready()) {
         SDL_ShowSimpleMessageBox(
             SDL_MESSAGEBOX_INFORMATION, title.c_str(),
@@ -664,6 +691,7 @@ std::optional<input_binding> launcher_menu::capture_binding(
     }
     SDL_SetWindowTitle(m_impl->window, title.c_str());
     SDL_RaiseWindow(m_impl->window);
+    SDL_SetWindowInputFocus(m_impl->window);
     return m_impl->capture_binding(title, description, keyboard,
-                                   controller_instance);
+                                   controller_instance, allow_inherit);
 }

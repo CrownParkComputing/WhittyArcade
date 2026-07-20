@@ -3,6 +3,7 @@
 #include <SDL2/SDL.h>
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
@@ -83,6 +84,8 @@ std::optional<int> parse_integer(std::string_view text) {
 
 std::optional<input_binding> parse_binding(std::string_view text) {
     if (text == "none") return input_binding{};
+    if (text == "inherit")
+        return input_binding{input_binding_type::inherit, -1, 0};
     const std::size_t first = text.find(':');
     if (first == std::string_view::npos) return std::nullopt;
     const std::string_view type = text.substr(0, first);
@@ -117,6 +120,8 @@ std::string serialize_binding(const input_binding& binding) {
                std::to_string(binding.direction < 0 ? -1 : 1);
     case input_binding_type::none:
         return "none";
+    case input_binding_type::inherit:
+        return "inherit";
     }
     return "none";
 }
@@ -124,7 +129,8 @@ std::string serialize_binding(const input_binding& binding) {
 bool valid_keyboard_binding(const input_binding& binding) {
     return binding.type == input_binding_type::none ||
            (binding.type == input_binding_type::keyboard &&
-            binding.code >= 0 && binding.code < SDL_NUM_SCANCODES);
+            binding.code >= 0 && binding.code < SDL_NUM_SCANCODES &&
+            binding.code != SDL_SCANCODE_C);
 }
 
 bool valid_controller_binding(const input_binding& binding) {
@@ -135,6 +141,36 @@ bool valid_controller_binding(const input_binding& binding) {
            (binding.type == input_binding_type::controller_axis &&
             binding.code >= 0 && binding.code < SDL_CONTROLLER_AXIS_MAX &&
             (binding.direction == -1 || binding.direction == 1));
+}
+
+bool valid_keyboard_override(const input_binding& binding) {
+    return binding.type == input_binding_type::inherit ||
+           valid_keyboard_binding(binding);
+}
+
+bool valid_controller_override(const input_binding& binding) {
+    return binding.type == input_binding_type::inherit ||
+           valid_controller_binding(binding);
+}
+
+bool valid_game_short_name(std::string_view short_name) {
+    return !short_name.empty() &&
+        std::all_of(short_name.begin(), short_name.end(), [](char value) {
+            const unsigned char character =
+                static_cast<unsigned char>(value);
+            return std::islower(character) || std::isdigit(character) ||
+                   value == '_';
+        });
+}
+
+input_binding_table resolve_bindings(
+        input_binding_table bindings,
+        const input_binding_table& overrides) {
+    for (std::size_t index = 0; index < bindings.size(); ++index) {
+        if (overrides[index].type != input_binding_type::inherit)
+            bindings[index] = overrides[index];
+    }
+    return bindings;
 }
 
 const input_action_descriptor* find_action(std::string_view id) {
@@ -195,7 +231,8 @@ input_binding_table default_keyboard_bindings() {
     set(input_action::p1_down, key(SDL_SCANCODE_S));
     set(input_action::p1_action1, key(SDL_SCANCODE_Z));
     set(input_action::p1_action2, key(SDL_SCANCODE_X));
-    set(input_action::p1_action3, key(SDL_SCANCODE_C));
+    // C opens the current game's controller mapper while a cabinet runs.
+    set(input_action::p1_action3, key(SDL_SCANCODE_V));
     set(input_action::right_left, key(SDL_SCANCODE_LEFT));
     set(input_action::right_right, key(SDL_SCANCODE_RIGHT));
     set(input_action::right_up, key(SDL_SCANCODE_UP));
@@ -262,6 +299,12 @@ input_binding_table default_controller_bindings() {
     return bindings;
 }
 
+input_binding_table inherited_input_bindings() {
+    input_binding_table bindings{};
+    bindings.fill({input_binding_type::inherit, -1, 0});
+    return bindings;
+}
+
 input_mapping_config default_input_mapping_config() {
     input_mapping_config config;
     config.keyboard = default_keyboard_bindings();
@@ -295,8 +338,51 @@ input_mapping_config load_input_mappings(const std::string& path) {
             parse_binding(binding_text);
         if (!binding) continue;
 
+        constexpr std::string_view game_prefix = "game.";
         constexpr std::string_view keyboard_prefix = "keyboard.";
         constexpr std::string_view controller_prefix = "controller.";
+        if (key_name.substr(0, game_prefix.size()) == game_prefix) {
+            const std::string_view game_key =
+                key_name.substr(game_prefix.size());
+            const std::size_t game_separator = game_key.find('.');
+            if (game_separator == std::string_view::npos ||
+                game_separator == 0)
+                continue;
+            const std::string_view short_name =
+                game_key.substr(0, game_separator);
+            if (!valid_game_short_name(short_name)) continue;
+            const std::string_view device_key =
+                game_key.substr(game_separator + 1);
+            game_input_mapping* game = nullptr;
+            if (device_key.substr(0, keyboard_prefix.size()) ==
+                keyboard_prefix) {
+                const input_action_descriptor* action = find_action(
+                    device_key.substr(keyboard_prefix.size()));
+                if (!action || !valid_keyboard_override(*binding)) continue;
+                game = &ensure_game_mapping(config, short_name);
+                game->keyboard[input_action_index(action->action)] = *binding;
+                continue;
+            }
+            if (device_key.substr(0, controller_prefix.size()) !=
+                controller_prefix)
+                continue;
+            const std::string_view controller_key =
+                device_key.substr(controller_prefix.size());
+            const std::size_t controller_separator =
+                controller_key.find('.');
+            if (controller_separator == std::string_view::npos ||
+                controller_separator == 0)
+                continue;
+            const std::string_view guid =
+                controller_key.substr(0, controller_separator);
+            const input_action_descriptor* action = find_action(
+                controller_key.substr(controller_separator + 1));
+            if (!action || !valid_controller_override(*binding)) continue;
+            game = &ensure_game_mapping(config, short_name);
+            ensure_game_controller_mapping(*game, guid)
+                .bindings[input_action_index(action->action)] = *binding;
+            continue;
+        }
         if (key_name.substr(0, keyboard_prefix.size()) == keyboard_prefix) {
             const input_action_descriptor* action =
                 find_action(key_name.substr(keyboard_prefix.size()));
@@ -357,6 +443,31 @@ bool save_input_mappings(const input_mapping_config& config,
                    << '\n';
         }
     }
+    for (const game_input_mapping& game : config.games) {
+        if (!valid_game_short_name(game.short_name)) continue;
+        for (const input_action_descriptor& action : actions) {
+            const input_binding& binding =
+                game.keyboard[input_action_index(action.action)];
+            if (binding.type == input_binding_type::inherit) continue;
+            if (!valid_keyboard_override(binding)) continue;
+            output << "game." << game.short_name << ".keyboard."
+                   << action.id << '=' << serialize_binding(binding) << '\n';
+        }
+        for (const controller_input_mapping& controller : game.controllers) {
+            if (controller.guid.empty() ||
+                controller.guid.find('.') != std::string::npos)
+                continue;
+            for (const input_action_descriptor& action : actions) {
+                const input_binding& binding = controller.bindings[
+                    input_action_index(action.action)];
+                if (binding.type == input_binding_type::inherit) continue;
+                if (!valid_controller_override(binding)) continue;
+                output << "game." << game.short_name << ".controller."
+                       << controller.guid << '.' << action.id << '='
+                       << serialize_binding(binding) << '\n';
+            }
+        }
+    }
     output.close();
     if (!output) {
         fs::remove(temporary, error);
@@ -383,6 +494,105 @@ controller_input_mapping& ensure_controller_mapping(
     return config.controllers.back();
 }
 
+game_input_mapping& ensure_game_mapping(
+        input_mapping_config& config, std::string_view short_name) {
+    const auto found = std::find_if(
+        config.games.begin(), config.games.end(),
+        [short_name](const game_input_mapping& game) {
+            return game.short_name == short_name;
+        });
+    if (found != config.games.end()) return *found;
+    config.games.push_back(
+        {std::string(short_name), inherited_input_bindings(), {}});
+    return config.games.back();
+}
+
+controller_input_mapping& ensure_game_controller_mapping(
+        game_input_mapping& game, std::string_view guid) {
+    const auto found = std::find_if(
+        game.controllers.begin(), game.controllers.end(),
+        [guid](const controller_input_mapping& controller) {
+            return controller.guid == guid;
+        });
+    if (found != game.controllers.end()) return *found;
+    game.controllers.push_back(
+        {std::string(guid), inherited_input_bindings()});
+    return game.controllers.back();
+}
+
+static bool valid_profile_copy(std::string_view target_short_name,
+                               std::string_view source_short_name) {
+    if (!valid_game_short_name(target_short_name) ||
+        (!source_short_name.empty() &&
+         !valid_game_short_name(source_short_name)) ||
+        target_short_name == source_short_name)
+        return false;
+    return true;
+}
+
+bool copy_game_keyboard_mapping(input_mapping_config& config,
+                                std::string_view target_short_name,
+                                std::string_view source_short_name) {
+    if (!valid_profile_copy(target_short_name, source_short_name)) return false;
+    input_binding_table keyboard = inherited_input_bindings();
+    const auto source = std::find_if(
+        config.games.begin(), config.games.end(),
+        [source_short_name](const game_input_mapping& game) {
+            return game.short_name == source_short_name;
+        });
+    // A valid installed game with no saved overrides is itself a pure
+    // General profile, so copying it deliberately clears target overrides.
+    if (!source_short_name.empty() && source != config.games.end())
+        keyboard = source->keyboard;
+
+    game_input_mapping& target =
+        ensure_game_mapping(config, target_short_name);
+    target.keyboard = keyboard;
+    return true;
+}
+
+bool copy_game_controller_mapping(input_mapping_config& config,
+                                  std::string_view target_short_name,
+                                  std::string_view source_short_name,
+                                  std::string_view guid) {
+    if (!valid_profile_copy(target_short_name, source_short_name) ||
+        guid.empty())
+        return false;
+    input_binding_table bindings = inherited_input_bindings();
+    const auto source = std::find_if(
+        config.games.begin(), config.games.end(),
+        [source_short_name](const game_input_mapping& game) {
+            return game.short_name == source_short_name;
+        });
+    if (!source_short_name.empty() && source != config.games.end()) {
+        const auto controller = std::find_if(
+            source->controllers.begin(), source->controllers.end(),
+            [guid](const controller_input_mapping& mapping) {
+                return mapping.guid == guid;
+            });
+        if (controller != source->controllers.end())
+            bindings = controller->bindings;
+    }
+
+    game_input_mapping& target =
+        ensure_game_mapping(config, target_short_name);
+    ensure_game_controller_mapping(target, guid).bindings = bindings;
+    return true;
+}
+
+input_binding_table keyboard_bindings_for(
+        const input_mapping_config& config,
+        std::string_view game_short_name) {
+    if (game_short_name.empty()) return config.keyboard;
+    const auto found = std::find_if(
+        config.games.begin(), config.games.end(),
+        [game_short_name](const game_input_mapping& game) {
+            return game.short_name == game_short_name;
+        });
+    return found == config.games.end() ? config.keyboard :
+        resolve_bindings(config.keyboard, found->keyboard);
+}
+
 input_binding_table controller_bindings_for(
     const input_mapping_config& config, std::string_view guid) {
     const auto found = std::find_if(
@@ -392,6 +602,26 @@ input_binding_table controller_bindings_for(
         });
     return found == config.controllers.end() ?
         default_controller_bindings() : found->bindings;
+}
+
+input_binding_table controller_bindings_for(
+        const input_mapping_config& config, std::string_view guid,
+        std::string_view game_short_name) {
+    input_binding_table bindings = controller_bindings_for(config, guid);
+    if (game_short_name.empty()) return bindings;
+    const auto game = std::find_if(
+        config.games.begin(), config.games.end(),
+        [game_short_name](const game_input_mapping& mapping) {
+            return mapping.short_name == game_short_name;
+        });
+    if (game == config.games.end()) return bindings;
+    const auto controller = std::find_if(
+        game->controllers.begin(), game->controllers.end(),
+        [guid](const controller_input_mapping& mapping) {
+            return mapping.guid == guid;
+        });
+    return controller == game->controllers.end() ? bindings :
+        resolve_bindings(bindings, controller->bindings);
 }
 
 std::string input_binding_name(const input_binding& binding) {
@@ -420,6 +650,8 @@ std::string input_binding_name(const input_binding& binding) {
         return std::string("Axis ") + (name && *name ? name : "Unknown") +
                (binding.direction < 0 ? " -" : " +");
     }
+    case input_binding_type::inherit:
+        return "Use General mapping";
     }
     return "Not mapped";
 }

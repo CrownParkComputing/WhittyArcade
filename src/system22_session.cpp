@@ -83,6 +83,9 @@ public:
     void run_frame() override;
     void render_frame();
     void open_operator_settings() override;
+    void reload_input_mappings() override {
+        if (m_input) m_input->reload_mappings();
+    }
     double frame_seconds() const override {
         return (814.0 * 525.0) / 25600000.0;
     }
@@ -122,6 +125,11 @@ bool system22_emulator::initialize(const std::string& rom_path,
     printf("ROM path: %s\n", rom_path.c_str());
     printf("BIOS path: %s\n", bios_path.c_str());
 
+    const ridge_racer_rom_set game_set = rom_loader::identify_set(rom_path);
+    m_game_set = game_set;
+    if (game_set != ridge_racer_rom_set::unknown)
+        m_nvram_short_name = rom_loader::set_short_name(game_set);
+
     // Initialize GPU renderer
     if (!m_gpu_renderer->initialize(settings)) {
         printf("Failed to initialize GPU renderer\n");
@@ -129,7 +137,7 @@ bool system22_emulator::initialize(const std::string& rom_path,
     }
 
     m_input = std::make_unique<arcade_input>();
-    if (!m_input->initialize())
+    if (!m_input->initialize(m_nvram_short_name))
         std::fprintf(stderr, "Input initialization failed; controls are neutral\n");
 
     // Initialize audio
@@ -145,10 +153,6 @@ bool system22_emulator::initialize(const std::string& rom_path,
     m_roms = std::make_unique<ridge_racer_roms>(
         rom_loader::load_ridge_racer(rom_path, bios_path));
 
-    const ridge_racer_rom_set game_set = rom_loader::identify_set(rom_path);
-    m_game_set = game_set;
-    if (game_set != ridge_racer_rom_set::unknown)
-        m_nvram_short_name = rom_loader::set_short_name(game_set);
     m_bus->set_dip_switches(m_cabinet->system22_dip_switches);
     switch (game_set) {
     case ridge_racer_rom_set::rave_racer:
