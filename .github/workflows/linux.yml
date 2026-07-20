@@ -33,7 +33,7 @@ jobs:
             sdl2_ttf \
             openal \
             glew \
-            zlib-ng-compat \
+            zlib \
             minizip \
             vulkan-headers \
             vulkan-icd-loader \
