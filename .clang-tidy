@@ -1,0 +1,14 @@
+---
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  -bugprone-easily-swappable-parameters,
+  -performance-no-int-to-ptr,
+  -performance-enum-size
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*ridge_racer_emulator/(include|src)/.*'
+ExcludeHeaderFilterRegex: '.*/third_party/.*'
+FormatStyle: none
+...

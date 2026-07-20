@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+
+# Keep generated or imported binary assets byte-for-byte when deliberately
+# force-added despite the repository's ROM safety rules.
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,64 @@
+name: Linux build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libgl1-mesa-dev \
+            libsdl2-dev \
+            libsdl2-ttf-dev \
+            libopenal-dev \
+            libglew-dev \
+            zlib1g-dev \
+            libminizip-dev \
+            libvulkan-dev \
+            libmpg123-dev
+
+      - name: Configure release build
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      # Moira's generated tables are memory-heavy under parallel GCC builds.
+      - name: Build WhittyArcade
+        run: cmake --build build --parallel 2
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure --parallel 2
+
+      - name: Stage Linux executable
+        run: |
+          cmake -E make_directory artifact
+          cmake -E copy build/WhittyArcade artifact/WhittyArcade
+          cmake -E copy README.md artifact/README.md
+          chmod +x artifact/WhittyArcade
+          sha256sum artifact/WhittyArcade > artifact/WhittyArcade.sha256
+
+      - name: Upload Linux x86_64 build
+        uses: actions/upload-artifact@v7
+        with:
+          name: WhittyArcade-linux-x86_64
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30

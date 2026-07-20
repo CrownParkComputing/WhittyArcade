@@ -1,0 +1,121 @@
+// Sega System 16B / Shinobi runtime session.
+
+#include "arcade_session_internal.h"
+#include "arcade_frontend.h"
+#include "shinobi_audio.h"
+#include "shinobi_machine.h"
+
+#include <cstdio>
+#include <utility>
+
+namespace {
+
+class shinobi_emulator : public video_emulator_session {
+private:
+    std::unique_ptr<shinobi::shinobi_machine_t>  m_machine;
+    std::unique_ptr<shinobi_audio_system>   m_audio;
+    std::unique_ptr<arcade_input>          m_input;
+    uint64_t                                m_frame_number{0};
+
+public:
+    shinobi_emulator(std::shared_ptr<arcade_video_worker> video,
+                     std::shared_ptr<arcade_cabinet_state> cabinet)
+        : video_emulator_session(arcade_board_type::shinobi,
+                                 std::move(video), std::move(cabinet)) {}
+
+    ~shinobi_emulator() override {
+        shutdown_session_devices(m_audio, m_gpu_renderer, m_input);
+    }
+
+    bool initialize(const std::string& rom_path, const std::string&,
+                    const emulator_settings& settings) override {
+        m_machine      = std::make_unique<shinobi::shinobi_machine_t>();
+        m_input        = std::make_unique<arcade_input>();
+        if (!m_gpu_renderer->initialize(settings)) return false;
+        if (!m_input->initialize()) return false;
+        if (!m_machine->load_roms(rom_path)) return false;
+        m_audio = std::make_unique<shinobi_audio_system>(
+            make_shinobi_sound_synth());
+        if (m_audio->initialize()) {
+            m_audio->set_mix_levels(settings.master_volume,
+                                    settings.music_volume,
+                                    settings.effects_volume);
+            m_machine->set_sound_write_callback(
+                [this](unsigned port, uint8_t data) {
+                    if (m_audio) m_audio->write_control(port, data);
+                });
+            m_machine->set_sound_status_callback(
+                [this]() -> uint8_t {
+                    return m_audio ? m_audio->read_status() : 0;
+                });
+            m_machine->set_sound_timer_callback(
+                [this](uint32_t clocks) {
+                    if (m_audio) m_audio->advance_timer_clocks(clocks);
+                });
+            m_audio->start();
+        } else {
+            std::fprintf(stderr, "Shinobi audio disabled; video will continue\n");
+            m_audio.reset();
+        }
+        m_machine->reset();
+        apply_dip_switches();
+        std::printf("Shinobi (Sega System 16B) initialized\n");
+        return true;
+    }
+
+    void run_frame() override {
+        m_input->set_suppressed(m_gpu_renderer->settings_visible());
+        m_input->update();
+        m_machine->set_input(m_input->state());
+        m_machine->run_frame();
+        m_gpu_renderer->present_rgba_frame(
+            reinterpret_cast<const uint8_t*>(m_machine->frame_buffer()),
+            m_machine->screen_width(), m_machine->screen_height());
+        if (++m_frame_number % 600 == 0 && session_trace_enabled()) {
+            std::printf("Shinobi frame %lu audio=%d\n",
+                        m_frame_number,
+                        m_audio ? m_audio->peak_sample() : 0);
+        }
+    }
+
+    void open_operator_settings() override {
+        show_modal([this] {
+            show_shinobi_dip_switches(m_cabinet->shinobi_dip_switches);
+        });
+        apply_dip_switches();
+    }
+    double frame_seconds() const override {
+        return 1.0 / m_machine->refresh_rate();
+    }
+
+protected:
+    void apply_audio_settings(const emulator_settings& settings) override {
+        if (m_audio)
+            m_audio->set_mix_levels(settings.master_volume,
+                                    settings.music_volume,
+                                    settings.effects_volume);
+    }
+    void set_audio_paused(bool paused) override {
+        if (m_audio) m_audio->set_paused(paused);
+    }
+
+private:
+    void apply_dip_switches() {
+        if (!m_machine) return;
+        // System 16B uses active-low DIPs: SW1 is the low byte, SW2 high.
+        auto* board = m_machine->board_ptr();
+        board->dsw1_ = static_cast<uint8_t>(
+            m_cabinet->shinobi_dip_switches & 0xff);
+        board->dsw2_ = static_cast<uint8_t>(
+            (m_cabinet->shinobi_dip_switches >> 8) & 0xff);
+    }
+};
+
+} // namespace
+
+std::unique_ptr<emulator_session> make_shinobi_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet) {
+    return std::make_unique<shinobi_emulator>(std::move(video),
+                                               std::move(cabinet));
+}

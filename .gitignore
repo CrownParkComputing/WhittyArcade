@@ -1,0 +1,37 @@
+# CMake and compiler output
+/build*/
+/cmake-build-*/
+/CMakeFiles/
+/CMakeCache.txt
+/Makefile
+/cmake_install.cmake
+/compile_commands.json
+*.a
+*.o
+*.so
+
+# Test, diagnostic and local cache output
+/Testing/
+/.cache/
+*.log
+*.ppm
+*.wav
+
+# ROMs, firmware and user cabinet data must never enter source control
+/roms/
+*.zip
+*.7z
+*.chd
+*.rom
+*.bin
+*.eeprom
+*.nv
+*.backup1
+
+# Editor and operating-system metadata
+/.idea/
+/.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
