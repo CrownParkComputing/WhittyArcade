@@ -9,6 +9,7 @@ find_package(OpenGL REQUIRED)
 find_package(SDL2 REQUIRED)
 find_package(OpenAL REQUIRED)
 find_package(GLEW REQUIRED)
+find_package(glm CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(Vulkan REQUIRED)
@@ -141,7 +142,7 @@ add_library(model1_video STATIC third_party/model1/model1_video.cpp)
 target_include_directories(model1_video PUBLIC
     third_party/model1
     ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(model1_video PUBLIC system24_video)
+target_link_libraries(model1_video PUBLIC system24_video glm::glm)
 target_compile_options(model1_video PRIVATE -w)
 
 add_library(chips_z80 STATIC third_party/chips/z80_impl.cpp)

@@ -111,8 +111,8 @@ synchronisation before CPU parallelism is safe.
 
 ## Build
 
-Dependencies: CMake 3.16+, SDL2, SDL2_ttf, OpenGL 4.3, Vulkan, GLEW, OpenAL,
-zlib, MiniZip, libmpg123 and a C/C++17 compiler.
+Dependencies: CMake 3.16+, SDL2, SDL2_ttf, OpenGL 4.3, Vulkan, GLEW, GLM,
+OpenAL, zlib, MiniZip, libmpg123 and a C/C++17 compiler.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -120,9 +120,10 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-The `Linux build` GitHub Actions workflow performs the same release build and
-test suite on Ubuntu 24.04. Successful runs publish a
-`WhittyArcade-linux-x86_64` artifact containing the executable, README and
+The `CachyOS build` GitHub Actions workflow performs the same release build and
+test suite in the official rolling Arch Linux container, matching CachyOS's
+glibc and pacman ecosystem. Successful runs publish a
+`WhittyArcade-cachyos-x86_64` artifact containing the executable, README and
 SHA-256 checksum.
 
 ## Run

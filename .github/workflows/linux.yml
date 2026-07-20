@@ -1,4 +1,4 @@
-name: Linux build
+name: CachyOS build
 
 on:
   push:
@@ -9,33 +9,41 @@ permissions:
   contents: read
 
 jobs:
-  build-linux:
+  build-cachyos:
     runs-on: ubuntu-24.04
+    container:
+      # CachyOS follows Arch's rolling ABI and package layout. Building in the
+      # official Arch image produces a native glibc/pacman x86_64 artifact.
+      image: archlinux:latest
     timeout-minutes: 45
 
     steps:
+      - name: Install CachyOS / Arch build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel \
+            ca-certificates \
+            cmake \
+            git \
+            ninja \
+            pkgconf \
+            libglvnd \
+            mesa \
+            sdl2-compat \
+            sdl2_ttf \
+            openal \
+            glew \
+            zlib-ng-compat \
+            minizip \
+            vulkan-headers \
+            vulkan-icd-loader \
+            mpg123 \
+            glm
+
       - name: Check out source and submodules
         uses: actions/checkout@v7
         with:
           submodules: recursive
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            build-essential \
-            cmake \
-            ninja-build \
-            pkg-config \
-            libgl1-mesa-dev \
-            libsdl2-dev \
-            libsdl2-ttf-dev \
-            libopenal-dev \
-            libglew-dev \
-            zlib1g-dev \
-            libminizip-dev \
-            libvulkan-dev \
-            libmpg123-dev
 
       - name: Configure release build
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -55,10 +63,10 @@ jobs:
           chmod +x artifact/WhittyArcade
           sha256sum artifact/WhittyArcade > artifact/WhittyArcade.sha256
 
-      - name: Upload Linux x86_64 build
+      - name: Upload CachyOS x86_64 build
         uses: actions/upload-artifact@v7
         with:
-          name: WhittyArcade-linux-x86_64
+          name: WhittyArcade-cachyos-x86_64
           path: artifact/
           if-no-files-found: error
           retention-days: 30
