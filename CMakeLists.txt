@@ -157,16 +157,8 @@ target_include_directories(model1_io SYSTEM PUBLIC
 target_compile_options(model1_io PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(model1_io PUBLIC chips_z80)
 
-# Model 1 sound devices. Nuked OPN2 is LGPL-2.1-or-later; the standalone
-# MultiPCM core is adapted from MAME's BSD-3-Clause implementation.
-add_library(ym3438 STATIC third_party/ym3438/ym3438.c)
-target_include_directories(ym3438 PUBLIC third_party/ym3438)
-target_compile_options(ym3438 PRIVATE -w)
-
-add_library(gpgx_ym3438 STATIC third_party/ym3438/gpgx_ym2612.c)
-target_include_directories(gpgx_ym3438 PUBLIC third_party/ym3438)
-target_compile_options(gpgx_ym3438 PRIVATE -w)
-
+# Model 1 sound devices. YM3438 synthesis uses the BSD-3-Clause ymfm library;
+# the standalone MultiPCM core is adapted from MAME's BSD-3-Clause source.
 add_library(model1_multipcm STATIC
     third_party/model1_audio/model1_multipcm.c)
 target_include_directories(model1_multipcm PUBLIC third_party/model1_audio)
@@ -265,7 +257,6 @@ target_link_libraries(WhittyArcade
     model1_video
     model1_io
     model1_dsb
-    gpgx_ym3438
     model1_multipcm
     arcade_audio_output
     m68000_cpu

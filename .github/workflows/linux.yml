@@ -59,7 +59,9 @@ jobs:
         run: |
           cmake -E make_directory artifact
           cmake -E copy build/WhittyArcade artifact/WhittyArcade
-          cmake -E copy README.md artifact/README.md
+          cmake -E copy RELEASE_README.md artifact/README.md
+          cmake -E copy LICENSE artifact/LICENSE.txt
+          cmake -E copy THIRD_PARTY_NOTICES.md artifact/THIRD_PARTY_NOTICES.md
           chmod +x artifact/WhittyArcade
           sha256sum artifact/WhittyArcade > artifact/WhittyArcade.sha256
 

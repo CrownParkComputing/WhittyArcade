@@ -1,0 +1,121 @@
+WHITTYARCADE PROPRIETARY SOFTWARE LICENCE
+Version 1.0 — 21 July 2026
+
+Copyright © 2026 Jonathan Whittingham / CrownParkComputing.
+All rights reserved.
+
+IMPORTANT: READ THIS LICENCE BEFORE ACCESSING SOURCE CODE OR USING A BINARY
+RELEASE. BY DOWNLOADING, INSTALLING, ACCESSING, OR USING WHITTYARCADE, YOU
+AGREE TO THESE TERMS. IF YOU DO NOT AGREE, DO NOT ACCESS OR USE IT.
+
+1. Scope
+
+This licence applies to the original source code, object code, documentation,
+website material, artwork, and other materials authored for the WhittyArcade
+project by the copyright holder (the "Original Materials"). It does not apply
+to third-party components or portions identified in source headers or in
+THIRD_PARTY_NOTICES.md. Those materials remain under their respective terms.
+
+2. Ownership
+
+The Original Materials are licensed, not sold. The copyright holder retains
+all right, title, and interest in them. No rights are granted except those
+expressly stated in this licence.
+
+3. Binary end-user licence
+
+The copyright holder grants each individual recipient a limited,
+non-exclusive, non-transferable, revocable licence to download, install, and
+run an official, unmodified WhittyArcade binary release for personal,
+non-commercial use on devices that recipient owns or controls. One backup copy
+may be retained solely for that use.
+
+Commercial use, public exhibition, paid access, bundling with hardware,
+pre-installation on a device supplied to another person, and any other form of
+commercial distribution require a separate written licence from the copyright
+holder.
+
+4. Access to proprietary source
+
+If the copyright holder expressly authorises access to the private source-code
+repository, that access grants permission only to inspect the Original
+Materials for evaluation or review. It does not grant permission to clone,
+download, scrape, reproduce, retain, compile, modify, or use the Original
+Materials, except for transient technical copies necessarily created by the
+authorised viewing service.
+
+5. Restrictions
+
+Except where this licence expressly permits it, you must not:
+
+  a. copy, reproduce, publish, distribute, sublicense, sell, rent, lease,
+     lend, host, mirror, transmit, or otherwise make the Original Materials or
+     WhittyArcade binaries available to another person;
+  b. modify, translate, adapt, create derivative works from, or incorporate
+     the Original Materials into another product or service;
+  c. reverse engineer, decompile, disassemble, or otherwise attempt to derive
+     source code, internal design, or non-public interfaces from a binary;
+  d. remove, conceal, or alter copyright, licence, attribution, trade mark, or
+     proprietary notices; or
+  e. bypass access controls or use the project in a way that infringes any
+     third party's rights.
+
+Paragraph 5 does not restrict an act that applicable law expressly permits
+despite a contractual restriction. It also does not restrict rights granted
+directly by a third-party component's own licence in that component.
+
+6. Games, ROMs, firmware, and trade marks
+
+WhittyArcade does not include game ROMs, firmware, keys, or other copyrighted
+game data. You must provide any required data yourself and may use it only when
+you have the legal right to do so. No licence to any game, firmware, arcade
+board design, trade mark, or other third-party property is granted.
+
+Ridge Racer, Namco, Sega, and all other third-party names and marks are the
+property of their respective owners. WhittyArcade and CrownParkComputing are
+not affiliated with or endorsed by those owners.
+
+7. Third-party materials
+
+WhittyArcade incorporates or interoperates with separately licensed
+third-party materials. Their copyright notices and licence terms are provided
+in THIRD_PARTY_NOTICES.md and, where applicable, alongside their source files.
+If this licence conflicts with a third-party licence for that third-party
+material, the third-party licence controls for that material.
+
+8. Updates and termination
+
+The copyright holder is not required to provide maintenance, support, or
+updates. This licence terminates automatically if you breach it. On
+termination, you must stop using WhittyArcade and delete all copies of the
+Original Materials and binaries in your possession or control, except where
+applicable law requires retention.
+
+9. Disclaimer
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, WHITTYARCADE AND THE ORIGINAL
+MATERIALS ARE PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR STATUTORY, INCLUDING
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, SATISFACTORY QUALITY,
+ACCURACY, TITLE, AND NON-INFRINGEMENT.
+
+10. Limitation of liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDER WILL NOT BE
+LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+LOSS, OR FOR LOSS OF DATA, PROFITS, REVENUE, BUSINESS, OR GOODWILL, ARISING
+FROM OR RELATED TO WHITTYARCADE. NOTHING IN THIS LICENCE EXCLUDES OR LIMITS
+LIABILITY THAT CANNOT LAWFULLY BE EXCLUDED OR LIMITED.
+
+11. Governing law
+
+This licence and any non-contractual obligations arising from it are governed
+by the laws of England and Wales, and the courts of England and Wales have
+exclusive jurisdiction, except where mandatory consumer law requires
+otherwise.
+
+12. Permissions
+
+For commercial licensing, redistribution, source licensing, or any permission
+not granted above, contact CrownParkComputing through its official GitHub
+account: https://github.com/CrownParkComputing

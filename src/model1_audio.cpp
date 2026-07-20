@@ -3,6 +3,8 @@
 #include "arcade_audio_output.h"
 #include "model1_dsb.h"
 #include "model1_multipcm.h"
+#include "ymfm.h"
+#include "ymfm_opn.h"
 
 #include <AL/al.h>
 #include <AL/alc.h>
@@ -21,7 +23,68 @@ extern "C" {
 namespace {
 constexpr uint32_t address_mask = 0x00ffffff;
 constexpr uint32_t ym_ring_mask = 8192 - 1;
+
+class model1_ym_bus final : public ymfm::ymfm_interface {
+public:
+    void ymfm_set_timer(uint32_t timer, int32_t clocks) override {
+        if (timer < 2) m_timer_clocks[timer] = clocks;
+    }
+
+    void ymfm_set_busy_end(uint32_t clocks) override {
+        m_busy_until = m_clock + clocks;
+    }
+
+    bool ymfm_is_busy() override {
+        return m_clock < m_busy_until;
+    }
+
+    void reset_host_timing() {
+        m_clock = 0;
+        m_busy_until = 0;
+        m_timer_clocks[0] = -1;
+        m_timer_clocks[1] = -1;
+    }
+
+    void advance_clocks(uint32_t clocks) {
+        m_clock += clocks;
+        for (uint32_t timer = 0; timer < 2; ++timer) {
+            if (m_timer_clocks[timer] < 0) continue;
+            m_timer_clocks[timer] -= static_cast<int64_t>(clocks);
+            if (m_timer_clocks[timer] <= 0) {
+                m_timer_clocks[timer] = -1;
+                if (m_engine) m_engine->engine_timer_expired(timer);
+            }
+        }
+    }
+
+private:
+    uint64_t m_clock{};
+    uint64_t m_busy_until{};
+    int64_t m_timer_clocks[2]{-1, -1};
+};
 }
+
+struct model1_audio_system::ym3438_state {
+    model1_ym_bus bus;
+    ymfm::ym3438 chip;
+    uint64_t clock_fraction{};
+
+    ym3438_state() : chip(bus) {}
+
+    void reset() {
+        bus.reset_host_timing();
+        clock_fraction = 0;
+        chip.reset();
+    }
+
+    void advance_m68k_cycles(uint32_t cycles) {
+        // The sound CPU runs at 10 MHz and the YM3438 at 8 MHz.
+        clock_fraction += static_cast<uint64_t>(cycles) * 4;
+        const uint32_t clocks = static_cast<uint32_t>(clock_fraction / 5);
+        clock_fraction %= 5;
+        bus.advance_clocks(clocks);
+    }
+};
 
 model1_audio_system::model1_audio_system() = default;
 
@@ -55,10 +118,11 @@ bool model1_audio_system::initialize(const model1_roms& roms) {
         }
     }
 
-    YM2612Init();
-    YM2612Config(YM2612_ENHANCED); // CMOS YM3438 14-bit DAC behaviour.
-    YM2612ResetChip();
-    m_ym_resampler.step = (uint64_t{55556} << 32) / OUTPUT_RATE;
+    m_ym = std::make_unique<ym3438_state>();
+    m_ym->reset();
+    const uint32_t ym_sample_rate = m_ym->chip.sample_rate(8'000'000);
+    m_ym_resampler.step =
+        (static_cast<uint64_t>(ym_sample_rate) << 32) / OUTPUT_RATE;
     m_pcm_1_resampler.step =
         (uint64_t{MULTIPCM_NATIVE_RATE} << 32) / OUTPUT_RATE;
     m_pcm_2_resampler.step = m_pcm_1_resampler.step;
@@ -114,6 +178,7 @@ void model1_audio_system::shutdown() {
     m_pcm_1 = nullptr;
     m_pcm_2 = nullptr;
     m_dsb.reset();
+    m_ym.reset();
     m_initialized = false;
 }
 
@@ -211,19 +276,22 @@ void model1_audio_system::tick_chips(int cycles) {
     multipcm_tick_m68k_cycles(m_pcm_1, static_cast<uint32_t>(cycles));
     multipcm_tick_m68k_cycles(m_pcm_2, static_cast<uint32_t>(cycles));
 
-    // The GPGX core advances envelopes and the internal timers once per
-    // native 8 MHz / 144 sample. Tick it from actual 68000 cycles so firmware
-    // status polling and generated audio stay on the same timeline.
-    constexpr uint64_t step = (uint64_t{55556} << 32) / 10000000;
+    if (!m_ym) return;
+    m_ym->advance_m68k_cycles(static_cast<uint32_t>(cycles));
+
+    // YMFM renders one sample per 144 chip clocks. Tick it from actual 68000
+    // cycles so firmware status polling and generated audio share a timeline.
+    const uint64_t native_rate = m_ym->chip.sample_rate(8'000'000);
+    const uint64_t step = (native_rate << 32) / 10'000'000;
     m_ym_clock_fraction += step * static_cast<uint64_t>(cycles);
     uint32_t samples = static_cast<uint32_t>(m_ym_clock_fraction >> 32);
     m_ym_clock_fraction &= 0xffffffffu;
-    std::array<int, 256 * 2> scratch{};
+    std::array<ymfm::ym3438::output_data, 256> scratch{};
     while (samples) {
         const uint32_t count = std::min<uint32_t>(samples, 256);
-        YM2612Update(scratch.data(), static_cast<int>(count));
+        m_ym->chip.generate(scratch.data(), count);
         for (uint32_t frame = 0; frame < count; ++frame)
-            push_ym_sample(scratch[frame * 2], scratch[frame * 2 + 1]);
+            push_ym_sample(scratch[frame].data[0], scratch[frame].data[1]);
         samples -= count;
     }
 }
@@ -435,7 +503,7 @@ uint8_t model1_audio_system::read8(uint32_t raw_address) {
     if (address >= 0xf00000 && address < 0xf10000)
         return m_ram[address - 0xf00000];
     if (address >= 0xd00000 && address < 0xd00008)
-        return (address & 1) ? static_cast<uint8_t>(YM2612Read()) : 0xff;
+        return (address & 1) && m_ym ? m_ym->chip.read_status() : 0xff;
     if (address >= 0xc20000 && address < 0xc20004) {
         // The 8-bit sound latch occupies the lower byte of the 68000's
         // 16-bit bus. An even-address byte access sees the unused upper lane.
@@ -491,8 +559,8 @@ void model1_audio_system::write8(uint32_t raw_address, uint8_t value) {
         return;
     }
     if (address >= 0xd00000 && address < 0xd00008) {
-        if (address & 1) {
-            YM2612Write((address >> 1) & 3, value);
+        if ((address & 1) && m_ym) {
+            m_ym->chip.write((address >> 1) & 3, value);
             m_ym_writes.fetch_add(1, std::memory_order_relaxed);
         }
         return;

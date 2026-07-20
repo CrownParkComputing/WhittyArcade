@@ -2,7 +2,7 @@
 //
 // Behaviour translated from MAME's BSD-3-Clause segapcm device (Hiromitsu
 // Shioya / Olivier Galibert) into a non-MAME-framework API that matches
-// this codebase's other sound-core style (gpgx_ym3438, model1_audio,
+// this codebase's other sound-core style (ymfm, model1_audio,
 // ymfm). The register and stream-update logic byte-for-byte mirrors the
 // upstream device body in src/devices/sound/segapcm.cpp; the ROM read path
 // is replaced with a caller-supplied byte pointer (MAME uses its device_rom

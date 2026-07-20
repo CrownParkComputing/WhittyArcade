@@ -338,9 +338,18 @@ contracts and the required test path.
 
 ## Credits and licensing
 
+WhittyArcade's original code is proprietary software, Copyright © 2026
+Jonathan Whittingham / CrownParkComputing. Official unmodified binaries are
+licensed for personal, non-commercial use; commercial use and redistribution
+require written permission. See [LICENSE](LICENSE) for the full terms.
+
 System 22 behaviour is based on MAME's BSD-3-Clause `namcos22`, C352,
 TMS320C2x and M37710 implementations by Phil Stroffolino, hap, R. Belmont,
 superctr, Tony La Porta and other MAME contributors. The V60, Model 1 TGP and
 video adaptations retain their BSD-3-Clause notices and Olivier Galibert's
 copyright. Musashi is by Karl Stenerud under its permissive license. Source
 files retain their applicable copyright and license notices.
+
+WhittyArcade does not include ROMs, firmware, keys, or copyrighted game data.
+Third-party components retain their own licences and attributions; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

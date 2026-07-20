@@ -4,7 +4,6 @@
 #include "arcade_audio_output.h"
 #include "model1_rom.h"
 #include "musashi_memory.h"
-#include "gpgx_ym2612.h"
 
 #include <array>
 #include <atomic>
@@ -55,6 +54,8 @@ public:
     void write32(uint32_t address, uint32_t value) override;
 
 private:
+    struct ym3438_state;
+
     static constexpr uint32_t UART_CAPACITY = 1024;
     static constexpr uint32_t UART_RX_CAPACITY = 16;
     static constexpr int OPENAL_BUFFER_COUNT = 4;
@@ -95,6 +96,7 @@ private:
     multipcm* m_pcm_1{};
     multipcm* m_pcm_2{};
     std::unique_ptr<model1_dsb> m_dsb;
+    std::unique_ptr<ym3438_state> m_ym;
 
     std::array<uint8_t, UART_CAPACITY> m_uart_transport{};
     std::array<uint64_t, UART_CAPACITY> m_uart_timestamp{};
