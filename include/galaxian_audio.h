@@ -1,11 +1,9 @@
 // Galaxian-family audio synthesis + OpenAL streaming worker.
 //
-// The two supported Galaxian-family games (Phoenix, Moon Cresta) use
-// qualitatively different synthesis models (Phoenix: 4-voice square + LFSR
-// noise + MM6221 melody; Moon Cresta: scalar LFO + pitch-latched melody +
-// HIT/FIRE envelopes) but the OpenAL worker is byte-for-byte identical
-// between them. This header declares a single concrete worker that takes
-// the synth as a runtime parameter; per-game implementations live in
+// Phoenix and the discrete-sound Galaxian boards use qualitatively different
+// synthesis models (Phoenix: 4-voice square + LFSR noise + MM6221 melody;
+// Galaxian-family: scalar LFO + pitch-latched melody + HIT/FIRE envelopes),
+// but the OpenAL worker is shared. Per-game mixer profiles live in
 // galaxian_audio_phoenix.cpp and galaxian_audio_mooncrst.cpp.
 
 #pragma once
@@ -116,8 +114,9 @@ private:
     std::thread m_thread;
 };
 
-// Per-game factory functions. The discrete Galaxian implementation exposes
-// Moon Cresta and UniWar S mixer profiles over the same hardware nodes.
+// Per-game factory functions. The discrete implementation exposes base
+// Galaxian and Moon Cresta mixer profiles over the same hardware nodes.
 std::unique_ptr<galaxian_sound_synth> make_phoenix_sound_synth();
+std::unique_ptr<galaxian_sound_synth> make_galaxian_sound_synth();
 std::unique_ptr<galaxian_sound_synth> make_mooncrst_sound_synth();
 std::unique_ptr<galaxian_sound_synth> make_uniwars_sound_synth();

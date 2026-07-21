@@ -5,7 +5,8 @@
 //
 // The shipped board profiles are:
 //   - phoenix_board_interface  in galaxian_machine_phoenix.cpp
-//   - Moon Cresta and UniWar S/Pisces in galaxian_machine_mooncrst.cpp
+//   - Galaxian, Moon Cresta and UniWar S/Pisces in
+//     galaxian_machine_mooncrst.cpp
 //
 // Out of scope: a non-Z80 CPU (e.g. 6502) would need a different base;
 // the hot loop assumes Z80 timing.
@@ -180,5 +181,6 @@ private:
 // construct them through these factories instead of redeclaring functions in
 // an application source file.
 std::unique_ptr<galaxian_board_interface> make_phoenix_board_interface();
+std::unique_ptr<galaxian_board_interface> make_galaxian_board_interface();
 std::unique_ptr<galaxian_board_interface> make_mooncrst_board_interface();
 std::unique_ptr<galaxian_board_interface> make_uniwars_board_interface();

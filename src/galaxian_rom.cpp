@@ -183,6 +183,16 @@ constexpr std::array<std::pair<const char*, std::size_t>, 2>
         {"mmi6301.ic40", 0x0000}, {"mmi6301.ic41", 0x0100},
 }};
 
+constexpr std::array<const char*, 5> kGalaxianProgram = {
+    "galmidw.u", "galmidw.v", "galmidw.w", "galmidw.y", "7l",
+};
+
+constexpr std::array<const char*, 2> kGalaxianCharRoms = {
+    "1h.bin", "1k.bin",
+};
+
+constexpr const char* kGalaxianPaletteRom = "6l.bpr";
+
 constexpr std::array<const char*, 8> kMooncrstProgram = {
     "mc1", "mc2", "mc3", "mc4",
     "mc5.7r", "mc6.8d", "mc7.8e", "mc8",
@@ -278,14 +288,16 @@ bool load_mooncrst_palette(const source_reader& source,
     return true;
 }
 
+template <std::size_t N>
 bool load_fixed_2k_roms(const source_reader& source,
-                        const std::array<const char*, 8>& files,
+                        const std::array<const char*, N>& files,
                         std::array<uint8_t, kProgramSize>& destination,
                         std::string& error) {
     destination.fill(0xff);
     for (std::size_t index = 0; index < files.size(); ++index) {
         std::vector<uint8_t> bytes;
-        if (!source.read(files[index], bytes) || bytes.size() != 0x800) {
+        if (!source.read(files[index], bytes) || bytes.size() != 0x800 ||
+            (index + 1) * 0x800 > destination.size()) {
             error += "Galaxian-family ROM missing or invalid: ";
             error += files[index];
             error += '\n';
@@ -297,14 +309,16 @@ bool load_fixed_2k_roms(const source_reader& source,
     return true;
 }
 
+template <std::size_t N>
 bool load_fixed_2k_graphics(const source_reader& source,
-                            const std::array<const char*, 4>& files,
+                            const std::array<const char*, N>& files,
                             std::array<uint8_t, 0x2000>& destination,
                             std::string& error) {
     destination.fill(0);
     for (std::size_t index = 0; index < files.size(); ++index) {
         std::vector<uint8_t> bytes;
-        if (!source.read(files[index], bytes) || bytes.size() != 0x800) {
+        if (!source.read(files[index], bytes) || bytes.size() != 0x800 ||
+            (index + 1) * 0x800 > destination.size()) {
             error += "Galaxian-family graphics ROM missing or invalid: ";
             error += files[index];
             error += '\n';
@@ -347,6 +361,19 @@ galaxian_roms load_phoenix(const source_reader& source, std::string& error) {
     return roms;
 }
 
+galaxian_roms load_galaxian(const source_reader& source, std::string& error) {
+    galaxian_roms roms;
+    if (!load_fixed_2k_roms(source, kGalaxianProgram, roms.program, error))
+        return {};
+    if (!load_fixed_2k_graphics(source, kGalaxianCharRoms, roms.char_rom,
+                                error))
+        return {};
+    if (!load_palette32(source, kGalaxianPaletteRom,
+                        roms.mooncrst_palette_prom, error))
+        return {};
+    return roms;
+}
+
 galaxian_roms load_mooncrst(const source_reader& source, std::string& error) {
     galaxian_roms roms;
     if (!load_mooncrst_program(source, roms.program, error)) return {};
@@ -383,9 +410,8 @@ bool galaxian_roms::complete() const {
     if (any_nonzero(program) && any_nonzero(background_graphics) &&
         any_nonzero(foreground_graphics) && any_nonzero(palette_prom))
         return true;
-    // Moon Cresta / UniWar S: program populated + 4 char ROMs concatenated
-    // to 0x2000 (any non-zero char byte implies the load reached the file
-    // stage) + 32 palette bytes loaded.
+    // Galaxian / Moon Cresta / UniWar S: program, planar character graphics,
+    // and the 32-byte palette PROM must all have reached the load stage.
     return any_nonzero(program) && any_nonzero(char_rom) &&
            any_nonzero(mooncrst_palette_prom);
 }
@@ -400,6 +426,13 @@ galaxian_rom_set galaxian_rom_loader::identify_set(const std::string& path) {
     if (source.contains("h5-ic49.5a")) ++phoenix_hits;
     if (source.contains("mmi6301.ic40")) ++phoenix_hits;
     if (phoenix_hits >= 2) return galaxian_rom_set::phoenix;
+
+    // Original Namco set: Midway-labelled program ROMs plus Namco graphics.
+    int galaxian_hits = 0;
+    if (source.contains("galmidw.u")) ++galaxian_hits;
+    if (source.contains("1h.bin")) ++galaxian_hits;
+    if (source.contains("6l.bpr")) ++galaxian_hits;
+    if (galaxian_hits >= 2) return galaxian_rom_set::galaxian;
 
     // Moon Cresta: 2-of-3 probe against program + first char ROM + palette.
     int mooncrst_hits = 0;
@@ -421,6 +454,7 @@ galaxian_rom_set galaxian_rom_loader::identify_set(const std::string& path) {
 const char* galaxian_rom_loader::set_short_name(galaxian_rom_set set) {
     switch (set) {
     case galaxian_rom_set::phoenix: return "phoenix";
+    case galaxian_rom_set::galaxian: return "galaxian";
     case galaxian_rom_set::mooncrst: return "mooncrst";
     case galaxian_rom_set::uniwars: return "uniwars";
     case galaxian_rom_set::unknown: return "";
@@ -432,6 +466,8 @@ const char* galaxian_rom_loader::set_display_name(galaxian_rom_set set) {
     switch (set) {
     case galaxian_rom_set::phoenix:
         return "Phoenix";
+    case galaxian_rom_set::galaxian:
+        return "Galaxian";
     case galaxian_rom_set::mooncrst:
         return "Moon Cresta";
     case galaxian_rom_set::uniwars:
@@ -449,6 +485,11 @@ galaxian_rom_load_result galaxian_rom_loader::load(const std::string& path) {
     case galaxian_rom_set::phoenix: {
         galaxian_roms roms = load_phoenix(source, error);
         return {galaxian_rom_set::phoenix, std::move(roms), std::move(error)};
+    }
+    case galaxian_rom_set::galaxian: {
+        galaxian_roms roms = load_galaxian(source, error);
+        return {galaxian_rom_set::galaxian, std::move(roms),
+                std::move(error)};
     }
     case galaxian_rom_set::mooncrst: {
         galaxian_roms roms = load_mooncrst(source, error);

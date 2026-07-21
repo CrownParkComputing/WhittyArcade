@@ -56,8 +56,9 @@ Implemented and tested:
   and Wing War, including per-game ROM maps and sound-board variants
 - Native Model 2 support for Sega Rally Championship with i960, geometry,
   SCSP audio, inputs, NVRAM and race-frame regression coverage
-- Phoenix, Moon Cresta, UniWar S and Shinobi machine/video/input/audio paths
-  using the same board-neutral session and presentation contracts
+- Phoenix, Galaxian, Moon Cresta, UniWar S and Shinobi
+  machine/video/input/audio paths using the same board-neutral session and
+  presentation contracts
 - Shared scaling, filtering, settings, overlays and ROM menus across OpenGL,
   Vulkan-transfer and SDL software presentation
 
@@ -143,6 +144,7 @@ firmware archives or loose firmware files.
 ./build/WhittyArcade /path/to/ridgerac.zip /path/to/bios
 ./build/WhittyArcade /path/to/timecris.zip /path/to/bios
 ./build/WhittyArcade /path/to/vformula.zip
+./build/WhittyArcade /path/to/galaxian.zip
 ./build/WhittyArcade /path/to/uniwars.zip
 ```
 
@@ -183,7 +185,7 @@ Required MAME short names for this build:
 | Sega Model 1 | `vformula`, `vf`, `swa`, `wingwar` | Split `vformula` also needs `vr.zip`; merged `vr.zip` works directly |
 | Sega Model 2 | `srallyc` | None (`segabill.zip` is optional) |
 | Phoenix hardware | `phoenix` | None |
-| Galaxian hardware | `mooncrst`, `uniwars` | None |
+| Galaxian hardware | `galaxian`, `mooncrst`, `uniwars` | None |
 | Sega System 16B | `shinobi4` | Split collections also need `shinobi6.zip` for the unencrypted sound program; merged `shinobi.zip` works directly |
 
 `ridgeracf` (Ridge Racer Full Scale) is detected and shown as not working; its
@@ -241,10 +243,10 @@ Default keyboard map:
 - Ctrl+Plus/Ctrl+Minus: resize the window from 1x to 4x; Alt+Enter toggles
   borderless fullscreen
 
-UniWar S uses its standard MAME `uniwars` archive. Press `5` to insert a coin
-and `1` to start. Player 1 uses A/D to move and Z to fire; the cocktail Player
-2 controls are J/L and U. These actions can be reassigned from the game's
-**Controllers / Keyboard** page.
+Galaxian and UniWar S use their standard MAME `galaxian` and `uniwars`
+archives. Press `5` to insert a coin and `1` to start. Player 1 uses A/D to
+move and Z to fire; the cocktail Player 2 controls are J/L and U. These actions
+can be reassigned from each game's **Controllers / Keyboard** page.
 
 Time Crisis light-gun defaults:
 

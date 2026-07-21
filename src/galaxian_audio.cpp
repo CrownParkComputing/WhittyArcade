@@ -1,7 +1,7 @@
 // galaxian_audio.cpp - shared OpenAL streaming worker for the
 // Galaxian-family games. The synth is parameterised; the audio device
-// lifecycle, source / buffer queue, and per-buffer fill loop are common
-// to Phoenix and Moon Cresta.
+// lifecycle, source / buffer queue, and per-buffer fill loop are common to
+// Phoenix, Galaxian, Moon Cresta and UniWar S.
 
 #include "galaxian_audio.h"
 #include "arcade_audio_output.h"

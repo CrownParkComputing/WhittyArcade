@@ -85,6 +85,9 @@ int main() {
                           galaxian_rom_set::phoenix),
                       arcade_board_type::phoenix);
     assert_registered(galaxian_rom_loader::set_short_name(
+                          galaxian_rom_set::galaxian),
+                      arcade_board_type::mooncrst);
+    assert_registered(galaxian_rom_loader::set_short_name(
                           galaxian_rom_set::mooncrst),
                       arcade_board_type::mooncrst);
     assert_registered(galaxian_rom_loader::set_short_name(
@@ -120,6 +123,8 @@ int main() {
           arcade_board_type::model2, "srallyc");
     probe("phoenix", {"ic45", "h5-ic49.5a"},
           arcade_board_type::phoenix, "phoenix");
+    probe("galaxian", {"galmidw.u", "1h.bin"},
+          arcade_board_type::mooncrst, "galaxian");
     probe("mooncrst", {"mc1", "mcs_b"},
           arcade_board_type::mooncrst, "mooncrst");
     probe("uniwars", {"f07_1a.bin", "egg10"},

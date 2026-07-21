@@ -2,9 +2,9 @@
 // both accepted; matching is case-insensitive and by basename (mirrors the
 // source_reader convention in model1_rom.cpp / model2_rom.cpp).
 //
-// The loader currently covers Phoenix, Moon Cresta and UniWar S. The wider
-// Galaxian family shares the Z80 + tile pipeline but memory maps and I/O
-// behaviour still belong in explicit board profiles.
+// The loader currently covers Phoenix, Galaxian, Moon Cresta and UniWar S.
+// The wider Galaxian family shares the Z80 + tile pipeline but memory maps
+// and I/O behaviour still belong in explicit board profiles.
 #pragma once
 
 #include <array>
@@ -14,14 +14,15 @@
 enum class galaxian_rom_set : uint8_t {
     unknown,
     phoenix,
+    galaxian,
     mooncrst,
     uniwars,
 };
 
 struct galaxian_roms {
-    // Common 0x4000 program image. Both Phoenix and Moon Cresta lay out
-    // eight 0x800 ROMs; the loader is responsible for assembling them in
-    // the right order and applying any per-set post-decode.
+    // Common 0x4000 program image. The loader assembles each set's ROM count
+    // in hardware order, fills unused space appropriately, and applies any
+    // per-set post-decode.
     std::array<uint8_t, 0x4000> program{};
 
     // Phoenix: 2x 0x1000-byte video RAM pages. Moon Cresta does not use
@@ -36,11 +37,12 @@ struct galaxian_roms {
     // Phoenix: two 256-byte palette PROMs, 4 bits per gun.
     std::array<uint8_t, 0x0200> palette_prom{};
 
-    // Moon Cresta / UniWar S: 32-byte palette PROM. The loader populates the
-    // complete array with the set-specific PROM.
+    // Galaxian / Moon Cresta / UniWar S: 32-byte palette PROM. The loader
+    // populates the complete array with the set-specific PROM.
     std::array<uint8_t, 32> mooncrst_palette_prom{};
 
-    // Moon Cresta / UniWar S: 4 x 0x800 character ROMs concatenated to 0x2000.
+    // Galaxian-family character ROMs in planar load order. Base Galaxian uses
+    // the first 0x1000 bytes; banked sets use the full 0x2000 bytes.
     std::array<uint8_t, 0x2000> char_rom{};
 
     // True iff the populated fields match the set the load was performed

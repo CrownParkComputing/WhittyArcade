@@ -48,6 +48,8 @@ constexpr arcade_game_list manifests{{
      arcade_board_type::model2, "", "", true},
     {"phoenix", "Phoenix (Amstar, set 1)", arcade_board_type::phoenix,
      "", "", true},
+    {"galaxian", "Galaxian (Namco set 1)", arcade_board_type::mooncrst,
+     "", "", true},
     {"mooncrst", "Moon Cresta (Nichibutsu)", arcade_board_type::mooncrst,
      "", "", true},
     {"uniwars", "UniWar S (Irem)", arcade_board_type::mooncrst,

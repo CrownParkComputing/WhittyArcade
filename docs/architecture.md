@@ -54,9 +54,9 @@ separate live-video session-boundary test.
   devices on the sound worker.
 - Model 2 exclusively owns i960/TGP/geometry state on its CPU worker; its
   68000/SCSP sound board runs independently on the audio worker.
-- Phoenix, Moon Cresta, UniWar S and Shinobi submit complete immutable RGBA
-  frames to the same presentation worker. Their audio workers never own
-  machine RAM.
+- Phoenix, Galaxian, Moon Cresta, UniWar S and Shinobi submit complete
+  immutable RGBA frames to the same presentation worker. Their audio workers
+  never own machine RAM.
 
 Emulated processors are not placed on unconstrained host threads when they
 share timing-sensitive RAM or interrupts. Parallelism follows hardware-safe

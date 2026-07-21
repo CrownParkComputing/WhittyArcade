@@ -1,6 +1,6 @@
 // galaxian_audio_test - merged Galaxian-family sound synth test
 //
-// Exercises Phoenix, Moon Cresta and UniWar S synth profiles through
+// Exercises Phoenix, Galaxian, Moon Cresta and UniWar S synth profiles through
 // the shared galaxian_sound_synth interface, calling the per-game
 // factory functions in galaxian_audio.h. Pure unit test: no audio
 // system, no OpenAL. The two old tests (phoenix_audio_test, mooncrst
@@ -139,9 +139,10 @@ int main() {
                     hit_peak, fire_peak);
     }
 
-    // --- UniWar S / base Galaxian discrete mixer path ---
-    {
-        auto synth = make_uniwars_sound_synth();
+    // --- Galaxian / UniWar S base discrete mixer path ---
+    for (const bool uniwars : {false, true}) {
+        auto synth = uniwars ? make_uniwars_sound_synth() :
+                               make_galaxian_sound_synth();
         synth->reset();
         std::fill(samples.begin(), samples.end(), 0);
         synth->generate(samples.data(), kFrames, 100, 100);
@@ -165,8 +166,9 @@ int main() {
         const int background_peak = peak(samples.data(), samples.size());
         assert(background_peak > 100);
 
-        std::printf("UniWar S discrete: pitch=%d edges=%zu background=%d\n",
-                    pitch_peak, pitch_edges, background_peak);
+        std::printf("%s discrete: pitch=%d edges=%zu background=%d\n",
+                    uniwars ? "UniWar S" : "Galaxian", pitch_peak,
+                    pitch_edges, background_peak);
     }
 
     std::puts("Galaxian audio: all synth profiles exercised via shared base");

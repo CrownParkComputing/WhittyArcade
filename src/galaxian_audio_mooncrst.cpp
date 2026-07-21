@@ -629,6 +629,11 @@ std::unique_ptr<galaxian_sound_synth> make_mooncrst_sound_synth() {
         discrete_mix_profile::mooncrst);
 }
 
+std::unique_ptr<galaxian_sound_synth> make_galaxian_sound_synth() {
+    return std::make_unique<galaxian_discrete_sound_synth>(
+        discrete_mix_profile::galaxian);
+}
+
 std::unique_ptr<galaxian_sound_synth> make_uniwars_sound_synth() {
     return std::make_unique<galaxian_discrete_sound_synth>(
         discrete_mix_profile::galaxian);

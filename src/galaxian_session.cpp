@@ -1,4 +1,4 @@
-// Phoenix and Moon Cresta runtime sessions.
+// Phoenix and discrete-sound Galaxian-family runtime sessions.
 
 #include "arcade_session_internal.h"
 #include "galaxian_audio.h"
@@ -40,7 +40,8 @@ public:
             (m_set == galaxian_rom_set::phoenix &&
              detected == galaxian_rom_set::phoenix) ||
             (m_set == galaxian_rom_set::mooncrst &&
-             (detected == galaxian_rom_set::mooncrst ||
+             (detected == galaxian_rom_set::galaxian ||
+              detected == galaxian_rom_set::mooncrst ||
               detected == galaxian_rom_set::uniwars));
         if (!expected_family) {
             std::fprintf(stderr,
@@ -59,6 +60,10 @@ public:
             m_machine = std::make_unique<galaxian_machine>(
                 make_phoenix_board_interface());
             synth = make_phoenix_sound_synth();
+        } else if (m_set == galaxian_rom_set::galaxian) {
+            m_machine = std::make_unique<galaxian_machine>(
+                make_galaxian_board_interface());
+            synth = make_galaxian_sound_synth();
         } else if (m_set == galaxian_rom_set::uniwars) {
             m_machine = std::make_unique<galaxian_machine>(
                 make_uniwars_board_interface());

@@ -52,17 +52,18 @@ WhittyArcade does not provide them or link to downloads.
 Open **Controllers / Keyboard** in the launcher to inspect or change every
 binding. Profiles can be set globally, per arcade board, or per game.
 
-## UniWar S
+## Galaxian and UniWar S
 
-Import the standard MAME `uniwars` ZIP through **ROM Library / Import**. No
-parent or firmware archive is required, and no ROM data is included here.
+Import the standard MAME `galaxian` or `uniwars` ZIP through **ROM Library /
+Import**. No parent or firmware archive is required, and no ROM data is
+included here.
 
 - `5`: insert coin; `1`: start Player 1
 - A/D: move left/right; Z: fire
 - Cocktail Player 2: J/L to move, U to fire; `2` to start
 
-All cabinet and player actions can be reassigned in the UniWar S controller
-profile.
+All cabinet and player actions can be reassigned in the selected game's
+controller profile.
 
 ## Time Crisis mouse gun
 
