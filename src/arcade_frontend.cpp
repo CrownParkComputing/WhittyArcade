@@ -59,10 +59,17 @@ std::string normalized_path(const fs::path& path) {
     return (error ? path : absolute).lexically_normal().string();
 }
 
+bool is_super_system22_set(ridge_racer_rom_set set) {
+    return set == ridge_racer_rom_set::time_crisis ||
+           set == ridge_racer_rom_set::dirt_dash;
+}
+
 const char* dip_switch_name(ridge_racer_rom_set set, int bank, int position) {
     if (set == ridge_racer_rom_set::time_crisis)
         return bank == 0 && position == 7 ? "Test Mode" :
             "Reserved / undocumented - leave OFF";
+    if (set == ridge_racer_rom_set::dirt_dash)
+        return "Reserved / undocumented - leave OFF";
     const bool ace_family = set == ridge_racer_rom_set::ace_driver ||
                             set == ridge_racer_rom_set::victory_lap;
     if (!ace_family && set != ridge_racer_rom_set::cyber_commando &&
@@ -86,9 +93,12 @@ std::string dip_bank_summary(uint16_t switches, ridge_racer_rom_set set,
     std::string result;
     const bool ace_family = set == ridge_racer_rom_set::ace_driver ||
                             set == ridge_racer_rom_set::victory_lap;
-    if (set == ridge_racer_rom_set::time_crisis)
-        result = bank == 0 ? "SW4 - test mode and reserved switches" :
-                             "Unused switch bank";
+    if (is_super_system22_set(set))
+        result = bank == 0 ?
+            (set == ridge_racer_rom_set::time_crisis ?
+                "SW4 - test mode and reserved switches" :
+                "SW4 - reserved switches") :
+            "Unused switch bank";
     else if (bank == 0)
         result = set == ridge_racer_rom_set::ridge_racer_2 ?
             "SW2 - test, graphics, link and time debug" :
@@ -123,6 +133,11 @@ std::string dip_help_text(ridge_racer_rom_set set) {
             "SW4:8  Test mode\n\n"
             "SW4:1-7 are undocumented and should remain OFF. The second "
             "editor bank is unused by Super System 22.";
+    } else if (set == ridge_racer_rom_set::dirt_dash) {
+        text +=
+            "Dirt Dash SW4:1-8 are undocumented and should remain OFF. Use "
+            "F2 for the service/test input. The second editor bank is unused "
+            "by Super System 22.";
     } else if (set == ridge_racer_rom_set::ridge_racer_2) {
         text +=
             "Known RR2 switches:\n"
@@ -160,7 +175,7 @@ void edit_dip_bank(uint16_t& switches, ridge_racer_rom_set set, int bank) {
             const int bit = bank * 8 + position;
             const bool on = (switches & (uint16_t{1} << bit)) == 0;
             const int physical_bank =
-                set == ridge_racer_rom_set::time_crisis ? bank + 4 : bank + 2;
+                is_super_system22_set(set) ? bank + 4 : bank + 2;
             labels.emplace_back("SW" + std::to_string(physical_bank) + ":" +
                 std::to_string(position + 1) + "  " +
                 dip_switch_name(set, bank, position) +
@@ -176,7 +191,8 @@ void edit_dip_bank(uint16_t& switches, ridge_racer_rom_set set, int bank) {
                            SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT,
                            8, labels[8].c_str()});
 
-        const std::string title = "DIP bank SW" + std::to_string(bank + 2);
+        const std::string title = "DIP bank SW" + std::to_string(
+            is_super_system22_set(set) ? bank + 4 : bank + 2);
         const SDL_MessageBoxData box{
             SDL_MESSAGEBOX_INFORMATION,
             nullptr,

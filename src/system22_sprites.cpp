@@ -167,7 +167,7 @@ std::vector<polygon_object> system22_sprite_decoder::decode(
         const uint8_t* sprite_ram, std::size_t sprite_ram_size,
         const uint8_t* vics_data, std::size_t vics_data_size,
         const uint8_t* vics_control, std::size_t vics_control_size,
-        std::size_t sprite_rom_size) {
+        std::size_t sprite_rom_size, system22_sprite_profile profile) {
     std::vector<polygon_object> result;
     if (!sprite_ram || sprite_ram_size < 0x30000 || !vics_data ||
         vics_data_size < 0x10000 || !vics_control ||
@@ -202,11 +202,20 @@ std::vector<polygon_object> system22_sprite_decoder::decode(
     const auto append_vics = [&](std::size_t size_register,
                                  std::size_t source_register,
                                  std::size_t attribute_register) {
-        const int count = static_cast<int>(
+        int count = static_cast<int>(
             (read_be32(vics_control, vics_control_size, size_register) >> 4) &
             0x1ffu);
-        const std::size_t source_offset = read_be32(
-            vics_control, vics_control_size, source_register) & 0xffffu;
+        const uint32_t source_control = read_be32(
+            vics_control, vics_control_size, source_register);
+        if (profile == system22_sprite_profile::dirt_dash &&
+            size_register == 0x40) {
+            // Dirt Dash stores the first VICS list length in the low byte of a
+            // data header selected by address bit 14, rather than in reg 0x40.
+            const std::size_t count_offset = source_control & 0x4000u;
+            count = static_cast<int>(
+                (read_be32(vics_data, vics_data_size, count_offset) & 0xffu) + 1);
+        }
+        const std::size_t source_offset = source_control & 0xffffu;
         const std::size_t attribute_offset = read_be32(
             vics_control, vics_control_size, attribute_register) & 0xffffu;
         if (vics_on && count > 0)
@@ -216,6 +225,7 @@ std::vector<polygon_object> system22_sprite_decoder::decode(
                          sprite_ram, sprite_ram_size, sprite_elements);
     };
     append_vics(0x40, 0x48, 0x58);
-    append_vics(0x60, 0x68, 0x78);
+    if (profile != system22_sprite_profile::dirt_dash)
+        append_vics(0x60, 0x68, 0x78);
     return result;
 }

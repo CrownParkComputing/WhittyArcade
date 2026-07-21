@@ -1,5 +1,6 @@
 #include "system22_sprites.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -63,6 +64,74 @@ int main() {
                 sprite.vertices[2].y == 82 &&
                 sprite.vertices[0].u == 0 && sprite.vertices[2].u == 31,
                 "origin, size and raw 32-pixel UVs must decode"))
+        return 1;
+
+    // Dirt Dash ignores the nominal first-list size register. Its list count
+    // is stored in the low byte of VICS data at the bank selected by bit 14 of
+    // the source register, and it does not submit the second VICS list.
+    std::fill(sprite_ram.begin(), sprite_ram.end(), 0);
+    std::fill(vics_data.begin(), vics_data.end(), 0);
+    std::fill(vics_control.begin(), vics_control.end(), 0);
+    put32(sprite_ram, 0x00000, 0x00050000); // Main C374 list disabled.
+    put32(sprite_ram, 0x00200, (45u << 16) | 684u);
+    put32(sprite_ram, 0x00204, (42u << 16) | 521u);
+    put32(vics_control, 0x40, 0);           // Deliberately no normal count.
+    put32(vics_control, 0x48, 0x00001004);
+    put32(vics_control, 0x58, 0x00002000);
+    put32(vics_data, 0x0000, 1);            // Two sprites: stored count + 1.
+    for (std::size_t index = 0; index < 2; ++index) {
+        const std::size_t source = 0x1004 + index * 16;
+        const std::size_t attribute = 0x2000 + index * 8;
+        put32(vics_data, source, ((145u + index * 32) << 16) | 92u);
+        put32(vics_data, source + 4, (32u << 16) | 32u);
+        put32(vics_data, source + 8, 0x00ff0011);
+        put32(vics_data, source + 12,
+              (static_cast<uint32_t>(index + 2) << 16));
+        put32(vics_data, attribute, static_cast<uint32_t>(0x100 + index));
+        put32(vics_data, attribute + 4, 0x000500fe);
+    }
+    const auto dirt_sprites = system22_sprite_decoder::decode(
+        sprite_ram.data(), sprite_ram.size(),
+        vics_data.data(), vics_data.size(),
+        vics_control.data(), vics_control.size(), 0x1000000,
+        system22_sprite_profile::dirt_dash);
+    if (!expect(dirt_sprites.size() == 2 &&
+                dirt_sprites[0].sprite_tile == 2 &&
+                dirt_sprites[1].sprite_tile == 3,
+                "Dirt Dash VICS header count must select its complete list"))
+        return 1;
+
+    if (!expect(system22_direct_texture_coordinate(0xabc5, false) == 0x0bc5 &&
+                system22_direct_texture_coordinate(0xabc5, true) == 0x0abc,
+                "direct-polygon UV packing must follow the selected board"))
+        return 1;
+
+    polygon_object base_shadow{};
+    base_shadow.color = 0x42;
+    for (poly_vertex& vertex : base_shadow.vertices)
+        vertex = {0.0f, 0.0f, 1.0f, 11, 15, 0};
+    if (!expect(system22_temporal_shadow_material(base_shadow, false) &&
+                !system22_temporal_shadow_material(base_shadow, true),
+                "Victory Lap shadow material must match only base System 22"))
+        return 1;
+    base_shadow.vertices[0].bri = 1;
+    if (!expect(!system22_temporal_shadow_material(base_shadow, false),
+                "nearby base materials must not enter the shadow cache"))
+        return 1;
+
+    polygon_object dirt_shadow{};
+    dirt_shadow.color = 0x01;
+    dirt_shadow.cmode = 5;
+    dirt_shadow.texturebank = 2;
+    for (poly_vertex& vertex : dirt_shadow.vertices)
+        vertex = {0.0f, 0.0f, 1.0f, 0, 0, 0x40};
+    if (!expect(system22_temporal_shadow_material(dirt_shadow, true) &&
+                !system22_temporal_shadow_material(dirt_shadow, false),
+                "Dirt Dash shadow material must match only Super System 22"))
+        return 1;
+    dirt_shadow.direct = true;
+    if (!expect(!system22_temporal_shadow_material(dirt_shadow, true),
+                "direct polygons must never enter the shadow cache"))
         return 1;
     return 0;
 }

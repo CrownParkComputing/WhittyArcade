@@ -119,6 +119,12 @@ int main() {
     if (!expect(super_bus.read32(0x440000) == 0xfffeffff,
                 "Time Crisis SW4 must occupy the Super System 22 DIP byte"))
         return 1;
+
+    super_bus.set_keycus(0x01a2, 0);
+    if (!expect(super_bus.read16(0x400000) == 0x01a2,
+                "Dirt Dash must receive its C370 KEYCUS ID at register 0"))
+        return 1;
+    super_bus.clear_keycus();
     super_bus.write16(0x460000, 0x12ab);
     if (!expect(super_bus.read16(0x460000) == 0x12ff,
                 "Super System 22 EEPROM must use the two upper byte lanes"))
@@ -141,6 +147,10 @@ int main() {
     if (!expect(super_bus.character_ram_data()[0x1e004] == 0x12 &&
                 super_bus.character_ram_data()[0x1e007] == 0xcd,
                 "Super text RAM must mirror the character RAM tail"))
+        return 1;
+    if (!expect(super_bus.read16(0x8a000a) == 0x8000 &&
+                super_bus.read16(0x8a000e) == 0x0000,
+                "Super C305 status registers must expose their ready values"))
         return 1;
 
     super_bus.write16(0x810000, 0xff80);

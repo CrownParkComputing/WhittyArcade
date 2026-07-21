@@ -44,6 +44,8 @@ Implemented and tested:
 - Non-Super System 22 direct-polygon CZ table selection and per-type fog color
 - Time Crisis gun coordinates, cabinet trigger/pedal, mouse aiming, custom
   player-coloured crosshairs and its Super System 22 fade/gamma/CZ path
+- Dirt Dash World DT2 Ver.C with its M37710 cabinet I/O, C418 protection,
+  full C374/VICS sprite list, driving controls and stable projected shadows
 - Hot-pluggable SDL/Xbox and keyboard controls for driving, twin-stick and 2D
   cabinets, with per-device launcher mapping, calibrated axes and debounced
   coin/start lines
@@ -63,9 +65,9 @@ Implemented and tested:
   Vulkan-transfer and SDL software presentation
 
 The base System 22 sets boot the MC68020, both C71s and C74 together and reach
-their attract/gameplay rendering. Time Crisis boots its Super System 22
-MC68020, C71 pair and M37710, then reaches attract and live gun gameplay with
-3D, sprites, text and C352 audio. The polygon, sprite, text, priority and
+their attract/gameplay rendering. Time Crisis and Dirt Dash boot their Super
+System 22 MC68020, C71 pair and M37710, then reach attract and live gameplay
+with 3D, sprites, text and C352 audio. The polygon, sprite, text, priority and
 final-mix shader pipelines have been exercised on a real OpenGL 4.3 driver.
 
 Not implemented yet:
@@ -143,6 +145,7 @@ firmware archives or loose firmware files.
 ```bash
 ./build/WhittyArcade /path/to/ridgerac.zip /path/to/bios
 ./build/WhittyArcade /path/to/timecris.zip /path/to/bios
+./build/WhittyArcade /path/to/dirtdash.zip /path/to/bios
 ./build/WhittyArcade /path/to/vformula.zip
 ./build/WhittyArcade /path/to/galaxian.zip
 ./build/WhittyArcade /path/to/uniwars.zip
@@ -181,7 +184,7 @@ Required MAME short names for this build:
 | Board | Games | Additional archives |
 |---|---|---|
 | Namco System 22 | `ridgerac`, `ridgera2`, `raverace`, `acedrive`, `victlap`, `cybrcomm` | `namcoc71.zip`, `namcoc74.zip` |
-| Namco Super System 22 | `timecris` (World, TS2 Ver.B) | `namcoc71.zip`; the set carries its M37710 firmware data |
+| Namco Super System 22 | `timecris` (World, TS2 Ver.B), `dirtdash` (World, DT2 Ver.C) | `namcoc71.zip`; each set carries its M37710 firmware data |
 | Sega Model 1 | `vformula`, `vf`, `swa`, `wingwar` | Split `vformula` also needs `vr.zip`; merged `vr.zip` works directly |
 | Sega Model 2 | `srallyc` | None (`segabill.zip` is optional) |
 | Phoenix hardware | `phoenix` | None |
@@ -203,8 +206,8 @@ Expected firmware:
 - `c74.bin`: 16384 bytes, CRC `a3dce360`
 
 The firmware may be loose or stored in `namcoc71.zip` and `namcoc74.zip`.
-Time Crisis needs `c71.bin` but uses the internal M37710 image contained in its
-own set, so it does not require `namcoc74.zip`.
+Time Crisis and Dirt Dash need `c71.bin` but use the M37710 program contained
+in their own sets, so neither requires `namcoc74.zip`.
 
 ## Controls
 
@@ -263,6 +266,16 @@ Time Crisis light-gun defaults:
   `timecris` profile. Moving a mapped aim axis switches from the mouse to that
   device; moving the mouse switches back.
 
+Dirt Dash driving defaults:
+
+- Left/Right steer; Up accelerates; Down brakes.
+- Z/X shift down/up; V changes view; G is the motion-stop cabinet switch.
+- `5` inserts a coin. Press the accelerator when the cabinet prompts for a
+  decision/start input.
+- Every action remains editable under the per-game `dirtdash` controller
+  profile; standard and deluxe cabinet analog ranges are calibrated by the
+  Super System 22 M37710 input path.
+
 Settings are saved to
 `~/.config/WhittyArcade/settings.ini` (or `$XDG_CONFIG_HOME`). Existing
 `ridge_racer_emulator` settings are imported automatically. Music
@@ -317,10 +330,11 @@ Ridge Racer 2 also exposes documented/reverse-engineered graphics, link, timer
 and secondary-test debug switches. Coinage, difficulty, laps and sound options
 belong to the in-game service menu rather than the physical DIP banks.
 
-Ace Driver and Victory Lap use the same steering controls, with their shorter
-cabinet pedal ranges calibrated automatically. Cyber Commando uses both
-controller sticks; on keyboard, WASD controls the left stick and the arrow keys
-control the right stick. Z/X operate gun trigger/missile and V changes view.
+Ace Driver, Victory Lap and Dirt Dash use the same steering controls, with
+their cabinet-specific wheel and pedal ranges calibrated automatically. Cyber
+Commando uses both controller sticks; on keyboard, WASD controls the left
+stick and the arrow keys control the right stick. Z/X operate gun
+trigger/missile and V changes view.
 
 Time Crisis uses the mouse as an absolute light gun inside the 4:3 game area.
 Its trigger and pedal still pass through the common action mapper, so another

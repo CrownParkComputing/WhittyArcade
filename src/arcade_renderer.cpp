@@ -58,7 +58,8 @@ struct draw_vertex {
     float v_over_z;
     float brightness_over_z;
     float one_over_z;
-    float palette;
+    float palette_base;
+    float alpha_palette;
     float color_mode;
     float texture_bank;
     float direct;
@@ -73,6 +74,8 @@ struct draw_vertex {
     float clip_top;
     float clip_bottom;
     float sprite;
+    float sprite_alpha;
+    float object_flags;
 };
 
 struct model2_draw_vertex {
@@ -354,7 +357,7 @@ layout(location = 1) in float in_u_over_z;
 layout(location = 2) in float in_v_over_z;
 layout(location = 3) in float in_brightness_over_z;
 layout(location = 4) in float in_one_over_z;
-layout(location = 5) in float in_palette;
+layout(location = 5) in vec2 in_palette;
 layout(location = 6) in float in_color_mode;
 layout(location = 7) in float in_texture_bank;
 layout(location = 8) in float in_direct;
@@ -362,7 +365,7 @@ layout(location = 9) in float in_fog;
 layout(location = 10) in vec3 in_fog_color;
 layout(location = 11) in vec2 in_viewport;
 layout(location = 12) in vec4 in_clip_rect;
-layout(location = 13) in float in_sprite;
+layout(location = 13) in vec3 in_render_flags;
 
 uniform mat4 view_matrix;
 noperspective out float u_over_z;
@@ -370,16 +373,19 @@ noperspective out float v_over_z;
 noperspective out float brightness_over_z;
 noperspective out float one_over_z;
 noperspective out float fog_factor;
-flat out uint palette_select;
+flat out uint palette_base;
+flat out uint alpha_palette;
 flat out uint color_mode;
 flat out uint texture_bank;
 flat out vec3 polygon_fog_color;
 flat out vec4 polygon_clip_rect;
 flat out uint sprite_mode;
+flat out uint sprite_alpha;
+flat out uint object_flags;
 
 void main() {
     vec4 position = view_matrix * vec4(in_position, 1.0);
-    if (in_sprite > 0.5) {
+    if (in_render_flags.x > 0.5) {
         // Sprite coordinates are absolute native-screen pixels with a
         // top-left origin, unlike direct polygon coordinates which are
         // centred around the System 22 viewport.
@@ -403,12 +409,15 @@ void main() {
     brightness_over_z = in_brightness_over_z;
     one_over_z = in_one_over_z;
     fog_factor = in_fog;
-    palette_select = uint(in_palette);
+    palette_base = uint(in_palette.x);
+    alpha_palette = uint(in_palette.y);
     color_mode = uint(in_color_mode);
     texture_bank = uint(in_texture_bank);
     polygon_fog_color = in_fog_color;
     polygon_clip_rect = in_clip_rect;
-    sprite_mode = uint(in_sprite);
+    sprite_mode = uint(in_render_flags.x);
+    sprite_alpha = uint(in_render_flags.y);
+    object_flags = uint(in_render_flags.z);
 }
 )GLSL";
 
@@ -419,12 +428,15 @@ noperspective in float v_over_z;
 noperspective in float brightness_over_z;
 noperspective in float one_over_z;
 noperspective in float fog_factor;
-flat in uint palette_select;
+flat in uint palette_base;
+flat in uint alpha_palette;
 flat in uint color_mode;
 flat in uint texture_bank;
 flat in vec3 polygon_fog_color;
 flat in vec4 polygon_clip_rect;
 flat in uint sprite_mode;
+flat in uint sprite_alpha;
+flat in uint object_flags;
 
 uniform usampler2DArray texture_tiles;
 uniform usampler2D texture_map;
@@ -437,7 +449,13 @@ uniform bool super_system22;
 uniform uvec3 super_fade_color;
 uniform uint super_fade_factor;
 uniform uint super_mixer_flags;
-out vec4 output_color;
+uniform uvec3 super_poly_fade_color;
+uniform bool super_poly_fade_enabled;
+uniform uint super_poly_alpha_color;
+uniform uint super_poly_alpha_pen;
+uniform uint super_poly_alpha_factor;
+layout(location = 0, index = 0) out vec4 output_color;
+layout(location = 0, index = 1) out vec4 output_blend;
 
 vec3 apply_super_fade(vec3 rgb, uint target_flag) {
     if (!super_system22 || super_fade_factor == 0u ||
@@ -445,6 +463,26 @@ vec3 apply_super_fade(vec3 rgb, uint target_flag) {
         return rgb;
     return mix(rgb, vec3(super_fade_color) / 255.0,
                float(super_fade_factor) / 255.0);
+}
+
+float source_opacity(uint pen) {
+    if (!super_system22) return 1.0;
+    uint alpha = sprite_mode != 0u ? 255u - sprite_alpha :
+                                        255u - super_poly_alpha_factor;
+    if (alpha == 255u ||
+        (alpha_palette == super_poly_alpha_color &&
+         pen != super_poly_alpha_pen))
+        return 1.0;
+    // MAME and the board mix two eight-bit channels with a denominator of
+    // 256. Opaque pixels bypass this path, so 255/256 remains intentional.
+    return float(alpha) / 256.0;
+}
+
+void write_scene_color(vec3 rgb, uint pen, float over_text) {
+    // Dual-source blending keeps the source opacity independent from the
+    // framebuffer alpha component, which stores System 22 text priority.
+    output_color = vec4(rgb, over_text);
+    output_blend = vec4(0.0, 0.0, 0.0, source_opacity(pen));
 }
 
 void main() {
@@ -468,7 +506,7 @@ void main() {
                   int(layer_offset >> 10u), int(layer)), 0).r;
         if (pen == 0xffu) discard;
 
-        uint palette_index = ((palette_select & 0x7fu) << 8u) + pen;
+        uint palette_index = palette_base + pen;
         ivec2 palette_coord = ivec2(int(palette_index & 0xffu),
                                     int((palette_index >> 8u) & 0x7fu));
         vec3 rgb = vec3(
@@ -477,7 +515,8 @@ void main() {
             texelFetch(palette_data, ivec3(palette_coord, 2), 0).r) / 255.0;
         rgb = mix(rgb, polygon_fog_color, clamp(fog_factor, 0.0, 1.0));
         rgb = apply_super_fade(rgb, 0x02u);
-        output_color = vec4(rgb, (color_mode & 1u) != 0u ? 1.0 : 0.0);
+        write_scene_color(rgb, pen,
+                          (color_mode & 1u) != 0u ? 1.0 : 0.0);
         return;
     }
     uint tx = uint(int(u_over_z / q)) & 0xfffu;
@@ -507,29 +546,33 @@ void main() {
     }
 
     uint pen = 0u;
-    uint tile_address = (tile << 8u) | (iy << 4u) | ix;
-    if (tile_address >= texture_address_base) {
-        uint relative = tile_address - texture_address_base;
-        uint layer = relative >> 21u;
-        uint layer_offset = relative & 0x1fffffu;
-        pen = texelFetch(texture_tiles,
-            ivec3(int(layer_offset & 0x7ffu), int(layer_offset >> 11u), int(layer)), 0).r;
+    if (object_flags == 0u) {
+        uint tile_address = (tile << 8u) | (iy << 4u) | ix;
+        if (tile_address >= texture_address_base) {
+            uint relative = tile_address - texture_address_base;
+            uint layer = relative >> 21u;
+            uint layer_offset = relative & 0x1fffffu;
+            pen = texelFetch(texture_tiles,
+                ivec3(int(layer_offset & 0x7ffu),
+                      int(layer_offset >> 11u), int(layer)), 0).r;
+        }
     }
 
+    uint effective_color_mode = object_flags != 0u ? 0u : color_mode;
     uint pen_base = 0u;
     uint pen_mask = 0xffu;
     uint pen_shift = 0u;
-    if ((color_mode & 4u) != 0u) {
-        pen_base = 0xecu + ((color_mode & 8u) << 1u);
+    if ((effective_color_mode & 4u) != 0u) {
+        pen_base = 0xecu + ((effective_color_mode & 8u) << 1u);
         pen_mask = 3u;
-        pen_shift = 2u * ((~color_mode) & 3u);
-    } else if ((color_mode & 2u) != 0u) {
-        pen_base = 0xe0u + ((color_mode & 8u) << 1u);
+        pen_shift = 2u * ((~effective_color_mode) & 3u);
+    } else if ((effective_color_mode & 2u) != 0u) {
+        pen_base = 0xe0u + ((effective_color_mode & 8u) << 1u);
         pen_mask = 15u;
-        pen_shift = 4u * ((~color_mode) & 1u);
+        pen_shift = 4u * ((~effective_color_mode) & 1u);
     }
 
-    uint palette_index = ((palette_select & 0x7fu) << 8u) + pen_base +
+    uint palette_index = palette_base + pen_base +
                          ((pen >> pen_shift) & pen_mask);
     ivec2 palette_coord = ivec2(int(palette_index & 0xffu),
                                 int((palette_index >> 8u) & 0x7fu));
@@ -537,18 +580,24 @@ void main() {
         texelFetch(palette_data, ivec3(palette_coord, 0), 0).r,
         texelFetch(palette_data, ivec3(palette_coord, 1), 0).r,
         texelFetch(palette_data, ivec3(palette_coord, 2), 0).r) / 255.0;
-    // System 22 blends fog into the palette colour first, then applies the
-    // per-vertex shade.  The shade is 8.6 fixed point: 0x40 is unity, not
-    // 0xff.  Clamp the resulting channels like MAME's scale_imm_and_clamp().
-    rgb = mix(rgb, polygon_fog_color, clamp(fog_factor, 0.0, 1.0));
     float shade = max(brightness_over_z / q, 0.0) / 64.0;
-    rgb = clamp(rgb * shade, 0.0, 1.0);
+    bool shade_enabled = (object_flags & 6u) == 0u;
+    // Super System 22 shades before fog; the original board shades after it.
+    // The shade is 8.6 fixed point, with 0x40 representing unity.
+    if (super_system22 && shade_enabled)
+        rgb = clamp(rgb * shade, 0.0, 1.0);
+    rgb = mix(rgb, polygon_fog_color, clamp(fog_factor, 0.0, 1.0));
+    if (!super_system22 && shade_enabled)
+        rgb = clamp(rgb * shade, 0.0, 1.0);
+    if (super_system22 && super_poly_fade_enabled)
+        rgb = clamp(rgb * (vec3(super_poly_fade_color) / 256.0),
+                    0.0, 1.0);
     rgb = apply_super_fade(rgb, 0x01u);
     // Non-Super System 22 keeps a one-bit per-pixel polygon-over-text flag.
     // Store the flag in the otherwise unused framebuffer alpha component;
     // the following text pass uses destination-alpha blending to honour it.
     float over_text = ((color_mode & 7u) == 1u) ? 1.0 : 0.0;
-    output_color = vec4(rgb, over_text);
+    write_scene_color(rgb, pen, over_text);
 }
 )GLSL";
 
@@ -771,32 +820,48 @@ void append_quad(std::vector<draw_vertex>& vertices, const polygon_object& polyg
 
     if (clipped_count < 3) return;
 
+    const uint32_t color_extension = (polygon.cz_adjust >> 16) & 0x7fu;
+    const uint32_t alpha_palette = polygon.color & 0x7fu;
+    uint32_t palette_base = alpha_palette << 8;
+    if (polygon.objectflags != 0) {
+        if ((polygon.objectflags & 6u) != 0)
+            palette_base = polygon.cz_adjust & 0x7fffu;
+        else
+            palette_base += color_extension & (polygon.color | 0x1fu);
+    }
+
     auto make_vertex = [&](const clipped_poly_vertex& source) {
         const float q = polygon.direct ? source.z :
             1.0f / source.z;
-        return draw_vertex{
-            source.x, source.y, source.z,
-            (source.u + 0.5f) * q,
-            (source.v + 0.5f) * q,
-            (source.bri + 0.5f) * q,
-            q,
-            static_cast<float>(polygon.color & 0x7f),
-            static_cast<float>(polygon.cmode & 0x0f),
-            static_cast<float>(polygon.sprite ? polygon.sprite_tile :
-                                               (polygon.texturebank & 0x0f)),
-            polygon.direct ? 1.0f : 0.0f,
-            normalized_byte(polygon.fog_factor),
-            normalized_byte(polygon.fog_r),
-            normalized_byte(polygon.fog_g),
-            normalized_byte(polygon.fog_b),
-            polygon.viewport_x,
-            polygon.viewport_y,
-            polygon.clip_left,
-            polygon.clip_right,
-            polygon.clip_top,
-            polygon.clip_bottom,
-            polygon.sprite ? 1.0f : 0.0f,
-        };
+        draw_vertex result{};
+        result.x = source.x;
+        result.y = source.y;
+        result.z = source.z;
+        result.u_over_z = (source.u + 0.5f) * q;
+        result.v_over_z = (source.v + 0.5f) * q;
+        result.brightness_over_z = (source.bri + 0.5f) * q;
+        result.one_over_z = q;
+        result.palette_base = static_cast<float>(palette_base);
+        result.alpha_palette = static_cast<float>(alpha_palette);
+        result.color_mode = static_cast<float>(polygon.cmode & 0x0f);
+        result.texture_bank = static_cast<float>(
+            polygon.sprite ? polygon.sprite_tile :
+                             (polygon.texturebank & 0x0f));
+        result.direct = polygon.direct ? 1.0f : 0.0f;
+        result.fog = normalized_byte(polygon.fog_factor);
+        result.fog_color_r = normalized_byte(polygon.fog_r);
+        result.fog_color_g = normalized_byte(polygon.fog_g);
+        result.fog_color_b = normalized_byte(polygon.fog_b);
+        result.viewport_x = polygon.viewport_x;
+        result.viewport_y = polygon.viewport_y;
+        result.clip_left = polygon.clip_left;
+        result.clip_right = polygon.clip_right;
+        result.clip_top = polygon.clip_top;
+        result.clip_bottom = polygon.clip_bottom;
+        result.sprite = polygon.sprite ? 1.0f : 0.0f;
+        result.sprite_alpha = static_cast<float>(polygon.sprite_alpha);
+        result.object_flags = static_cast<float>(polygon.objectflags);
+        return result;
     };
 
     for (int index = 1; index + 1 < clipped_count; ++index) {
@@ -1150,6 +1215,8 @@ void polygon_renderer_gpu::shutdown() {
     m_post_vertex_array = m_post_program = 0;
     m_settings_vertex_array = m_settings_program = m_settings_texture = 0;
     m_fps_texture = 0;
+    m_temporal_shadow_polygons.clear();
+    m_temporal_shadow_age = 2;
     m_initialized = false;
 }
 
@@ -1680,6 +1747,11 @@ void polygon_renderer_gpu::submit_textures(const uint8_t* texture_rom,
     if (m_headless || !m_initialized || !texture_rom || !tilemap_rom) return;
     m_ctx->make_current();
 
+    // A texture upload marks a newly constructed System 22 session. Do not
+    // allow a retained shadow from the previous game to cross that boundary.
+    m_temporal_shadow_polygons.clear();
+    m_temporal_shadow_age = 2;
+
     constexpr std::size_t bank_size = 0x200000;
     if (bank_count == 0 || bank_count > 8 || region_offset > texture_size ||
         texture_size < region_offset + bank_size * bank_count || tilemap_size < 0x280000) {
@@ -1797,10 +1869,24 @@ void polygon_renderer_gpu::submit_text_layer(const uint8_t* character_ram,
                           text_attributes[3]) & 0x3ff;
     m_text_scroll_x = scroll_x;
     m_text_scroll_y = scroll_y;
+    if (m_super_system22_video != super_system22) {
+        m_temporal_shadow_polygons.clear();
+        m_temporal_shadow_age = 2;
+    }
     m_super_system22_video = super_system22;
     if (super_system22) {
         m_text_palette_base =
             (static_cast<int>(mixer[0x1b]) << 8) & 0x7f00;
+        m_super_poly_fade_r = mixer[0x00];
+        m_super_poly_fade_g = mixer[0x01];
+        m_super_poly_fade_b = mixer[0x02];
+        m_super_poly_fade_enabled =
+            m_super_poly_fade_r != 0xff ||
+            m_super_poly_fade_g != 0xff ||
+            m_super_poly_fade_b != 0xff;
+        m_super_poly_alpha_color = mixer[0x0f];
+        m_super_poly_alpha_pen = mixer[0x10];
+        m_super_poly_alpha_factor = mixer[0x11];
         m_super_screen_fade_r = mixer[0x16];
         m_super_screen_fade_g = mixer[0x17];
         m_super_screen_fade_b = mixer[0x18];
@@ -1863,6 +1949,35 @@ void polygon_renderer_gpu::render_scene(const view_matrix& view, const rgba_colo
         m_pending_polygons.store(0, std::memory_order_release);
     }
 
+    // Several System 22 games deliver projected car-shadow meshes in
+    // alternating frame packets. Presenting that packet cadence directly
+    // visibly flashes on a modern display. Match only the measured shadow
+    // materials and carry those quads into the following frame; the car, HUD
+    // and track remain single-frame images.
+    const auto is_temporal_shadow = [this](const polygon_object& polygon) {
+        return system22_temporal_shadow_material(
+            polygon, m_super_system22_video);
+    };
+    std::vector<polygon_object> current_shadow;
+    std::copy_if(polygons.begin(), polygons.end(),
+                 std::back_inserter(current_shadow),
+                 is_temporal_shadow);
+    if (!current_shadow.empty()) {
+        m_temporal_shadow_polygons = std::move(current_shadow);
+        m_temporal_shadow_age = 0;
+    } else if (m_temporal_shadow_age == 0 &&
+               !m_temporal_shadow_polygons.empty()) {
+        polygons.insert(polygons.end(),
+                        m_temporal_shadow_polygons.begin(),
+                        m_temporal_shadow_polygons.end());
+        m_temporal_shadow_age = 1;
+    } else {
+        if (m_temporal_shadow_age < 2)
+            ++m_temporal_shadow_age;
+        if (m_temporal_shadow_age >= 2)
+            m_temporal_shadow_polygons.clear();
+    }
+
     std::stable_sort(polygons.begin(), polygons.end(),
         [](const polygon_object& left, const polygon_object& right) {
             return left.zsort > right.zsort;
@@ -1889,10 +2004,17 @@ void polygon_renderer_gpu::render_scene(const view_matrix& view, const rgba_colo
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     if (!vertices.empty()) {
-        // Polygons are opaque on Ridge Racer. Disabling blending also makes
-        // the framebuffer alpha component track the priority of the final
-        // visible polygon at each pixel, just like MAME's priority bitmap.
-        glDisable(GL_BLEND);
+        // Super System 22 uses the mixer alpha registers for translucent car
+        // shadows and effects. Dual-source blending supplies that opacity
+        // while independently replacing framebuffer alpha with text priority.
+        if (m_super_system22_video) {
+            glEnable(GL_BLEND);
+            glBlendEquation(GL_FUNC_ADD);
+            glBlendFuncSeparate(GL_SRC1_ALPHA, GL_ONE_MINUS_SRC1_ALPHA,
+                                GL_ONE, GL_ZERO);
+        } else {
+            glDisable(GL_BLEND);
+        }
         glUseProgram(m_graphics_program);
         glUniformMatrix4fv(glGetUniformLocation(m_graphics_program, "view_matrix"),
                            1, GL_TRUE, &view.m[0][0]);
@@ -1929,6 +2051,22 @@ void polygon_renderer_gpu::render_scene(const view_matrix& view, const rgba_colo
         glUniform1ui(glGetUniformLocation(m_graphics_program,
                                           "super_mixer_flags"),
                      m_super_mixer_flags);
+        glUniform3ui(glGetUniformLocation(m_graphics_program,
+                                          "super_poly_fade_color"),
+                     m_super_poly_fade_r, m_super_poly_fade_g,
+                     m_super_poly_fade_b);
+        glUniform1i(glGetUniformLocation(m_graphics_program,
+                                         "super_poly_fade_enabled"),
+                    m_super_poly_fade_enabled ? 1 : 0);
+        glUniform1ui(glGetUniformLocation(m_graphics_program,
+                                          "super_poly_alpha_color"),
+                     m_super_poly_alpha_color);
+        glUniform1ui(glGetUniformLocation(m_graphics_program,
+                                          "super_poly_alpha_pen"),
+                     m_super_poly_alpha_pen);
+        glUniform1ui(glGetUniformLocation(m_graphics_program,
+                                          "super_poly_alpha_factor"),
+                     m_super_poly_alpha_factor);
         glBindVertexArray(m_vertex_array);
         glBindBuffer(GL_ARRAY_BUFFER, m_vertex_buffer);
         const auto vertex_bytes =
@@ -2426,8 +2564,9 @@ bool polygon_renderer_gpu::create_graphics_pipeline() {
     glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(draw_vertex),
                           reinterpret_cast<void*>(offsetof(draw_vertex, one_over_z)));
     glEnableVertexAttribArray(5);
-    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, sizeof(draw_vertex),
-                          reinterpret_cast<void*>(offsetof(draw_vertex, palette)));
+    glVertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, sizeof(draw_vertex),
+                          reinterpret_cast<void*>(
+                              offsetof(draw_vertex, palette_base)));
     glEnableVertexAttribArray(6);
     glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, sizeof(draw_vertex),
                           reinterpret_cast<void*>(offsetof(draw_vertex, color_mode)));
@@ -2450,7 +2589,7 @@ bool polygon_renderer_gpu::create_graphics_pipeline() {
     glVertexAttribPointer(12, 4, GL_FLOAT, GL_FALSE, sizeof(draw_vertex),
                           reinterpret_cast<void*>(offsetof(draw_vertex, clip_left)));
     glEnableVertexAttribArray(13);
-    glVertexAttribPointer(13, 1, GL_FLOAT, GL_FALSE, sizeof(draw_vertex),
+    glVertexAttribPointer(13, 3, GL_FLOAT, GL_FALSE, sizeof(draw_vertex),
                           reinterpret_cast<void*>(offsetof(draw_vertex, sprite)));
     return glGetError() == GL_NO_ERROR;
 }

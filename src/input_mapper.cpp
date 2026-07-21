@@ -66,7 +66,12 @@ std::vector<input_action> relevant_actions(std::string_view short_name) {
          input_action::start1, input_action::start2,
          input_action::service, input_action::test});
 
-    if (short_name == "ridgerac" || short_name == "ridgera2" ||
+    if (short_name == "dirtdash") {
+        add({input_action::steer_left, input_action::steer_right,
+             input_action::gas, input_action::brake,
+             input_action::shift_down, input_action::shift_up,
+             input_action::view1, input_action::view4});
+    } else if (short_name == "ridgerac" || short_name == "ridgera2" ||
         short_name == "raverace" || short_name == "acedrive" ||
         short_name == "victlap" || short_name == "ridgeracf" ||
         short_name == "vformula" || short_name == "srallyc") {
@@ -145,6 +150,11 @@ std::string action_label(const mapper_profile& profile,
             return "Weapons - Gun trigger";
         if (action.action == input_action::shift_up)
             return "Weapons - Missile";
+    } else if (profile.short_name == "dirtdash") {
+        if (action.action == input_action::view1)
+            return "Driving - View change";
+        if (action.action == input_action::view4)
+            return "Cabinet - Motion stop";
     } else if (profile.short_name == "timecris") {
         if (action.action == input_action::p1_left)
             return "Light gun - Aim left";

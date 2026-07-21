@@ -303,8 +303,12 @@ void system22_dsp_system::write_render_device(uint16_t data) {
 
     source += 4;
     for (poly_vertex& vertex : polygon.vertices) {
-        vertex.u = source[0] & 0x0fff;
-        vertex.v = source[1] & 0x0fff;
+        // Super System 22 direct packets store 12-bit UV coordinates in
+        // bits 15:4. Original System 22 instead uses bits 11:0.
+        vertex.u = system22_direct_texture_coordinate(
+            source[0], m_bus.is_super_system22());
+        vertex.v = system22_direct_texture_coordinate(
+            source[1], m_bus.is_super_system22());
         vertex.x = static_cast<int16_t>(source[2]);
         vertex.y = static_cast<float>(-static_cast<int16_t>(source[3]));
         vertex.bri = source[4] >> 8;
@@ -376,7 +380,9 @@ void system22_dsp_system::transform_normal(float& x, float& y, float& z,
 }
 
 void system22_dsp_system::apply_polygon_fog(polygon_object& polygon) const {
-    if ((polygon.color & 0x80) != 0) return;
+    if ((polygon.color & 0x80) != 0 ||
+        (polygon.cz_adjust & 0x800000u) != 0)
+        return;
     const std::size_t type = polygon.cz_type & 3;
     if (m_bus.is_super_system22()) {
         const uint16_t bank_select = m_bus.read_super_cz_attribute(6);

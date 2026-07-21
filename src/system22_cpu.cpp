@@ -139,6 +139,7 @@ void system22_bus::update_driving_inputs(const input_state& state) {
         case system22_driving_profile::ridge_racer:
         case system22_driving_profile::cyber_commando:
         case system22_driving_profile::time_crisis:
+        case system22_driving_profile::dirt_dash:
             return RIDGE_RACER_CALIBRATION;
         }
         return RIDGE_RACER_CALIBRATION;
@@ -183,6 +184,8 @@ void system22_bus::update_cyber_commando_inputs(const input_state& state) {
 void system22_bus::update_game_inputs(const input_state& state) {
     if (m_driving_profile == system22_driving_profile::time_crisis)
         update_time_crisis_inputs(state);
+    else if (m_driving_profile == system22_driving_profile::dirt_dash)
+        return; // Dirt Dash's Super System 22 M37710 owns its cabinet I/O.
     else if (m_driving_profile == system22_driving_profile::cyber_commando)
         update_cyber_commando_inputs(state);
     else
@@ -637,6 +640,10 @@ uint8_t system22_bus::read8(uint32_t address) {
 
 uint16_t system22_bus::read16(uint32_t address) {
     if (m_super_system22) address &= 0x00ffffffu;
+    if (m_super_system22 && address == 0x8a000a)
+        return 0x8000; // C305 status used as a ready bit by Dirt Dash.
+    if (m_super_system22 && address == 0x8a000e)
+        return 0x0000; // C305 trigger/status register used by Time Crisis.
     const uint32_t keycus_base = m_super_system22 ? 0x400000u : 0x20000000u;
     const uint32_t keycus_size = m_super_system22 ? 0x20u : 0x10u;
     const uint32_t keycus_address = keycus_base +

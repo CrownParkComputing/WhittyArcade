@@ -35,6 +35,8 @@ constexpr arcade_game_list manifests{{
      arcade_board_type::system22, "", "namcoc71.zip + namcoc74.zip", true},
     {"timecris", "Time Crisis (World, TS2 Ver.B)",
      arcade_board_type::system22, "", "namcoc71.zip", true},
+    {"dirtdash", "Dirt Dash (World, DT2 Ver.C)",
+     arcade_board_type::system22, "", "namcoc71.zip", true},
     {"ridgeracf", "Ridge Racer Full Scale (World, RRF2)",
      arcade_board_type::system22, "", "namcoc71.zip + namcoc74.zip", false},
     {"vformula", "Virtua Formula", arcade_board_type::model1,

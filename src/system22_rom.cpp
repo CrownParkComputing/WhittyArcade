@@ -297,6 +297,55 @@ constexpr std::array<asset_spec, 2> time_crisis_samples{{
     {"ts1waveb.1l", 0x200000, 0xbf4d7272, 0x800000},
 }};
 
+constexpr std::array<asset_spec, 4> dirt_dash_program{{
+    {"dt2verc.rom1", 0x100000, 0xb2d7916c, 3},
+    {"dt2verc.rom2", 0x100000, 0x5dc040d1, 2},
+    {"dt2verc.rom3", 0x100000, 0xa55157e1, 1},
+    {"dt2verc.rom4", 0x100000, 0xf3a9bedb, 0},
+}};
+
+constexpr std::array<asset_spec, 1> dirt_dash_mcu{{
+    {"dt1dataa.8k", 0x080000, 0x9bcdea21, 0},
+}};
+
+constexpr std::array<asset_spec, 2> dirt_dash_sprites{{
+    {"dt1scg0.12f", 0x200000, 0xa09b5760, 0x000000},
+    {"dt1scg1.10f", 0x200000, 0xf9ac8111, 0x200000},
+}};
+
+constexpr std::array<asset_spec, 8> dirt_dash_textures{{
+    {"dt1cg0.8d",  0x200000, 0x10ab95e0, 0x000000},
+    {"dt1cg1.10d", 0x200000, 0xd9f1ba53, 0x200000},
+    {"dt1cg2.12d", 0x200000, 0xbd8b1e0b, 0x400000},
+    {"dt1cg3.13d", 0x200000, 0xba960663, 0x600000},
+    {"dt1cg4.14d", 0x200000, 0x424b9652, 0x800000},
+    {"dt1cg5.16d", 0x200000, 0x29516626, 0xa00000},
+    {"dt1cg6.18d", 0x200000, 0xe6fa7180, 0xc00000},
+    {"dt1cg7.19d", 0x200000, 0x2ca19153, 0xe00000},
+}};
+
+constexpr std::array<asset_spec, 2> dirt_dash_tilemap{{
+    {"dt1ccrl.3d", 0x200000, 0xe536b313, 0x000000},
+    {"dt1ccrh.1d", 0x080000, 0xaf257064, 0x200000},
+}};
+
+constexpr std::array<asset_spec, 9> dirt_dash_points{{
+    {"dt1ptrl0.18k", 0x080000, 0x4e0cac3a, 0x000000},
+    {"dt1ptrl1.16k", 0x080000, 0x59ba9dba, 0x080000},
+    {"dt1ptrl2.15k", 0x080000, 0xcfe80c67, 0x100000},
+    {"dt1ptrm0.18j", 0x080000, 0x41f34337, 0x180000},
+    {"dt1ptrm1.16j", 0x080000, 0xf620fd41, 0x200000},
+    {"dt1ptrm2.15j", 0x080000, 0x71e6714d, 0x280000},
+    {"dt1ptru0.18f", 0x080000, 0x4909bd7d, 0x300000},
+    {"dt1ptru1.16f", 0x080000, 0x4a5097df, 0x380000},
+    {"dt1ptru2.15f", 0x080000, 0x1171eaf5, 0x400000},
+}};
+
+constexpr std::array<asset_spec, 2> dirt_dash_samples{{
+    {"dt1wavea.2l", 0x400000, 0xcbd52e40, 0x000000},
+    {"dt1waveb.1l", 0x400000, 0x6b736f94, 0x800000},
+}};
+
 bool has_zip_extension(const fs::path& path) {
     std::string extension = path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
@@ -425,6 +474,8 @@ bool source_contains(const fs::path& source, const char* name) {
 }
 
 ridge_racer_rom_set identify_source(const fs::path& source) {
+    if (source_contains(source, dirt_dash_program[0].name))
+        return ridge_racer_rom_set::dirt_dash;
     if (source_contains(source, time_crisis_program[0].name))
         return ridge_racer_rom_set::time_crisis;
     if (source_contains(source, ace_driver_assets.program[0].name))
@@ -459,6 +510,7 @@ const game_asset_set* assets_for(ridge_racer_rom_set set) {
     case ridge_racer_rom_set::victory_lap:
     case ridge_racer_rom_set::cyber_commando:
     case ridge_racer_rom_set::time_crisis:
+    case ridge_racer_rom_set::dirt_dash:
     case ridge_racer_rom_set::unknown:
         return nullptr;
     }
@@ -474,6 +526,7 @@ const flexible_game_asset_set* flexible_assets_for(ridge_racer_rom_set set) {
     case ridge_racer_rom_set::cyber_commando:
         return &cyber_commando_assets;
     case ridge_racer_rom_set::time_crisis:
+    case ridge_racer_rom_set::dirt_dash:
     case ridge_racer_rom_set::unknown:
     case ridge_racer_rom_set::ridge_racer:
     case ridge_racer_rom_set::ridge_racer_full_scale:
@@ -701,6 +754,40 @@ ridge_racer_roms load_time_crisis_set(const fs::path& source) {
     }
     return roms;
 }
+
+ridge_racer_roms load_dirt_dash_set(const fs::path& source) {
+    ridge_racer_roms roms;
+    roms.super_system22 = true;
+    roms.texture_region_offset = 0;
+    roms.texture_bank_count = 8;
+    roms.texture_tile_high_bit_from_attr = false;
+
+    roms.maincpu_rom.assign(0x400000, 0);
+    std::vector<uint8_t> file;
+    bool program_complete = true;
+    for (const asset_spec& spec : dirt_dash_program) {
+        if (!load_checked(source, spec, file)) {
+            program_complete = false;
+            continue;
+        }
+        for (std::size_t index = 0; index < file.size(); ++index)
+            roms.maincpu_rom[index * 4 + spec.offset] = file[index];
+    }
+    if (!program_complete) roms.maincpu_rom.clear();
+
+    load_region(source, dirt_dash_mcu, 0x080000, roms.mcu_rom);
+    load_region(source, dirt_dash_sprites, 0x1000000,
+                roms.sprite_rom, 0xff);
+    load_region(source, dirt_dash_textures, 0x1000000,
+                roms.texture_rom);
+    load_region(source, dirt_dash_tilemap, 0x280000,
+                roms.tilemap_rom);
+    load_region(source, dirt_dash_points, 0x480000,
+                roms.point_rom);
+    load_region(source, dirt_dash_samples, 0x1000000,
+                roms.c352_samples);
+    return roms;
+}
 } // namespace
 
 void rom_loader::load_system_firmware(const std::string& path,
@@ -732,7 +819,8 @@ ridge_racer_roms rom_loader::load_ridge_racer(const std::string& path,
     const game_asset_set* assets = assets_for(set);
     const flexible_game_asset_set* flexible_assets = flexible_assets_for(set);
     if (!assets && !flexible_assets && set != ridge_racer_rom_set::rave_racer &&
-        set != ridge_racer_rom_set::time_crisis) {
+        set != ridge_racer_rom_set::time_crisis &&
+        set != ridge_racer_rom_set::dirt_dash) {
         std::fprintf(stderr, "Unsupported System 22 ROM set: %s\n",
                      path.c_str());
         return {};
@@ -743,14 +831,18 @@ ridge_racer_roms rom_loader::load_ridge_racer(const std::string& path,
     ridge_racer_roms roms;
     if (set == ridge_racer_rom_set::time_crisis)
         roms = load_time_crisis_set(fs::path(path));
+    else if (set == ridge_racer_rom_set::dirt_dash)
+        roms = load_dirt_dash_set(fs::path(path));
     else if (set == ridge_racer_rom_set::rave_racer)
         roms = load_rave_racer_set(fs::path(path));
     else if (flexible_assets)
         roms = load_flexible_game_set(fs::path(path), *flexible_assets);
     else
         roms = load_game_set(fs::path(path), *assets);
-    load_system_firmware(bios_path.empty() ? path : bios_path, roms,
-                         set != ridge_racer_rom_set::time_crisis);
+    load_system_firmware(
+        bios_path.empty() ? path : bios_path, roms,
+        set != ridge_racer_rom_set::time_crisis &&
+            set != ridge_racer_rom_set::dirt_dash);
     std::printf("ROM regions: main=%zu texture=%zu tilemap=%zu sprite=%zu "
                 "point=%zu samples=%zu gamma=%zu c71=%zu c74=%zu\n",
                 roms.maincpu_rom.size(), roms.texture_rom.size(),
@@ -775,6 +867,7 @@ const char* rom_loader::set_short_name(ridge_racer_rom_set set) {
     case ridge_racer_rom_set::victory_lap: return "victlap";
     case ridge_racer_rom_set::cyber_commando: return "cybrcomm";
     case ridge_racer_rom_set::time_crisis: return "timecris";
+    case ridge_racer_rom_set::dirt_dash: return "dirtdash";
     case ridge_racer_rom_set::unknown: return "unknown";
     }
     return "unknown";
@@ -787,6 +880,8 @@ const char* rom_loader::set_display_name(ridge_racer_rom_set set) {
         return "Rave Racer";
     if (set == ridge_racer_rom_set::time_crisis)
         return "Time Crisis (World, TS2 Ver.B)";
+    if (set == ridge_racer_rom_set::dirt_dash)
+        return "Dirt Dash (World, DT2 Ver.C)";
     if (const flexible_game_asset_set* assets = flexible_assets_for(set))
         return assets->display_name;
     const game_asset_set* assets = assets_for(set);
@@ -800,5 +895,6 @@ bool rom_loader::is_working_set(ridge_racer_rom_set set) {
            set == ridge_racer_rom_set::ace_driver ||
            set == ridge_racer_rom_set::victory_lap ||
            set == ridge_racer_rom_set::cyber_commando ||
-           set == ridge_racer_rom_set::time_crisis;
+           set == ridge_racer_rom_set::time_crisis ||
+           set == ridge_racer_rom_set::dirt_dash;
 }

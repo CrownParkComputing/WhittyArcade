@@ -42,8 +42,9 @@ system22_c74_mcu::system22_c74_mcu(system22_bus& bus, audio_system& audio)
             if (m_super_system22) m_output_data = data;
         });
     m_cpu.set_port_callbacks(6, [] { return uint8_t{0}; });
-    for (unsigned channel = 0; channel < 4; ++channel)
-        m_cpu.set_analog_callback(channel, [] { return uint16_t{0}; });
+    for (unsigned channel = 0; channel < 8; ++channel)
+        m_cpu.set_analog_callback(
+            channel, [this, channel] { return analog_input(channel); });
 }
 
 void system22_c74_mcu::reset_runtime_state() {
@@ -99,9 +100,49 @@ uint16_t system22_c74_mcu::digital_inputs() const {
     if (m_inputs.coin1) value &= ~0x0001u;
     if (m_inputs.service) value &= ~0x0004u;
     if (m_inputs.test) value &= ~0x0008u;
-    if (m_inputs.buttons[0]) value &= ~0x0010u; // gun trigger
-    if (m_inputs.buttons[1]) value &= ~0x0020u; // foot pedal
+    if (m_input_profile == system22_mcu_input_profile::dirt_dash) {
+        value &= ~0x0200u;                         // Standard cabinet
+        if (m_inputs.view) value &= ~0x0010u;       // View change
+        if (m_inputs.shift_up) value &= ~0x0020u;
+        if (m_inputs.shift_down) value &= ~0x0040u;
+        if (m_inputs.view4) value &= ~0x0080u;      // Motion stop
+    } else {
+        if (m_inputs.buttons[0]) value &= ~0x0010u; // Gun trigger
+        if (m_inputs.buttons[1]) value &= ~0x0020u; // Foot pedal
+    }
     return value;
+}
+
+uint16_t system22_c74_mcu::analog_input(unsigned channel) const {
+    if (m_input_profile != system22_mcu_input_profile::dirt_dash)
+        return 0;
+
+    const auto scale = [](uint32_t value, uint32_t input_max,
+                          uint32_t output_max) {
+        value = std::min(value, input_max);
+        return static_cast<uint16_t>(
+            (value * output_max + input_max / 2) / input_max);
+    };
+    switch (channel) {
+    case 0: {
+        // The common host wheel spans 0x280..0xd80; Dirt Dash's cabinet ADC
+        // expects its complete 10-bit 0x001..0x3ff travel with 0x200 centred.
+        constexpr uint32_t host_low = 0x280;
+        constexpr uint32_t host_high = 0xd80;
+        const uint32_t steering = std::clamp<uint32_t>(
+            m_inputs.steering, host_low, host_high);
+        return static_cast<uint16_t>(1 +
+            ((steering - host_low) * 0x3feu +
+             (host_high - host_low) / 2) /
+                (host_high - host_low));
+    }
+    case 1:
+        return scale(m_inputs.gas, 0x610, 0x140);
+    case 2:
+        return scale(m_inputs.brake, 0x610, 0x100);
+    default:
+        return 0;
+    }
 }
 
 void system22_c74_mcu::signal_irq0() {

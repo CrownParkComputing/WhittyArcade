@@ -12,6 +12,12 @@
 class audio_system;
 class system22_bus;
 
+enum class system22_mcu_input_profile : uint8_t {
+    standard,
+    time_crisis,
+    dirt_dash,
+};
+
 class system22_c74_mcu {
 public:
     system22_c74_mcu(system22_bus& bus, audio_system& audio);
@@ -23,6 +29,9 @@ public:
     void control(uint8_t value);
     int execute(int cycles);
     void update_inputs(const input_state& state) { m_inputs = state; }
+    void set_input_profile(system22_mcu_input_profile profile) {
+        m_input_profile = profile;
+    }
     void signal_irq0();
     void signal_irq2();
 
@@ -39,6 +48,7 @@ private:
     void write_c352_byte(uint32_t byte_offset, uint8_t value);
     void write_c352_word(uint32_t byte_offset, uint16_t value);
     uint16_t digital_inputs() const;
+    uint16_t analog_input(unsigned channel) const;
     void reset_runtime_state();
 
     system22_bus& m_bus;
@@ -49,6 +59,8 @@ private:
     mutable uint64_t m_c352_read_count{0};
     uint64_t m_c352_write_count{0};
     input_state m_inputs{};
+    system22_mcu_input_profile m_input_profile{
+        system22_mcu_input_profile::standard};
     uint8_t m_iocontrol{0};
     uint8_t m_output_data{0};
     bool m_super_system22{false};

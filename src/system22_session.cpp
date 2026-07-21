@@ -72,6 +72,8 @@ private:
     double m_mcu_cycle_remainder{0.0};
     uint64_t m_frame_number{0};
     bool m_capture_done{false};
+    uint64_t m_capture_frames_written{0};
+    uint64_t m_polygon_dump_frames_written{0};
     uint16_t m_last_led_data{0xffff};
     std::size_t m_last_sprite_count{0};
     std::string m_nvram_short_name;
@@ -133,7 +135,9 @@ bool system22_emulator::initialize(const std::string& rom_path,
     m_game_set = game_set;
     if (game_set != ridge_racer_rom_set::unknown)
         m_nvram_short_name = rom_loader::set_short_name(game_set);
-    m_bus->set_super_system22(game_set == ridge_racer_rom_set::time_crisis);
+    m_bus->set_super_system22(
+        game_set == ridge_racer_rom_set::time_crisis ||
+        game_set == ridge_racer_rom_set::dirt_dash);
 
     // Initialize GPU renderer
     if (!m_gpu_renderer->initialize(settings)) {
@@ -175,6 +179,9 @@ bool system22_emulator::initialize(const std::string& rom_path,
     case ridge_racer_rom_set::time_crisis:
         m_bus->set_driving_profile(system22_driving_profile::time_crisis);
         break;
+    case ridge_racer_rom_set::dirt_dash:
+        m_bus->set_driving_profile(system22_driving_profile::dirt_dash);
+        break;
     default:
         m_bus->set_driving_profile(system22_driving_profile::ridge_racer);
         break;
@@ -195,6 +202,9 @@ bool system22_emulator::initialize(const std::string& rom_path,
         break;
     case ridge_racer_rom_set::victory_lap:
         m_bus->set_keycus(0x0188, 2);
+        break;
+    case ridge_racer_rom_set::dirt_dash:
+        m_bus->set_keycus(0x01a2, 0);
         break;
     default:
         m_bus->clear_keycus();
@@ -251,6 +261,11 @@ bool system22_emulator::initialize(const std::string& rom_path,
         [this](uint8_t value) { m_dsp->control(value); });
 
     m_mcu = std::make_unique<system22_c74_mcu>(*m_bus, *m_audio);
+    if (game_set == ridge_racer_rom_set::dirt_dash) {
+        m_mcu->set_input_profile(system22_mcu_input_profile::dirt_dash);
+    } else if (game_set == ridge_racer_rom_set::time_crisis) {
+        m_mcu->set_input_profile(system22_mcu_input_profile::time_crisis);
+    }
     const bool mcu_ready = m_roms->super_system22 ?
         m_mcu->initialize_super_system22(m_roms->mcu_rom.data(),
                                           m_roms->mcu_rom.size()) :
@@ -384,7 +399,10 @@ void system22_emulator::run_frame() {
             m_bus->sprite_ram_data(), m_bus->sprite_ram_size(),
             m_bus->vics_data(), m_bus->vics_data_size(),
             m_bus->vics_control_data(), m_bus->vics_control_size(),
-            m_roms->sprite_rom.size());
+            m_roms->sprite_rom.size(),
+            m_game_set == ridge_racer_rom_set::dirt_dash ?
+                system22_sprite_profile::dirt_dash :
+                system22_sprite_profile::standard);
         m_last_sprite_count = sprites.size();
         if (std::getenv("RRACER_SPRITE_TRACE") &&
             m_frame_number % 60 == 0 && !sprites.empty()) {
@@ -404,6 +422,51 @@ void system22_emulator::run_frame() {
         sprites.insert(sprites.end(), polygons.begin(), polygons.end());
         polygons = std::move(sprites);
     }
+    if (const char* dump_path = std::getenv("RRACER_POLYGON_DUMP")) {
+        const char* dump_frame_text =
+            std::getenv("RRACER_POLYGON_DUMP_FRAME");
+        const char* dump_count_text =
+            std::getenv("RRACER_POLYGON_DUMP_COUNT");
+        const uint64_t dump_frame = dump_frame_text ?
+            std::strtoull(dump_frame_text, nullptr, 0) : 0;
+        const uint64_t dump_count = std::max<uint64_t>(
+            1, dump_count_text ?
+                std::strtoull(dump_count_text, nullptr, 0) : 1);
+        if (*dump_path && m_frame_number >= dump_frame &&
+            m_polygon_dump_frames_written < dump_count) {
+            const std::string frame_path = std::string(dump_path) + "." +
+                std::to_string(m_frame_number) + ".csv";
+            if (std::FILE* output = std::fopen(frame_path.c_str(), "wb")) {
+                std::fprintf(output,
+                    "index,zsort,color,cmode,bank,direct,objectflags,czadjust,");
+                for (int vertex = 0; vertex < 4; ++vertex)
+                    std::fprintf(output, "x%d,y%d,z%d,u%d,v%d,bri%d%s",
+                                 vertex, vertex, vertex, vertex, vertex,
+                                 vertex, vertex == 3 ? "\n" : ",");
+                for (std::size_t index = 0; index < polygons.size(); ++index) {
+                    const polygon_object& polygon = polygons[index];
+                    std::fprintf(output, "%zu,%u,%u,%u,%u,%u,%u,%u,",
+                                 index, polygon.zsort, polygon.color,
+                                 polygon.cmode, polygon.texturebank,
+                                 polygon.direct ? 1u : 0u,
+                                 polygon.objectflags, polygon.cz_adjust);
+                    for (int vertex = 0; vertex < 4; ++vertex) {
+                        const poly_vertex& point = polygon.vertices[vertex];
+                        std::fprintf(output, "%.9g,%.9g,%.9g,%d,%d,%d%s",
+                                     point.x, point.y, point.z, point.u,
+                                     point.v, point.bri,
+                                     vertex == 3 ? "\n" : ",");
+                    }
+                }
+                std::fclose(output);
+                std::printf("Dumped %zu polygons for frame %llu to %s\n",
+                            polygons.size(),
+                            static_cast<unsigned long long>(m_frame_number),
+                            frame_path.c_str());
+            }
+            ++m_polygon_dump_frames_written;
+        }
+    }
     if (!polygons.empty())
         m_gpu_renderer->submit_polygons(polygons.data(),
                                         static_cast<int>(polygons.size()));
@@ -417,12 +480,20 @@ void system22_emulator::run_frame() {
         const char* capture_frame_text = std::getenv("RRACER_CAPTURE_FRAME");
         const uint64_t capture_frame = capture_frame_text ?
             std::strtoull(capture_frame_text, nullptr, 0) : 180;
+        const char* capture_count_text =
+            std::getenv("RRACER_CAPTURE_COUNT");
+        const uint64_t capture_count = std::max<uint64_t>(
+            1, capture_count_text ?
+                std::strtoull(capture_count_text, nullptr, 0) : 1);
         if (capture_path && *capture_path && m_frame_number >= capture_frame) {
             std::vector<uint32_t> pixels(
                 static_cast<std::size_t>(SYSTEM22_SCREEN_WIDTH) *
                 SYSTEM22_SCREEN_HEIGHT);
             m_gpu_renderer->read_framebuffer(pixels.data());
-            if (std::FILE* output = std::fopen(capture_path, "wb")) {
+            std::string frame_path = capture_path;
+            if (capture_count > 1)
+                frame_path += "." + std::to_string(m_frame_number) + ".ppm";
+            if (std::FILE* output = std::fopen(frame_path.c_str(), "wb")) {
                 std::fprintf(output, "P6\n%d %d\n255\n",
                              SYSTEM22_SCREEN_WIDTH, SYSTEM22_SCREEN_HEIGHT);
                 for (int y = SYSTEM22_SCREEN_HEIGHT - 1; y >= 0; --y) {
@@ -440,9 +511,10 @@ void system22_emulator::run_frame() {
                 std::fclose(output);
                 std::printf("Captured frame %llu to %s\n",
                             static_cast<unsigned long long>(m_frame_number),
-                            capture_path);
+                            frame_path.c_str());
             }
-            m_capture_done = true;
+            ++m_capture_frames_written;
+            m_capture_done = m_capture_frames_written >= capture_count;
         }
     }
 
@@ -456,7 +528,8 @@ void system22_emulator::run_frame() {
                           [](uint8_t value) { return value != 0; }));
         printf("Frame: %llu PC=%08x %s C71=%04x/%04x C74=%06x "
                "C352=%llu/%llu audio=%d/%d dropped=%llu polys=%llu/%llu PDP=%llu/%llu "
-               "sprites=%zu layer=%02x bg=%02x%02x%02x pal=%zu "
+               "sprites=%zu layer=%02x alpha=%02x/%02x/%02x "
+               "bg=%02x%02x%02x pal=%zu "
                "A6=%08x wait=%04x\n",
                static_cast<unsigned long long>(m_frame_number), pc,
                m_main_cpu->disassemble(pc).c_str(),
@@ -471,13 +544,23 @@ void system22_emulator::run_frame() {
                static_cast<unsigned long long>(m_dsp->pdp_begin_count()),
                static_cast<unsigned long long>(m_dsp->display_parse_errors()),
                m_last_sprite_count, m_bus->read_mixer_byte(0x1f),
+               m_bus->read_mixer_byte(0x0f),
+               m_bus->read_mixer_byte(0x10),
+               m_bus->read_mixer_byte(0x11),
                m_bus->read_mixer_byte(0x08),
                m_bus->read_mixer_byte(0x09),
                m_bus->read_mixer_byte(0x0a), palette_nonzero,
                a6, m_bus->read16(a6 - 0x7ffa));
     }
     if (m_frame_number % 60 == 0 && std::getenv("RRACER_INPUT_TRACE")) {
-        if (m_roms->super_system22) {
+        if (m_game_set == ridge_racer_rom_set::dirt_dash) {
+            const input_state& state = m_input->state();
+            std::printf(
+                "Dirt Dash input: steer=%04x gas=%04x brake=%04x "
+                "coin=%d view=%d shift=%d/%d\n",
+                state.steering, state.gas, state.brake, state.coin1,
+                state.view, state.shift_down, state.shift_up);
+        } else if (m_roms->super_system22) {
             std::printf("Time Crisis input: x=%u y=%u coin=%d trigger=%d pedal=%d\n",
                         m_bus->gun_x(), m_bus->gun_y(),
                         m_input->state().coin1,

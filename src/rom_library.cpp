@@ -141,7 +141,8 @@ std::string readiness_suffix(const fs::path& candidate,
         if (!sibling_exists(candidate, "namcoc71.zip") &&
             !archive_contains(candidate, "c71.bin"))
             missing.emplace_back("namcoc71.zip");
-        if (std::string(manifest.short_name) != "timecris" &&
+        const std::string short_name(manifest.short_name);
+        if (short_name != "timecris" && short_name != "dirtdash" &&
             !sibling_exists(candidate, "namcoc74.zip") &&
             !archive_contains(candidate, "c74.bin"))
             missing.emplace_back("namcoc74.zip");

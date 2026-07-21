@@ -26,7 +26,8 @@ int main(int argc, char** argv) {
     assert(!roms.c352_samples.empty());
     assert(roms.has_c71_firmware());
     assert(roms.has_mcu_firmware());
-    if (set == ridge_racer_rom_set::time_crisis) {
+    if (set == ridge_racer_rom_set::time_crisis ||
+        set == ridge_racer_rom_set::dirt_dash) {
         assert(roms.super_system22);
         assert(roms.maincpu_rom.size() == 0x400000);
         assert(roms.sprite_rom.size() == 0x1000000);

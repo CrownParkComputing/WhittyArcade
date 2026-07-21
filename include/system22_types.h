@@ -64,3 +64,35 @@ inline int32_t signed24(int32_t v) {
         static_cast<int32_t>(bits) - 0x01000000 :
         static_cast<int32_t>(bits);
 }
+
+inline int system22_direct_texture_coordinate(uint16_t value,
+                                               bool super_system22) {
+    return super_system22 ? value >> 4 : value & 0x0fff;
+}
+
+inline bool system22_temporal_shadow_material(const polygon_object& polygon,
+                                               bool super_system22) {
+    if (polygon.direct || polygon.sprite || polygon.objectflags != 0)
+        return false;
+
+    if (!super_system22) {
+        if ((polygon.color & 0x7fu) != 0x42u || polygon.cmode != 0 ||
+            polygon.texturebank != 0)
+            return false;
+        for (const poly_vertex& vertex : polygon.vertices) {
+            if (vertex.u != 11 || vertex.v != 15 || vertex.bri != 0)
+                return false;
+        }
+        return true;
+    }
+
+    // Dirt Dash's projected vehicle-shadow meshes use this measured
+    // palette/mode/bank signature at unity (8.6 fixed-point) shade.
+    if ((polygon.color & 0x7fu) != 0x01u || polygon.cmode != 5 ||
+        polygon.texturebank != 2)
+        return false;
+    for (const poly_vertex& vertex : polygon.vertices) {
+        if (vertex.bri != 0x40) return false;
+    }
+    return true;
+}

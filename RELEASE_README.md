@@ -84,6 +84,20 @@ The player is hidden by default, matching the cabinet pedal. Alternative gun,
 pedal and trigger controls can be assigned in the game-specific controller
 profile.
 
+## Dirt Dash
+
+Use the World DT2 Ver.C `dirtdash` set with `namcoc71.zip` in the same ROM
+folder. The game carries its own M37710 program and does not need
+`namcoc74.zip`. No ROM or firmware is included in this archive.
+
+- Left/Right: steer; Up: accelerator; Down: brake
+- Z/X: shift down/up
+- V: view change; G: motion-stop cabinet switch
+- `5`: insert coin; press the accelerator when prompted to start/select
+
+The wheel, pedals, shifter and cabinet buttons can all be reassigned in the
+game-specific controller profile.
+
 ## Licence
 
 Official, unmodified WhittyArcade binaries are licensed for personal,
