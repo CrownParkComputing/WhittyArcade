@@ -211,6 +211,7 @@ set(SOURCES
     src/system22_cpu.cpp
     src/system22_dsp.cpp
     src/system22_mcu.cpp
+    src/system22_sprites.cpp
     src/system22_tms320c25.cpp
     src/system22_rom.cpp
     src/model1_rom.cpp
@@ -380,6 +381,15 @@ target_include_directories(system22_cpu_test PRIVATE ${CMAKE_SOURCE_DIR}/include
 target_link_libraries(system22_cpu_test PRIVATE musashi Threads::Threads m)
 target_compile_options(system22_cpu_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME system22_cpu_test COMMAND system22_cpu_test)
+
+add_executable(system22_sprite_test
+    tests/system22_sprite_test.cpp
+    src/system22_sprites.cpp)
+target_include_directories(system22_sprite_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(system22_sprite_test PRIVATE
+    -Wall -Wextra -Wpedantic)
+add_test(NAME system22_sprite_test COMMAND system22_sprite_test)
 
 add_executable(system22_rom_test
     tests/system22_rom_test.cpp

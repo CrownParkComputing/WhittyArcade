@@ -36,6 +36,9 @@ struct polygon_object {
     uint8_t fog_g;
     uint8_t fog_b;
     uint8_t fog_factor;
+    bool sprite{false};
+    uint32_t sprite_tile{0};
+    uint8_t sprite_alpha{0};
     float viewport_x;
     float viewport_y;
     float clip_left{0.0f};

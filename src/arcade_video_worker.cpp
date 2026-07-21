@@ -54,7 +54,8 @@ void arcade_video_worker::reset_session() {
         m_tasks.clear();
         m_pending_model2_frame.reset();
         m_model2_task_queued = false;
-        m_tasks.emplace_back([completed](polygon_renderer_gpu&) {
+        m_tasks.emplace_back([completed](polygon_renderer_gpu& renderer) {
+            renderer.set_lightgun_cursor(false);
             completed->set_value();
         });
     }
@@ -74,8 +75,12 @@ void arcade_video_worker::run_modal(std::function<void()> action) {
     }
     auto completed = std::make_shared<std::promise<void>>();
     std::future<void> result = completed->get_future();
-    enqueue([action = std::move(action), completed](polygon_renderer_gpu&) {
+    enqueue([action = std::move(action), completed](polygon_renderer_gpu& renderer) {
+        const bool restore_lightgun = renderer.lightgun_cursor_enabled();
+        const uint8_t restore_player = renderer.lightgun_cursor_player();
+        renderer.set_lightgun_cursor(false);
         action();
+        renderer.set_lightgun_cursor(restore_lightgun, restore_player);
         completed->set_value();
     });
     result.wait();
@@ -197,6 +202,12 @@ void arcade_video_worker::set_f2_opens_dip(bool enabled) {
     });
 }
 
+void arcade_video_worker::set_lightgun_cursor(bool enabled, uint8_t player) {
+    enqueue([enabled, player](polygon_renderer_gpu& renderer) {
+        renderer.set_lightgun_cursor(enabled, player);
+    });
+}
+
 bool arcade_video_worker::take_settings_change(emulator_settings& settings) {
     std::lock_guard<std::mutex> lock(m_frontend_mutex);
     if (!m_settings_pending) return false;
@@ -247,6 +258,21 @@ void arcade_video_worker::submit_gamma(const uint8_t* gamma_proms,
     });
 }
 
+void arcade_video_worker::submit_sprites(const uint8_t* sprite_rom,
+                                         std::size_t size) {
+    if (!sprite_rom || !size) return;
+    std::vector<uint8_t> copy(sprite_rom, sprite_rom + size);
+    enqueue([copy = std::move(copy)](polygon_renderer_gpu& renderer) {
+        renderer.submit_sprites(copy.data(), copy.size());
+    });
+}
+
+void arcade_video_worker::set_system22_layer_mask(uint8_t mask) {
+    enqueue([mask](polygon_renderer_gpu& renderer) {
+        renderer.set_system22_layer_mask(mask);
+    });
+}
+
 void arcade_video_worker::submit_palette(const uint8_t* palette_ram,
                                          std::size_t size) {
     if (!palette_ram || !size) return;
@@ -260,7 +286,7 @@ void arcade_video_worker::submit_text_layer(
     const uint8_t* character_ram, std::size_t character_size,
     const uint8_t* text_ram, std::size_t text_size,
     const uint8_t* text_attributes, const uint8_t* mixer,
-    std::size_t mixer_size) {
+    std::size_t mixer_size, bool super_system22) {
     if (!character_ram || !text_ram || !text_attributes || !mixer) return;
     std::vector<uint8_t> characters(character_ram,
                                     character_ram + character_size);
@@ -269,11 +295,13 @@ void arcade_video_worker::submit_text_layer(
                                     text_attributes + 0x10);
     std::vector<uint8_t> mixer_copy(mixer, mixer + mixer_size);
     enqueue([characters = std::move(characters), text = std::move(text),
-             attributes = std::move(attributes), mixer_copy = std::move(mixer_copy)]
+             attributes = std::move(attributes), mixer_copy = std::move(mixer_copy),
+             super_system22]
             (polygon_renderer_gpu& renderer) {
         renderer.submit_text_layer(
             characters.data(), characters.size(), text.data(), text.size(),
-            attributes.data(), mixer_copy.data(), mixer_copy.size());
+            attributes.data(), mixer_copy.data(), mixer_copy.size(),
+            super_system22);
     });
 }
 

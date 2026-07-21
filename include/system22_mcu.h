@@ -1,6 +1,7 @@
 // system22_mcu.h - Namco C74 sound MCU integration.
 #pragma once
 
+#include "arcade_types.h"
 #include "m37710.h"
 
 #include <array>
@@ -17,8 +18,13 @@ public:
 
     bool initialize(const uint8_t* firmware, std::size_t firmware_size,
                     const uint8_t* data_rom, std::size_t data_rom_size);
+    bool initialize_super_system22(const uint8_t* data_rom,
+                                   std::size_t data_rom_size);
     void control(uint8_t value);
     int execute(int cycles);
+    void update_inputs(const input_state& state) { m_inputs = state; }
+    void signal_irq0();
+    void signal_irq2();
 
     bool enabled() const { return m_enabled; }
     uint32_t program_counter() const { return m_cpu.program_counter(); }
@@ -32,6 +38,8 @@ private:
     void write_word(uint32_t address, uint16_t value);
     void write_c352_byte(uint32_t byte_offset, uint8_t value);
     void write_c352_word(uint32_t byte_offset, uint16_t value);
+    uint16_t digital_inputs() const;
+    void reset_runtime_state();
 
     system22_bus& m_bus;
     audio_system& m_audio;
@@ -40,6 +48,10 @@ private:
     std::array<uint8_t, 0x1000> m_c352_registers{};
     mutable uint64_t m_c352_read_count{0};
     uint64_t m_c352_write_count{0};
+    input_state m_inputs{};
+    uint8_t m_iocontrol{0};
+    uint8_t m_output_data{0};
+    bool m_super_system22{false};
     bool m_enabled{false};
     bool m_initialized{false};
 };

@@ -584,13 +584,21 @@ input_binding_table keyboard_bindings_for(
         const input_mapping_config& config,
         std::string_view game_short_name) {
     if (game_short_name.empty()) return config.keyboard;
+    input_binding_table bindings = config.keyboard;
+    if (game_short_name == "timecris") {
+        // A desktop light gun keeps the virtual pedal held while exposed;
+        // Space releases it to take cover and reload. Per-game mappings below
+        // can still replace this built-in default.
+        bindings[input_action_index(input_action::p1_action2)] =
+            key(SDL_SCANCODE_SPACE);
+    }
     const auto found = std::find_if(
         config.games.begin(), config.games.end(),
         [game_short_name](const game_input_mapping& game) {
             return game.short_name == game_short_name;
         });
-    return found == config.games.end() ? config.keyboard :
-        resolve_bindings(config.keyboard, found->keyboard);
+    return found == config.games.end() ? bindings :
+        resolve_bindings(bindings, found->keyboard);
 }
 
 input_binding_table controller_bindings_for(

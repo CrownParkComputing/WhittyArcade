@@ -69,6 +69,115 @@ int main() {
     if (!expect(irq_level == 0, "vblank acknowledge must clear the IRQ")) return 1;
     bus.set_irq_handler({});
 
+    system22_bus super_bus;
+    super_bus.set_super_system22(true);
+    if (!expect(super_bus.is_super_system22() &&
+                super_bus.program_rom_size() ==
+                    system22_bus::SUPER_PROGRAM_ROM_SIZE,
+                "Time Crisis must select the 4 MiB Super System 22 map"))
+        return 1;
+
+    int super_irq_level = -1;
+    super_bus.set_irq_handler(
+        [&super_irq_level](int level) { super_irq_level = level; });
+    super_bus.write8(0x700000, 0x04);
+    super_bus.signal_vblank();
+    if (!expect(super_irq_level == 4,
+                "Super System 22 vblank must use source zero and its assigned level"))
+        return 1;
+    super_bus.write8(0x700004, 0);
+    if (!expect(super_irq_level == 0,
+                "Super System 22 source-zero acknowledge must clear vblank"))
+        return 1;
+    super_bus.set_irq_handler({});
+
+    uint8_t super_mcu_control = 0;
+    uint8_t super_dsp_control = 0;
+    super_bus.set_mcu_control_handler(
+        [&super_mcu_control](uint8_t value) { super_mcu_control = value; });
+    super_bus.set_dsp_control_handler(
+        [&super_dsp_control](uint8_t value) { super_dsp_control = value; });
+    super_bus.write8(0x700016, 1);
+    super_bus.write8(0x70001c, 1);
+    if (!expect(super_mcu_control == 1 && super_dsp_control == 1,
+                "Super System 22 must use syscon 16/1c for MCU/DSP reset"))
+        return 1;
+
+    super_bus.write32(0xe00000, 0x11223344);
+    super_bus.write32(0xe3fffc, 0xa1b2c3d4);
+    if (!expect(super_bus.read32(0xe00000) == 0x11223344 &&
+                super_bus.read32(0xe3fffc) == 0xa1b2c3d4,
+                "Super System 22 must expose its full 256 KiB work RAM"))
+        return 1;
+    super_bus.write16(0xa05000, 0x1234);
+    if (!expect(super_bus.read_c74_shared_byte(0x1000) == 0x34 &&
+                super_bus.read_c74_shared_byte(0x1001) == 0x12,
+                "Super M37710 and 68020 must share little-endian words"))
+        return 1;
+
+    super_bus.set_dip_switches(0xfffe);
+    if (!expect(super_bus.read32(0x440000) == 0xfffeffff,
+                "Time Crisis SW4 must occupy the Super System 22 DIP byte"))
+        return 1;
+    super_bus.write16(0x460000, 0x12ab);
+    if (!expect(super_bus.read16(0x460000) == 0x12ff,
+                "Super System 22 EEPROM must use the two upper byte lanes"))
+        return 1;
+
+    super_bus.write8(0x824102, 0x44);
+    super_bus.write8(0x828007, 0x55);
+    super_bus.write8(0x8a0003, 0x66);
+    super_bus.write32(0x89e004, 0x1234abcd);
+    super_bus.write8(0x900123, 0x77);
+    super_bus.write8(0x980234, 0x88);
+    if (!expect(super_bus.read_mixer_byte(0x102) == 0x44 &&
+                super_bus.palette_ram_data()[7] == 0x55 &&
+                super_bus.text_attr_data()[3] == 0x66 &&
+                super_bus.read32(0x89e004) == 0x1234abcd &&
+                super_bus.vics_data()[0x123] == 0x77 &&
+                super_bus.sprite_ram_data()[0x234] == 0x88,
+                "Super video, VICS and sprite RAM must share CPU storage"))
+        return 1;
+    if (!expect(super_bus.character_ram_data()[0x1e004] == 0x12 &&
+                super_bus.character_ram_data()[0x1e007] == 0xcd,
+                "Super text RAM must mirror the character RAM tail"))
+        return 1;
+
+    super_bus.write16(0x810000, 0xff80);
+    super_bus.write16(0x810008, 0x4444);
+    super_bus.write16(0x81000c, 0x00e4);
+    super_bus.write16(0x810200, 0x1234);
+    if (!expect(super_bus.read_super_cz_attribute(0) == 0xff80 &&
+                super_bus.read_super_cz_attribute(4) == 0x4444 &&
+                super_bus.read_super_cz_attribute(6) == 0x00e4 &&
+                super_bus.read_super_cz_entry(0, 0) == 0x1234 &&
+                super_bus.read_super_cz_entry(3, 0) == 0x1234,
+                "Super CZ attributes and enabled compare banks must retain 16-bit words"))
+        return 1;
+
+    super_bus.write16(0x860000, 0x0040);
+    super_bus.write16(0x860002, 0x5aa5);
+    super_bus.write16(0x860000, 0x0040);
+    if (!expect(super_bus.read16(0x860004) == 0x5aa5,
+                "Super spot RAM must preserve indirect 16-bit accesses"))
+        return 1;
+
+    input_state gun_controls{};
+    super_bus.set_driving_profile(system22_driving_profile::time_crisis);
+    super_bus.update_game_inputs(gun_controls);
+    if (!expect(super_bus.gun_x() == 381 && super_bus.gun_y() == 163 &&
+                super_bus.read16(0x430000) == 381 &&
+                super_bus.read16(0x430004) == 163 &&
+                super_bus.read16(0x430008) == 163,
+                "neutral Time Crisis aim must reach all three gun registers"))
+        return 1;
+    gun_controls.left_stick_x = 0x47;
+    gun_controls.left_stick_y = 0xb7;
+    super_bus.update_game_inputs(gun_controls);
+    if (!expect(super_bus.gun_x() == 69 && super_bus.gun_y() == 283,
+                "Time Crisis aim must span the calibrated CRT range"))
+        return 1;
+
     bus.write32(0x10000000, 0x11223344);
     if (!expect(bus.read32(0x10000000) == 0x11223344,
                 "main RAM must be big-endian and writable")) return 1;

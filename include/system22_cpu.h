@@ -16,15 +16,18 @@ enum class system22_driving_profile : uint8_t {
     rave_racer,
     ace_driver,
     cyber_commando,
+    time_crisis,
 };
 
-// Byte-accurate, big-endian view of the non-Super System 22 main CPU map.
+// Byte-accurate, big-endian view of the System 22 main CPU maps.
 // Device side effects are deliberately kept behind this bus so the MC68020
 // core can remain an off-the-shelf component.
 class system22_bus {
 public:
     static constexpr std::size_t PROGRAM_ROM_SIZE = 0x200000;
+    static constexpr std::size_t SUPER_PROGRAM_ROM_SIZE = 0x400000;
     static constexpr std::size_t MAIN_RAM_SIZE = 0x020000;
+    static constexpr std::size_t SUPER_MAIN_RAM_SIZE = 0x040000;
     static constexpr std::size_t SCI_RAM_SIZE = 0x004000;
     static constexpr std::size_t EEPROM_SIZE = 0x002000;
     static constexpr std::size_t MCU_SHARED_SIZE = 0x008000;
@@ -35,10 +38,19 @@ public:
     static constexpr std::size_t CG_RAM_SIZE = 0x020000;
     static constexpr std::size_t TEXT_RAM_SIZE = 0x002000;
     static constexpr std::size_t TEXT_ATTR_SIZE = 0x000010;
+    static constexpr std::size_t VICS_DATA_SIZE = 0x010000;
+    static constexpr std::size_t VICS_CONTROL_SIZE = 0x000080;
+    static constexpr std::size_t SPRITE_RAM_SIZE = 0x030000;
+    static constexpr std::size_t SPOT_RAM_SIZE = 0x001000;
 
     system22_bus();
 
     bool load_program_rom(const uint8_t* data, std::size_t size);
+    void set_super_system22(bool enabled);
+    bool is_super_system22() const { return m_super_system22; }
+    std::size_t program_rom_size() const {
+        return m_super_system22 ? SUPER_PROGRAM_ROM_SIZE : PROGRAM_ROM_SIZE;
+    }
     void load_eeprom(const uint8_t* data, std::size_t size);
     const uint8_t* eeprom_data() const { return m_eeprom.data(); }
     std::size_t eeprom_size() const { return m_eeprom.size(); }
@@ -84,6 +96,9 @@ public:
     void update_driving_inputs(const input_state& state);
     void update_game_inputs(const input_state& state);
     uint8_t read_cz_byte(std::size_t index) const;
+    uint16_t read_super_cz_attribute(std::size_t index) const;
+    uint16_t read_super_cz_entry(std::size_t bank,
+                                 std::size_t index) const;
     uint8_t read_mixer_byte(std::size_t index) const;
     uint32_t read_polygon_word(std::size_t index) const;
     void write_polygon_word(std::size_t index, uint32_t value);
@@ -99,14 +114,26 @@ public:
     const uint8_t* text_attr_data() const { return m_textattr.data(); }
     const uint8_t* mixer_data() const { return m_mixer.data(); }
     std::size_t mixer_size() const { return m_mixer.size(); }
+    const uint8_t* sprite_ram_data() const { return m_sprite_ram.data(); }
+    std::size_t sprite_ram_size() const { return m_sprite_ram.size(); }
+    const uint8_t* vics_data() const { return m_vics_data.data(); }
+    std::size_t vics_data_size() const { return m_vics_data.size(); }
+    const uint8_t* vics_control_data() const { return m_vics_control.data(); }
+    std::size_t vics_control_size() const { return m_vics_control.size(); }
+    uint16_t gun_x() const { return m_gun_x; }
+    uint16_t gun_y() const { return m_gun_y; }
+    uint16_t cpu_led_data() const { return m_cpu_led_data; }
 
 private:
     uint8_t read_mapped_byte(uint32_t address);
     void write_mapped_byte(uint32_t address, uint8_t value);
+    uint8_t read_super_mapped_byte(uint32_t address);
+    void write_super_mapped_byte(uint32_t address, uint8_t value);
     uint16_t next_keycus_value();
     void write_shared_word(std::size_t offset, uint16_t value);
     void update_coinage(const input_state& state);
     void update_cyber_commando_inputs(const input_state& state);
+    void update_time_crisis_inputs(const input_state& state);
     void write_syscontrol(std::size_t offset, uint8_t value);
     void update_irq_level();
 
@@ -121,6 +148,11 @@ private:
     std::vector<uint8_t> m_paletteram;
     std::vector<uint8_t> m_cgram;
     std::vector<uint8_t> m_textram;
+    std::vector<uint8_t> m_vics_data;
+    std::vector<uint8_t> m_vics_control;
+    std::vector<uint8_t> m_sprite_ram;
+    std::array<uint8_t, 0x10> m_super_czattr{};
+    std::array<uint8_t, SPOT_RAM_SIZE> m_spot_ram{};
     std::array<uint8_t, TEXT_ATTR_SIZE> m_textattr{};
     std::array<uint8_t, 0x20> m_syscontrol{};
     std::array<uint16_t, 2> m_portbits{0xffff, 0xffff};
@@ -135,6 +167,12 @@ private:
     uint8_t m_keycus_register{0};
     uint16_t m_keycus_rng{0x4d2b};
     uint16_t m_dip_switches{0xffff};
+    uint16_t m_gun_x{381};
+    uint16_t m_gun_y{163};
+    uint16_t m_cpu_led_data{0xffff};
+    uint16_t m_spot_address{0};
+    uint16_t m_spot_enable{0};
+    bool m_super_system22{false};
     system22_driving_profile m_driving_profile{
         system22_driving_profile::ridge_racer};
     bool m_coin_state_initialized{false};
@@ -163,6 +201,7 @@ public:
     uint32_t program_counter() const;
     uint32_t stack_pointer() const;
     uint32_t data_register(unsigned index) const;
+    uint32_t address_register(unsigned index) const;
     std::string disassemble(uint32_t address, std::size_t* length = nullptr) const;
     bool ready() const { return m_ready; }
 

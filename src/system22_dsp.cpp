@@ -228,8 +228,10 @@ void system22_dsp_system::dsp_ram_write(uint16_t offset, uint16_t data) {
 int32_t system22_dsp_system::point_read(uint32_t address) const {
     address &= 0x00ffffff;
     if (address < m_point_rom.size()) return m_point_rom[address];
-    if (address >= 0xf00000 && address < 0xf20000) {
-        uint32_t value = m_point_ram[address - 0xf00000] & 0x00ffffff;
+    const uint32_t ram_base =
+        m_bus.is_super_system22() ? 0xf80000u : 0xf00000u;
+    if (address >= ram_base && address < ram_base + m_point_ram.size()) {
+        uint32_t value = m_point_ram[address - ram_base] & 0x00ffffff;
         if ((value & 0x800000) != 0) value |= 0xff000000;
         return static_cast<int32_t>(value);
     }
@@ -238,8 +240,10 @@ int32_t system22_dsp_system::point_read(uint32_t address) const {
 
 void system22_dsp_system::point_write(uint32_t address, uint32_t data) {
     address &= 0x00ffffff;
-    if (address >= 0xf00000 && address < 0xf20000)
-        m_point_ram[address - 0xf00000] = data & 0x00ffffff;
+    const uint32_t ram_base =
+        m_bus.is_super_system22() ? 0xf80000u : 0xf00000u;
+    if (address >= ram_base && address < ram_base + m_point_ram.size())
+        m_point_ram[address - ram_base] = data & 0x00ffffff;
 }
 
 void system22_dsp_system::upload_slave_word(uint16_t data) {
@@ -273,8 +277,17 @@ void system22_dsp_system::write_render_device(uint16_t data) {
     const uint16_t* source = m_render_words.data();
     polygon_object polygon{};
     polygon.zsort = ((source[1] & 0x0fff) << 12) | (source[0] & 0x0fff);
-    polygon.cmode = (source[4] >> 12) & 0x0f;
-    polygon.texturebank = (source[5] >> 12) & 0x0f;
+    if (m_bus.is_super_system22()) {
+        // Super System 22 moved CMODE and the texture bank into the low
+        // header byte. Reading them from the first vertex, as on System 22,
+        // selects arbitrary texture banks and makes Time Crisis's direct
+        // polygons disappear.
+        polygon.cmode = (source[2] >> 4) & 0x0f;
+        polygon.texturebank = source[2] & 0x0f;
+    } else {
+        polygon.cmode = (source[4] >> 12) & 0x0f;
+        polygon.texturebank = (source[5] >> 12) & 0x0f;
+    }
     polygon.color = source[2] >> 8;
     polygon.cz_value = (source[3] >> 2) & 0x1fff;
     polygon.cz_type = source[3] & 3;
@@ -365,6 +378,59 @@ void system22_dsp_system::transform_normal(float& x, float& y, float& z,
 void system22_dsp_system::apply_polygon_fog(polygon_object& polygon) const {
     if ((polygon.color & 0x80) != 0) return;
     const std::size_t type = polygon.cz_type & 3;
+    if (m_bus.is_super_system22()) {
+        const uint16_t bank_select = m_bus.read_super_cz_attribute(6);
+        const std::size_t bank = (bank_select >> (type * 2)) & 3u;
+        const uint16_t flags = m_bus.read_super_cz_attribute(4);
+        if (((flags >> (bank * 4)) & 4u) == 0) return;
+
+        // Each Super System 22 bank contains 256 compare thresholds. Turn
+        // the hardware table into the resulting 8-bit fog factor for this
+        // polygon's 13-bit Z value, matching the board's reverse mode and
+        // edge fill behavior.
+        const bool reverse = ((flags >> (bank * 4)) & 2u) != 0;
+        const int reverse_mask = reverse ? 0xff : 0;
+        int smallest_value = 0x2000;
+        int smallest_factor = reverse_mask;
+        int largest_value = 0;
+        int largest_factor = reverse_mask ^ 0xff;
+        int previous = 0;
+        int factor = largest_factor;
+        const int z = static_cast<int>(polygon.cz_value & 0x1fff);
+        bool found = false;
+        for (int iteration = 0; iteration < 0x100; ++iteration) {
+            const int candidate = iteration ^ reverse_mask;
+            const int value = std::min<int>(
+                m_bus.read_super_cz_entry(bank, candidate), 0x2000);
+            if (iteration > 0 && previous < value &&
+                z >= previous && z < value) {
+                factor = candidate;
+                found = true;
+                break;
+            }
+            if (value < smallest_value) {
+                smallest_value = value;
+                smallest_factor = candidate;
+            }
+            if (value > largest_value) {
+                largest_value = value;
+                largest_factor = candidate;
+            }
+            previous = value;
+        }
+        if (!found)
+            factor = z < smallest_value ? smallest_factor : largest_factor;
+
+        const uint16_t raw_delta = m_bus.read_super_cz_attribute(bank);
+        const int delta = (raw_delta & 0x8000u) != 0 ?
+            static_cast<int16_t>(raw_delta) : raw_delta & 0xff;
+        polygon.fog_r = m_bus.read_mixer_byte(0x05);
+        polygon.fog_g = m_bus.read_mixer_byte(0x06);
+        polygon.fog_b = m_bus.read_mixer_byte(0x07);
+        polygon.fog_factor = static_cast<uint8_t>(
+            std::clamp(factor + delta, 0, 0xff));
+        return;
+    }
     const std::size_t fog_color = type & m_bus.read_mixer_byte(0x84 + type);
     polygon.fog_r = m_bus.read_mixer_byte(0x100 + fog_color);
     polygon.fog_g = m_bus.read_mixer_byte(0x180 + fog_color);
@@ -609,7 +675,9 @@ bool system22_dsp_system::render_quad_packets(uint32_t address, uint32_t length,
 
 void system22_dsp_system::render_poly_object(uint16_t code, float matrix[4][4]) {
     const bool point_ram = code == 5;
-    uint32_t list_address = point_ram ? 0xf00000 :
+    const uint32_t point_ram_base =
+        m_bus.is_super_system22() ? 0xf80000u : 0xf00000u;
+    uint32_t list_address = point_ram ? point_ram_base :
         (static_cast<uint32_t>(point_read(code)) & 0x00ffffff);
     m_lit_surface_count = 0;
     m_lit_surface_index = 0;
@@ -637,7 +705,10 @@ void system22_dsp_system::render_poly_object(uint16_t code, float matrix[4][4]) 
 }
 
 void system22_dsp_system::simulate_slave_dsp() {
-    uint32_t cursor = 0x2ff;
+    // The original board begins one word before the conventional 0x300
+    // display-list base. Super System 22 instead prefixes the list with four
+    // 32-bit control words (commonly FFFE/0400), so its first record is 0x304.
+    uint32_t cursor = m_bus.is_super_system22() ? 0x304u : 0x2ffu;
     for (std::size_t records = 0; records < 0x1000; ++records) {
         const uint16_t code = static_cast<uint16_t>(m_bus.read_polygon_word(cursor++));
         const uint16_t length = static_cast<uint16_t>(m_bus.read_polygon_word(cursor++));

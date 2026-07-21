@@ -72,6 +72,7 @@ struct draw_vertex {
     float clip_right;
     float clip_top;
     float clip_bottom;
+    float sprite;
 };
 
 struct model2_draw_vertex {
@@ -361,6 +362,7 @@ layout(location = 9) in float in_fog;
 layout(location = 10) in vec3 in_fog_color;
 layout(location = 11) in vec2 in_viewport;
 layout(location = 12) in vec4 in_clip_rect;
+layout(location = 13) in float in_sprite;
 
 uniform mat4 view_matrix;
 noperspective out float u_over_z;
@@ -373,10 +375,17 @@ flat out uint color_mode;
 flat out uint texture_bank;
 flat out vec3 polygon_fog_color;
 flat out vec4 polygon_clip_rect;
+flat out uint sprite_mode;
 
 void main() {
     vec4 position = view_matrix * vec4(in_position, 1.0);
-    if (in_direct > 0.5) {
+    if (in_sprite > 0.5) {
+        // Sprite coordinates are absolute native-screen pixels with a
+        // top-left origin, unlike direct polygon coordinates which are
+        // centred around the System 22 viewport.
+        gl_Position = vec4(position.x / 320.0 - 1.0,
+                           1.0 - position.y / 240.0, 0.0, 1.0);
+    } else if (in_direct > 0.5) {
         gl_Position = vec4(position.x / 320.0, position.y / 240.0,
                            clamp(1.0 / max(position.z, 1.0), 0.0, 1.0),
                            1.0);
@@ -399,6 +408,7 @@ void main() {
     texture_bank = uint(in_texture_bank);
     polygon_fog_color = in_fog_color;
     polygon_clip_rect = in_clip_rect;
+    sprite_mode = uint(in_sprite);
 }
 )GLSL";
 
@@ -414,14 +424,28 @@ flat in uint color_mode;
 flat in uint texture_bank;
 flat in vec3 polygon_fog_color;
 flat in vec4 polygon_clip_rect;
+flat in uint sprite_mode;
 
 uniform usampler2DArray texture_tiles;
 uniform usampler2D texture_map;
 uniform usampler2D texture_attr;
 uniform usampler2DArray palette_data;
+uniform usampler2DArray sprite_tiles;
 uniform uint texture_address_base;
 uniform uint texture_tile_high_bit_from_attr;
+uniform bool super_system22;
+uniform uvec3 super_fade_color;
+uniform uint super_fade_factor;
+uniform uint super_mixer_flags;
 out vec4 output_color;
+
+vec3 apply_super_fade(vec3 rgb, uint target_flag) {
+    if (!super_system22 || super_fade_factor == 0u ||
+        (super_mixer_flags & target_flag) == 0u)
+        return rgb;
+    return mix(rgb, vec3(super_fade_color) / 255.0,
+               float(super_fade_factor) / 255.0);
+}
 
 void main() {
     int screen_x = int(gl_FragCoord.x);
@@ -433,6 +457,29 @@ void main() {
         discard;
 
     float q = max(one_over_z, 0.0000001);
+    if (sprite_mode != 0u) {
+        uint ix = uint(clamp(int(u_over_z / q), 0, 31));
+        uint iy = uint(clamp(int(v_over_z / q), 0, 31));
+        uint address = texture_bank * 1024u + iy * 32u + ix;
+        uint layer = address >> 20u;
+        uint layer_offset = address & 0xfffffu;
+        uint pen = texelFetch(sprite_tiles,
+            ivec3(int(layer_offset & 0x3ffu),
+                  int(layer_offset >> 10u), int(layer)), 0).r;
+        if (pen == 0xffu) discard;
+
+        uint palette_index = ((palette_select & 0x7fu) << 8u) + pen;
+        ivec2 palette_coord = ivec2(int(palette_index & 0xffu),
+                                    int((palette_index >> 8u) & 0x7fu));
+        vec3 rgb = vec3(
+            texelFetch(palette_data, ivec3(palette_coord, 0), 0).r,
+            texelFetch(palette_data, ivec3(palette_coord, 1), 0).r,
+            texelFetch(palette_data, ivec3(palette_coord, 2), 0).r) / 255.0;
+        rgb = mix(rgb, polygon_fog_color, clamp(fog_factor, 0.0, 1.0));
+        rgb = apply_super_fade(rgb, 0x02u);
+        output_color = vec4(rgb, (color_mode & 1u) != 0u ? 1.0 : 0.0);
+        return;
+    }
     uint tx = uint(int(u_over_z / q)) & 0xfffu;
     uint ty = (uint(int(v_over_z / q)) & 0xfffu) | (texture_bank << 12u);
     // System 22 tilemap addressing: the 12-bit Y coordinate occupies the
@@ -496,6 +543,7 @@ void main() {
     rgb = mix(rgb, polygon_fog_color, clamp(fog_factor, 0.0, 1.0));
     float shade = max(brightness_over_z / q, 0.0) / 64.0;
     rgb = clamp(rgb * shade, 0.0, 1.0);
+    rgb = apply_super_fade(rgb, 0x01u);
     // Non-Super System 22 keeps a one-bit per-pixel polygon-over-text flag.
     // Store the flag in the otherwise unused framebuffer alpha component;
     // the following text pass uses destination-alpha blending to honour it.
@@ -522,6 +570,10 @@ uniform usampler2D text_map;
 uniform usampler2DArray palette_data;
 uniform ivec2 text_scroll;
 uniform int text_palette_base;
+uniform bool super_system22;
+uniform uvec3 super_fade_color;
+uniform uint super_fade_factor;
+uniform uint super_mixer_flags;
 out vec4 output_color;
 
 void main() {
@@ -553,6 +605,10 @@ void main() {
         texelFetch(palette_data, ivec3(palette_coord, 0), 0).r,
         texelFetch(palette_data, ivec3(palette_coord, 1), 0).r,
         texelFetch(palette_data, ivec3(palette_coord, 2), 0).r) / 255.0;
+    if (super_system22 && super_fade_factor != 0u &&
+        (super_mixer_flags & 0x02u) != 0u)
+        rgb = mix(rgb, vec3(super_fade_color) / 255.0,
+                  float(super_fade_factor) / 255.0);
     output_color = vec4(rgb, 1.0);
 }
 )GLSL";
@@ -564,6 +620,7 @@ constexpr const char* post_fragment_shader_source = R"GLSL(
 uniform sampler2D scene_color;
 uniform usampler2DArray gamma_data;
 uniform uvec3 screen_fade;
+uniform bool super_system22;
 uniform bool apply_board_color;
 uniform bool flip_y;
 uniform ivec2 output_size;
@@ -592,9 +649,11 @@ void main() {
         return;
     }
 
-    pixel = uvec3(apply_fade(pixel.r, screen_fade.r),
-                  apply_fade(pixel.g, screen_fade.g),
-                  apply_fade(pixel.b, screen_fade.b));
+    if (!super_system22) {
+        pixel = uvec3(apply_fade(pixel.r, screen_fade.r),
+                      apply_fade(pixel.g, screen_fade.g),
+                      apply_fade(pixel.b, screen_fade.b));
+    }
 
     uvec3 corrected = uvec3(
         texelFetch(gamma_data, ivec3(int(pixel.r), 0, 0), 0).r,
@@ -723,7 +782,8 @@ void append_quad(std::vector<draw_vertex>& vertices, const polygon_object& polyg
             q,
             static_cast<float>(polygon.color & 0x7f),
             static_cast<float>(polygon.cmode & 0x0f),
-            static_cast<float>(polygon.texturebank & 0x0f),
+            static_cast<float>(polygon.sprite ? polygon.sprite_tile :
+                                               (polygon.texturebank & 0x0f)),
             polygon.direct ? 1.0f : 0.0f,
             normalized_byte(polygon.fog_factor),
             normalized_byte(polygon.fog_r),
@@ -735,6 +795,7 @@ void append_quad(std::vector<draw_vertex>& vertices, const polygon_object& polyg
             polygon.clip_right,
             polygon.clip_top,
             polygon.clip_bottom,
+            polygon.sprite ? 1.0f : 0.0f,
         };
     };
 
@@ -848,6 +909,15 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
+    // Super System 22 stores raw 32x32x8bpp sprite tiles. Sixteen 1 MiB
+    // layers retain the ROM byte addressing directly in the sprite shader.
+    glGenTextures(1, &m_sprite_texture);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, m_sprite_texture);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_R8UI, 1024, 1024, 16,
+                 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
     glGenTextures(1, &m_character_texture);
     glBindTexture(GL_TEXTURE_2D, m_character_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, 512, 256, 0,
@@ -868,6 +938,17 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
                  GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    // Super System 22 drives its display DAC directly and has no Ridge Racer
+    // gamma PROM set. Seed an identity table so those games render normally;
+    // base System 22 replaces it with the three validated PROMs at load time.
+    std::array<uint8_t, 256 * 3> identity_gamma{};
+    for (std::size_t component = 0; component < 3; ++component)
+        for (std::size_t value = 0; value < 256; ++value)
+            identity_gamma[component * 256 + value] =
+                static_cast<uint8_t>(value);
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 256, 1, 3,
+                    GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                    identity_gamma.data());
 
     // Render the scene and the one-bit over-character priority into a known
     // RGBA8 target. A final fullscreen pass applies the board's fade and
@@ -997,12 +1078,18 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
 void polygon_renderer_gpu::shutdown() {
     if (!m_headless && m_ctx) {
         m_ctx->make_current();
+        SDL_SetCursor(SDL_GetDefaultCursor());
+        for (SDL_Cursor*& cursor : m_lightgun_cursors) {
+            if (cursor) SDL_FreeCursor(cursor);
+            cursor = nullptr;
+        }
         destroy_graphics_pipeline();
         destroy_model2_pipeline();
         destroy_text_pipeline();
         destroy_post_pipeline();
         destroy_settings_overlay();
         if (m_texture_buffer) glDeleteTextures(1, &m_texture_buffer);
+        if (m_sprite_texture) glDeleteTextures(1, &m_sprite_texture);
         if (m_tilemap_texture) glDeleteTextures(1, &m_tilemap_texture);
         if (m_tileattr_texture) glDeleteTextures(1, &m_tileattr_texture);
         if (m_palette_texture) glDeleteTextures(1, &m_palette_texture);
@@ -1043,6 +1130,7 @@ void polygon_renderer_gpu::shutdown() {
         SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
     }
     m_vertex_buffer = m_index_buffer = m_texture_buffer = 0;
+    m_sprite_texture = 0;
     m_tilemap_texture = m_tileattr_texture = m_palette_texture = 0;
     m_character_texture = m_textmap_texture = 0;
     m_gamma_texture = m_output_texture = m_external_frame_texture = 0;
@@ -1063,6 +1151,86 @@ void polygon_renderer_gpu::shutdown() {
     m_settings_vertex_array = m_settings_program = m_settings_texture = 0;
     m_fps_texture = 0;
     m_initialized = false;
+}
+
+void polygon_renderer_gpu::update_lightgun_cursor() {
+    if (m_headless || !m_ctx) return;
+    SDL_Cursor* desired =
+        m_lightgun_cursor_enabled && !m_settings_visible ?
+            m_lightgun_cursors[m_lightgun_cursor_player] :
+            SDL_GetDefaultCursor();
+    if (desired) SDL_SetCursor(desired);
+    SDL_ShowCursor(SDL_ENABLE);
+}
+
+void polygon_renderer_gpu::set_lightgun_cursor(bool enabled, uint8_t player) {
+    if (m_headless || !m_ctx) return;
+    player = std::min<uint8_t>(player, 1);
+    if (enabled && !m_lightgun_cursors[player]) {
+        constexpr int size = 44;
+        constexpr int centre = size / 2;
+        SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(
+            0, size, size, 32, SDL_PIXELFORMAT_RGBA32);
+        if (surface) {
+            const uint32_t transparent = SDL_MapRGBA(
+                surface->format, 0, 0, 0, 0);
+            const uint32_t outline = SDL_MapRGBA(
+                surface->format, 0, 0, 0, 255);
+            constexpr std::array<std::array<uint8_t, 3>, 2> player_colours{{
+                {{32, 224, 255}},
+                {{255, 48, 112}},
+            }};
+            const auto& colour = player_colours[player];
+            const uint32_t sight = SDL_MapRGBA(
+                surface->format, colour[0], colour[1], colour[2], 255);
+            SDL_FillRect(surface, nullptr, transparent);
+
+            // WhittyArcade's light-gun sight is generated here rather than
+            // borrowed from a game or another emulator. Dark edging keeps
+            // both vivid player colours readable against bright muzzle
+            // flashes and dark scenery.
+            if (SDL_LockSurface(surface) == 0) {
+                auto* pixels = static_cast<uint32_t*>(surface->pixels);
+                const int stride = surface->pitch /
+                                   static_cast<int>(sizeof(uint32_t));
+                for (int y = 0; y < size; ++y) {
+                    for (int x = 0; x < size; ++x) {
+                        const int dx = x - centre;
+                        const int dy = y - centre;
+                        const int radius_squared = dx * dx + dy * dy;
+                        if (radius_squared >= 108 && radius_squared <= 240)
+                            pixels[y * stride + x] = outline;
+                        if (radius_squared >= 139 && radius_squared <= 210)
+                            pixels[y * stride + x] = sight;
+                    }
+                }
+                SDL_UnlockSurface(surface);
+            }
+            const std::array<SDL_Rect, 4> outline_segments{{
+                {1, centre - 3, 8, 7}, {36, centre - 3, 7, 7},
+                {centre - 3, 1, 7, 8}, {centre - 3, 36, 7, 7},
+            }};
+            const std::array<SDL_Rect, 4> sight_segments{{
+                {2, centre - 1, 7, 3}, {36, centre - 1, 6, 3},
+                {centre - 1, 2, 3, 7}, {centre - 1, 36, 3, 6},
+            }};
+            for (const SDL_Rect& rectangle : outline_segments)
+                SDL_FillRect(surface, &rectangle, outline);
+            for (const SDL_Rect& rectangle : sight_segments)
+                SDL_FillRect(surface, &rectangle, sight);
+            SDL_Rect centre_outline{centre - 2, centre - 2, 5, 5};
+            SDL_Rect centre_point{centre - 1, centre - 1, 3, 3};
+            SDL_FillRect(surface, &centre_outline, outline);
+            SDL_FillRect(surface, &centre_point, sight);
+            m_lightgun_cursors[player] = SDL_CreateColorCursor(
+                surface, centre, centre);
+            SDL_FreeSurface(surface);
+        }
+    }
+    if (enabled) m_lightgun_cursor_player = player;
+    m_lightgun_cursor_enabled =
+        enabled && m_lightgun_cursors[m_lightgun_cursor_player];
+    update_lightgun_cursor();
 }
 
 arcade_host_action polygon_renderer_gpu::process_events() {
@@ -1225,6 +1393,7 @@ arcade_host_action polygon_renderer_gpu::process_events() {
             m_settings_texture_dirty = true;
         }
     }
+    update_lightgun_cursor();
     return arcade_host_action::continue_running;
 }
 
@@ -1545,6 +1714,26 @@ void polygon_renderer_gpu::submit_textures(const uint8_t* texture_rom,
                     GL_RED_INTEGER, GL_UNSIGNED_BYTE, tilemap_rom + 0x200000);
 }
 
+void polygon_renderer_gpu::submit_sprites(const uint8_t* sprite_rom,
+                                           size_t sprite_size) {
+    if (m_headless || !m_initialized || !sprite_rom) return;
+    constexpr std::size_t layer_size = 0x100000;
+    if (sprite_size != layer_size * 16) {
+        std::fprintf(stderr,
+                     "Sprite region must use the 16 MiB Super System 22 layout\n");
+        return;
+    }
+    m_ctx->make_current();
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, m_sprite_texture);
+    for (std::size_t layer = 0; layer < 16; ++layer) {
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0,
+                        static_cast<GLint>(layer), 1024, 1024, 1,
+                        GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                        sprite_rom + layer * layer_size);
+    }
+}
+
 void polygon_renderer_gpu::submit_palette(const uint8_t* palette_ram, size_t size) {
     if (m_headless || !m_initialized || !palette_ram || size < 0x18000) return;
     m_ctx->make_current();
@@ -1577,12 +1766,14 @@ void polygon_renderer_gpu::submit_text_layer(const uint8_t* character_ram,
                                               size_t text_size,
                                               const uint8_t* text_attributes,
                                               const uint8_t* mixer,
-                                              size_t mixer_size) {
+                                              size_t mixer_size,
+                                              bool super_system22) {
     if (m_headless || !m_initialized || !character_ram || !text_ram ||
         !text_attributes || !mixer)
         return;
     m_ctx->make_current();
-    if (character_size < 0x20000 || text_size < 0x2000 || mixer_size < 8)
+    if (character_size < 0x20000 || text_size < 0x2000 || mixer_size < 8 ||
+        (super_system22 && mixer_size < 0x20))
         return;
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -1606,8 +1797,26 @@ void polygon_renderer_gpu::submit_text_layer(const uint8_t* character_ram,
                           text_attributes[3]) & 0x3ff;
     m_text_scroll_x = scroll_x;
     m_text_scroll_y = scroll_y;
-    m_text_palette_base = (static_cast<int>(mixer[7]) << 8) & 0x7f00;
-    if (mixer_size >= 0x17) {
+    m_super_system22_video = super_system22;
+    if (super_system22) {
+        m_text_palette_base =
+            (static_cast<int>(mixer[0x1b]) << 8) & 0x7f00;
+        m_super_screen_fade_r = mixer[0x16];
+        m_super_screen_fade_g = mixer[0x17];
+        m_super_screen_fade_b = mixer[0x18];
+        m_super_screen_fade_factor = mixer[0x19];
+        m_super_mixer_flags = mixer[0x1a];
+        // The older board uses per-channel 8.8 multipliers. Keep that path
+        // neutral while Super System 22's colour/factor blend is applied in
+        // the individual polygon, sprite, text and background paths.
+        m_screen_fade_r = m_screen_fade_g = m_screen_fade_b = 0x100;
+        m_screen_fade_initialized = false;
+    } else {
+        m_text_palette_base = (static_cast<int>(mixer[7]) << 8) & 0x7f00;
+        m_super_screen_fade_factor = 0;
+        m_super_mixer_flags = 0;
+    }
+    if (!super_system22 && mixer_size >= 0x17) {
         const uint32_t fade_r = (static_cast<uint32_t>(mixer[0x11]) << 8) |
                                 mixer[0x12];
         const uint32_t fade_g = (static_cast<uint32_t>(mixer[0x13]) << 8) |
@@ -1699,11 +1908,27 @@ void polygon_renderer_gpu::render_scene(const view_matrix& view, const rgba_colo
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D_ARRAY, m_palette_texture);
         glUniform1i(glGetUniformLocation(m_graphics_program, "palette_data"), 3);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, m_sprite_texture);
+        glUniform1i(glGetUniformLocation(m_graphics_program, "sprite_tiles"), 4);
         glUniform1ui(glGetUniformLocation(m_graphics_program, "texture_address_base"),
                      m_texture_address_base);
         glUniform1ui(glGetUniformLocation(m_graphics_program,
                                            "texture_tile_high_bit_from_attr"),
                      m_texture_tile_high_bit_from_attr ? 1u : 0u);
+        glUniform1i(glGetUniformLocation(m_graphics_program,
+                                         "super_system22"),
+                    m_super_system22_video ? 1 : 0);
+        glUniform3ui(glGetUniformLocation(m_graphics_program,
+                                          "super_fade_color"),
+                     m_super_screen_fade_r, m_super_screen_fade_g,
+                     m_super_screen_fade_b);
+        glUniform1ui(glGetUniformLocation(m_graphics_program,
+                                          "super_fade_factor"),
+                     m_super_screen_fade_factor);
+        glUniform1ui(glGetUniformLocation(m_graphics_program,
+                                          "super_mixer_flags"),
+                     m_super_mixer_flags);
         glBindVertexArray(m_vertex_array);
         glBindBuffer(GL_ARRAY_BUFFER, m_vertex_buffer);
         const auto vertex_bytes =
@@ -1715,25 +1940,36 @@ void polygon_renderer_gpu::render_scene(const view_matrix& view, const rgba_colo
     // Transparent text pixels are discarded by the shader. For every other
     // pixel, destination alpha 0 replaces the scene with text and alpha 1
     // preserves a polygon carrying the hardware's over-character flag.
-    glEnable(GL_BLEND);
-    glBlendEquation(GL_FUNC_ADD);
-    glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_DST_ALPHA);
-    glUseProgram(m_text_program);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_character_texture);
-    glUniform1i(glGetUniformLocation(m_text_program, "character_data"), 0);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, m_textmap_texture);
-    glUniform1i(glGetUniformLocation(m_text_program, "text_map"), 1);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, m_palette_texture);
-    glUniform1i(glGetUniformLocation(m_text_program, "palette_data"), 2);
-    glUniform2i(glGetUniformLocation(m_text_program, "text_scroll"),
-                m_text_scroll_x, m_text_scroll_y);
-    glUniform1i(glGetUniformLocation(m_text_program, "text_palette_base"),
-                m_text_palette_base);
-    glBindVertexArray(m_text_vertex_array);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    if ((m_system22_layer_mask & 0x04) != 0) {
+        glEnable(GL_BLEND);
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_DST_ALPHA);
+        glUseProgram(m_text_program);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_character_texture);
+        glUniform1i(glGetUniformLocation(m_text_program, "character_data"), 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, m_textmap_texture);
+        glUniform1i(glGetUniformLocation(m_text_program, "text_map"), 1);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, m_palette_texture);
+        glUniform1i(glGetUniformLocation(m_text_program, "palette_data"), 2);
+        glUniform2i(glGetUniformLocation(m_text_program, "text_scroll"),
+                    m_text_scroll_x, m_text_scroll_y);
+        glUniform1i(glGetUniformLocation(m_text_program, "text_palette_base"),
+                    m_text_palette_base);
+        glUniform1i(glGetUniformLocation(m_text_program, "super_system22"),
+                    m_super_system22_video ? 1 : 0);
+        glUniform3ui(glGetUniformLocation(m_text_program, "super_fade_color"),
+                     m_super_screen_fade_r, m_super_screen_fade_g,
+                     m_super_screen_fade_b);
+        glUniform1ui(glGetUniformLocation(m_text_program, "super_fade_factor"),
+                     m_super_screen_fade_factor);
+        glUniform1ui(glGetUniformLocation(m_text_program, "super_mixer_flags"),
+                     m_super_mixer_flags);
+        glBindVertexArray(m_text_vertex_array);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
 
     present_texture(m_output_texture, SYSTEM22_SCREEN_WIDTH,
                     SYSTEM22_SCREEN_HEIGHT, true, false);
@@ -1837,6 +2073,8 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     glUniform1i(glGetUniformLocation(m_post_program, "gamma_data"), 1);
     glUniform3ui(glGetUniformLocation(m_post_program, "screen_fade"),
                  m_screen_fade_r, m_screen_fade_g, m_screen_fade_b);
+    glUniform1i(glGetUniformLocation(m_post_program, "super_system22"),
+                m_super_system22_video ? 1 : 0);
     glUniform1i(glGetUniformLocation(m_post_program, "apply_board_color"),
                 apply_board_color ? 1 : 0);
     glUniform1i(glGetUniformLocation(m_post_program, "flip_y"), flip_y ? 1 : 0);
@@ -2211,6 +2449,9 @@ bool polygon_renderer_gpu::create_graphics_pipeline() {
     glEnableVertexAttribArray(12);
     glVertexAttribPointer(12, 4, GL_FLOAT, GL_FALSE, sizeof(draw_vertex),
                           reinterpret_cast<void*>(offsetof(draw_vertex, clip_left)));
+    glEnableVertexAttribArray(13);
+    glVertexAttribPointer(13, 1, GL_FLOAT, GL_FALSE, sizeof(draw_vertex),
+                          reinterpret_cast<void*>(offsetof(draw_vertex, sprite)));
     return glGetError() == GL_NO_ERROR;
 }
 

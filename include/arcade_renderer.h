@@ -5,6 +5,7 @@
 #include "system22_types.h"
 #include "arcade_settings.h"
 #include "model2_gpu_frame.h"
+#include <array>
 #include <memory>
 #include <atomic>
 #include <mutex>
@@ -16,6 +17,7 @@
 // Forward declarations
 struct opengl_context;
 struct TTF_Font;
+struct SDL_Cursor;
 class alternate_presenter;
 
 // GPU polygon renderer - processes polygons on GPU instead of CPU
@@ -30,6 +32,7 @@ private:
     uint32_t m_vertex_buffer{0};    // VBO for vertices
     uint32_t m_index_buffer{0};    // IBO for indices
     uint32_t m_texture_buffer{0};  // Texture data
+    uint32_t m_sprite_texture{0};
     uint32_t m_tilemap_texture{0};
     uint32_t m_tileattr_texture{0};
     uint32_t m_palette_texture{0};
@@ -90,6 +93,16 @@ private:
     uint32_t m_screen_fade_g{0x100};
     uint32_t m_screen_fade_b{0x100};
     bool m_screen_fade_initialized{false};
+    bool m_super_system22_video{false};
+    uint8_t m_super_screen_fade_r{0};
+    uint8_t m_super_screen_fade_g{0};
+    uint8_t m_super_screen_fade_b{0};
+    uint8_t m_super_screen_fade_factor{0};
+    uint8_t m_super_mixer_flags{0};
+    uint8_t m_system22_layer_mask{0x07};
+    std::array<SDL_Cursor*, 2> m_lightgun_cursors{};
+    uint8_t m_lightgun_cursor_player{0};
+    bool m_lightgun_cursor_enabled{false};
 
     // Producer/consumer boundary: CPU/DSP threads only copy neutral polygon
     // records here. All OpenGL calls stay on the render/context thread.
@@ -138,6 +151,7 @@ private:
     void update_fps_texture(double fps);
     void draw_settings_overlay();
     void draw_fps_overlay();
+    void update_lightgun_cursor();
     void present_texture(uint32_t texture, int source_width,
                          int source_height, bool apply_board_color,
                          bool flip_y);
@@ -162,6 +176,13 @@ public:
     bool take_controls_request();
     bool take_settings_change(emulator_settings& settings);
     void set_f2_opens_dip(bool enabled) { m_f2_opens_dip = enabled; }
+    void set_lightgun_cursor(bool enabled, uint8_t player = 0);
+    bool lightgun_cursor_enabled() const {
+        return m_lightgun_cursor_enabled;
+    }
+    uint8_t lightgun_cursor_player() const {
+        return m_lightgun_cursor_player;
+    }
     bool settings_visible() const { return m_settings_visible; }
     bool paused() const { return m_paused; }
     void refresh_output();
@@ -187,12 +208,17 @@ public:
                          size_t region_offset = 0x800000,
                          size_t bank_count = 4,
                          bool tile_high_bit_from_attr = true);
+    void submit_sprites(const uint8_t* sprite_rom, size_t sprite_size);
+    void set_system22_layer_mask(uint8_t mask) {
+        m_system22_layer_mask = mask;
+    }
     void submit_gamma(const uint8_t* gamma_proms, size_t size);
     void submit_palette(const uint8_t* palette_ram, size_t size);
     void submit_text_layer(const uint8_t* character_ram, size_t character_size,
                            const uint8_t* text_ram, size_t text_size,
                            const uint8_t* text_attributes,
-                           const uint8_t* mixer, size_t mixer_size);
+                           const uint8_t* mixer, size_t mixer_size,
+                           bool super_system22);
 };
 
 // OpenGL context wrapper

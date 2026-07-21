@@ -33,6 +33,20 @@ int main() {
             SDL_SCANCODE_V)
         return 3;
 
+    input_mapping_config time_crisis_config = config;
+    if (keyboard_bindings_for(time_crisis_config, "timecris")
+            [input_action_index(input_action::p1_action2)].code !=
+        SDL_SCANCODE_SPACE)
+        return 31;
+    game_input_mapping& time_crisis =
+        ensure_game_mapping(time_crisis_config, "timecris");
+    time_crisis.keyboard[input_action_index(input_action::p1_action2)] = {
+        input_binding_type::keyboard, SDL_SCANCODE_R, 0};
+    if (keyboard_bindings_for(time_crisis_config, "timecris")
+            [input_action_index(input_action::p1_action2)] !=
+        time_crisis.keyboard[input_action_index(input_action::p1_action2)])
+        return 32;
+
     controller_input_mapping& controller =
         ensure_controller_mapping(config, "00112233445566778899aabbccddeeff");
     controller.bindings[input_action_index(input_action::coin1)] = {

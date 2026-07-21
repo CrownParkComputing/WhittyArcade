@@ -52,6 +52,25 @@ WhittyArcade does not provide them or link to downloads.
 Open **Controllers / Keyboard** in the launcher to inspect or change every
 binding. Profiles can be set globally, per arcade board, or per game.
 
+## Time Crisis mouse gun
+
+Use the World TS2 Ver.B `timecris` set with `namcoc71.zip` in the same ROM
+folder. `namcoc74.zip` is not required for this game. No ROM or firmware is
+included in this archive.
+
+- Move the mouse to aim. Gameplay uses a cyan P1 target sight instead of the
+  desktop pointer; two-player gun profiles have a separate red/magenta P2
+  sight.
+- Left click: fire
+- Hold `Space`: press the pedal and stand/attack
+- Release `Space`: hide and reload
+- Right click: force cover/reload
+- `5`: insert coin
+
+The player is hidden by default, matching the cabinet pedal. Alternative gun,
+pedal and trigger controls can be assigned in the game-specific controller
+profile.
+
 ## Licence
 
 Official, unmodified WhittyArcade binaries are licensed for personal,

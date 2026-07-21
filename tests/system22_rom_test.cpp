@@ -24,9 +24,20 @@ int main(int argc, char** argv) {
     assert(!roms.tilemap_rom.empty());
     assert(!roms.point_rom.empty());
     assert(!roms.c352_samples.empty());
-    assert(!roms.gamma_proms.empty());
     assert(roms.has_c71_firmware());
-    assert(roms.has_c74_firmware());
+    assert(roms.has_mcu_firmware());
+    if (set == ridge_racer_rom_set::time_crisis) {
+        assert(roms.super_system22);
+        assert(roms.maincpu_rom.size() == 0x400000);
+        assert(roms.sprite_rom.size() == 0x1000000);
+        assert(roms.gamma_proms.empty());
+        assert(!roms.has_c74_firmware());
+    } else {
+        assert(!roms.super_system22);
+        assert(roms.sprite_rom.empty());
+        assert(!roms.gamma_proms.empty());
+        assert(roms.has_c74_firmware());
+    }
 
     std::printf("Loaded %s: program=%zu texture=%zu point=%zu samples=%zu\n",
                 rom_loader::set_display_name(set), roms.maincpu_rom.size(),

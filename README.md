@@ -11,7 +11,8 @@ storage and host output are standalone.
 Implemented and tested:
 
 - Motorola MC68020 execution through the standalone Musashi 4.60 core
-- Big-endian non-Super System 22 main memory map foundation
+- Big-endian System 22 and Super System 22 main memory maps, including the
+  later board's system controller, mixer, sprite/VICS, gun and point-RAM areas
 - System 22 interrupt controller and game-programmable vblank IRQ delivery
 - Directory and ZIP ROM loading with MAME sizes and CRC-32 validation
 - Per-game program interleave, ROM-region placement and CRC validation
@@ -19,8 +20,8 @@ Implemented and tested:
 - C71 and C74 internal firmware loading from `namcoc71.zip`/`namcoc74.zip`
 - Two real TMS320C25-derived C71 cores with master/slave program, data, I/O,
   point-ROM and banked polygon-RAM maps
-- Real M37702 C74 execution with internal peripherals, Timer A0, shared RAM,
-  external sequence/code ROM and the System 22 sound-role port selection
+- Real M37702 C74 and M37710 execution with internal peripherals, Timer A0,
+  shared RAM, external sequence/code ROM and board-specific port selection
 - 32-voice C352 mixing: PCM, mu-law, noise, interpolation, volume ramps,
   forward/reverse looping, phase flags and key events
 - Real C74-to-C352 register traffic over a bounded SPSC queue, with C352
@@ -36,9 +37,13 @@ Implemented and tested:
 - GPU text layer from live 16x16x4bpp character RAM and 64x64 tile RAM, with
   scrolling, flip attributes, palette banking, transparent pen and per-pixel
   polygon-over-character priority
+- Super System 22 C374/VICS sprite-list decoding and 32x32x8bpp object tiles,
+  with mixer-controlled polygon, sprite, text and background composition
 - RGBA8 scene composition with the non-Super System 22 global 8.8 fade and
   final red/green/blue gamma-PROM lookup
 - Non-Super System 22 direct-polygon CZ table selection and per-type fog color
+- Time Crisis gun coordinates, cabinet trigger/pedal, mouse aiming, custom
+  player-coloured crosshairs and its Super System 22 fade/gamma/CZ path
 - Hot-pluggable SDL/Xbox and keyboard controls for driving, twin-stick and 2D
   cabinets, with per-device launcher mapping, calibrated axes and debounced
   coin/start lines
@@ -56,17 +61,17 @@ Implemented and tested:
 - Shared scaling, filtering, settings, overlays and ROM menus across OpenGL,
   Vulkan-transfer and SDL software presentation
 
-The supported sets boot the MC68020, both C71s and C74 together and reach their
-attract/gameplay rendering. The master C71 emits direct commands plus complete
-PDP point-ROM scenes every frame, while the C74 runs the game sound program and
-programs C352. The polygon, text, priority and final-mix shader pipelines have
-been exercised on a real OpenGL 4.3 driver.
+The base System 22 sets boot the MC68020, both C71s and C74 together and reach
+their attract/gameplay rendering. Time Crisis boots its Super System 22
+MC68020, C71 pair and M37710, then reaches attract and live gun gameplay with
+3D, sprites, text and C352 audio. The polygon, sprite, text, priority and
+final-mix shader pipelines have been exercised on a real OpenGL 4.3 driver.
 
 Not implemented yet:
 
 - Remaining slave-C71 render-device packet variants beyond Ridge Racer's
   validated PDP stream
-- Remaining CZ/fog edge cases and sprite support for later System 22 titles
+- Remaining CZ/fog edge cases and Super System 22 sprite alpha/blend details
 - Full external I/O-C74 serial protocol and force-feedback/output devices
 - Full KEYCUS behaviour, EEPROM timing, and the remaining non-vblank IRQs
 - Model 1 force feedback, network board and cycle-level I/O-board Z80
@@ -81,8 +86,9 @@ launching it rather than opening a black screen.
 
 ## Thread ownership
 
-- The System 22 scheduler advances the MC68020, both C71 DSPs and C74 in 64
-  bounded deterministic cycle slices per video frame. Model 1 likewise keeps
+- The System 22 scheduler advances the MC68020, both C71 DSPs and sound MCU in
+  bounded deterministic cycle slices per video frame (64 on the base board;
+  adaptive 512/256 during Super System 22 startup/runtime). Model 1 likewise keeps
   its V60 and 40 MHz MB86233/TGP in 512 deterministic slices so FIFO/shared-RAM
   barriers cannot race on the host.
 - CPU/DSP code submits renderer-neutral polygon records without making OpenGL
@@ -135,6 +141,7 @@ firmware archives or loose firmware files.
 
 ```bash
 ./build/WhittyArcade /path/to/ridgerac.zip /path/to/bios
+./build/WhittyArcade /path/to/timecris.zip /path/to/bios
 ./build/WhittyArcade /path/to/vformula.zip
 ```
 
@@ -171,6 +178,7 @@ Required MAME short names for this build:
 | Board | Games | Additional archives |
 |---|---|---|
 | Namco System 22 | `ridgerac`, `ridgera2`, `raverace`, `acedrive`, `victlap`, `cybrcomm` | `namcoc71.zip`, `namcoc74.zip` |
+| Namco Super System 22 | `timecris` (World, TS2 Ver.B) | `namcoc71.zip`; the set carries its M37710 firmware data |
 | Sega Model 1 | `vformula`, `vf`, `swa`, `wingwar` | Split `vformula` also needs `vr.zip`; merged `vr.zip` works directly |
 | Sega Model 2 | `srallyc` | None (`segabill.zip` is optional) |
 | Phoenix hardware | `phoenix` | None |
@@ -192,6 +200,8 @@ Expected firmware:
 - `c74.bin`: 16384 bytes, CRC `a3dce360`
 
 The firmware may be loose or stored in `namcoc71.zip` and `namcoc74.zip`.
+Time Crisis needs `c71.bin` but uses the internal M37710 image contained in its
+own set, so it does not require `namcoc74.zip`.
 
 ## Controls
 
@@ -229,6 +239,21 @@ Default keyboard map:
   window size, VSync, integer scaling, filtering, and ROM selection
 - Ctrl+Plus/Ctrl+Minus: resize the window from 1x to 4x; Alt+Enter toggles
   borderless fullscreen
+
+Time Crisis light-gun defaults:
+
+- Move the mouse to aim; the normal pointer becomes WhittyArcade's cyan P1
+  target sight. A hot red/magenta P2 sight is available to two-player gun
+  profiles.
+- Left click fires.
+- The player begins hidden. Hold `Space` to press the cabinet pedal and stand;
+  release `Space` to take cover and reload.
+- Right click immediately forces cover/reload, even while the pedal action is
+  held.
+- `5` inserts a coin. Follow the cabinet prompts to begin play.
+- Controller and keyboard alternatives remain editable under the per-game
+  `timecris` profile. Moving a mapped aim axis switches from the mouse to that
+  device; moving the mouse switches back.
 
 Settings are saved to
 `~/.config/WhittyArcade/settings.ini` (or `$XDG_CONFIG_HOME`). Existing
@@ -289,6 +314,11 @@ cabinet pedal ranges calibrated automatically. Cyber Commando uses both
 controller sticks; on keyboard, WASD controls the left stick and the arrow keys
 control the right stick. Z/X operate gun trigger/missile and V changes view.
 
+Time Crisis uses the mouse as an absolute light gun inside the 4:3 game area.
+Its trigger and pedal still pass through the common action mapper, so another
+gun cabinet can choose different buttons without changing the System 22 input
+code.
+
 Ridge Racer's standard cabinet input map has no separate start switch. After
 inserting a coin, press the accelerator to start/select. Controllers can be
 connected while the emulator is running. Set `RRACER_CONTROLLER=N` to prefer a
@@ -310,7 +340,8 @@ switch word, three calibrated ADC values and credit counters once per second.
 - `src/main.cpp` — board-neutral launcher, restart loop and frame pacing
 - `src/system22_cpu.cpp` — MC68020 wrapper and System 22 main bus
 - `src/system22_dsp.cpp` — dual-C71 maps, point memory and render transport
-- `src/system22_mcu.cpp` — C74 map and C352 command producer
+- `src/system22_mcu.cpp` — C74/M37710 maps and C352 command producer
+- `src/system22_sprites.cpp` — Super System 22 C374/VICS sprite decoding
 - `src/system22_rom.cpp` — validated game/firmware loading
 - `src/system22_audio.cpp` — C352 and OpenAL thread
 - `src/model1_audio.cpp` — Model 1 68000/YM3438/dual-MultiPCM sound worker

@@ -9,8 +9,10 @@
 #include "system22_dsp.h"
 #include "system22_mcu.h"
 #include "system22_rom.h"
+#include "system22_sprites.h"
 #include "system22_types.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstdio>
@@ -70,6 +72,8 @@ private:
     double m_mcu_cycle_remainder{0.0};
     uint64_t m_frame_number{0};
     bool m_capture_done{false};
+    uint16_t m_last_led_data{0xffff};
+    std::size_t m_last_sprite_count{0};
     std::string m_nvram_short_name;
     ridge_racer_rom_set m_game_set{ridge_racer_rom_set::unknown};
 
@@ -129,12 +133,15 @@ bool system22_emulator::initialize(const std::string& rom_path,
     m_game_set = game_set;
     if (game_set != ridge_racer_rom_set::unknown)
         m_nvram_short_name = rom_loader::set_short_name(game_set);
+    m_bus->set_super_system22(game_set == ridge_racer_rom_set::time_crisis);
 
     // Initialize GPU renderer
     if (!m_gpu_renderer->initialize(settings)) {
         printf("Failed to initialize GPU renderer\n");
         return false;
     }
+    m_gpu_renderer->set_lightgun_cursor(
+        game_set == ridge_racer_rom_set::time_crisis);
 
     m_input = std::make_unique<arcade_input>();
     if (!m_input->initialize(m_nvram_short_name))
@@ -165,6 +172,9 @@ bool system22_emulator::initialize(const std::string& rom_path,
     case ridge_racer_rom_set::cyber_commando:
         m_bus->set_driving_profile(system22_driving_profile::cyber_commando);
         break;
+    case ridge_racer_rom_set::time_crisis:
+        m_bus->set_driving_profile(system22_driving_profile::time_crisis);
+        break;
     default:
         m_bus->set_driving_profile(system22_driving_profile::ridge_racer);
         break;
@@ -193,7 +203,9 @@ bool system22_emulator::initialize(const std::string& rom_path,
 
     if (m_roms->maincpu_rom.empty() ||
         !m_main_cpu->load_rom(m_roms->maincpu_rom.data(), m_roms->maincpu_rom.size())) {
-        std::fprintf(stderr, "A complete 2 MiB System 22 program ROM is required\n");
+        std::fprintf(stderr,
+                     "A complete %zu MiB System 22 program ROM is required\n",
+                     m_bus->program_rom_size() / (1024 * 1024));
         return false;
     }
     if (!m_roms->eeprom.empty())
@@ -214,7 +226,7 @@ bool system22_emulator::initialize(const std::string& rom_path,
     if (const char* range = std::getenv("RRACER_DISASSEMBLE")) {
         const auto addresses = parse_hex_range(range);
         if (addresses && addresses->first < addresses->second &&
-            addresses->second <= system22_bus::PROGRAM_ROM_SIZE) {
+            addresses->second <= m_bus->program_rom_size()) {
             const auto [start, end] = *addresses;
             for (uint32_t address = start; address < end;) {
                 std::size_t length = 0;
@@ -224,9 +236,9 @@ bool system22_emulator::initialize(const std::string& rom_path,
             }
         }
     }
-    std::printf("Device firmware: C71=%s C74=%s\n",
+    std::printf("Device firmware: C71=%s MCU=%s\n",
                 m_roms->has_c71_firmware() ? "ready" : "missing",
-                m_roms->has_c74_firmware() ? "ready" : "missing");
+                m_roms->has_mcu_firmware() ? "ready" : "missing");
 
     m_dsp = std::make_unique<system22_dsp_system>(*m_bus);
     if (!m_dsp->initialize(m_roms->c71_firmware.data(),
@@ -239,10 +251,15 @@ bool system22_emulator::initialize(const std::string& rom_path,
         [this](uint8_t value) { m_dsp->control(value); });
 
     m_mcu = std::make_unique<system22_c74_mcu>(*m_bus, *m_audio);
-    if (!m_mcu->initialize(m_roms->c74_firmware.data(),
-                           m_roms->c74_firmware.size(),
-                           m_roms->mcu_rom.data(), m_roms->mcu_rom.size())) {
-        std::fprintf(stderr, "A valid C74 firmware and 512 KiB MCU data ROM are required\n");
+    const bool mcu_ready = m_roms->super_system22 ?
+        m_mcu->initialize_super_system22(m_roms->mcu_rom.data(),
+                                          m_roms->mcu_rom.size()) :
+        m_mcu->initialize(m_roms->c74_firmware.data(),
+                          m_roms->c74_firmware.size(),
+                          m_roms->mcu_rom.data(), m_roms->mcu_rom.size());
+    if (!mcu_ready) {
+        std::fprintf(stderr,
+                     "Valid System 22 MCU firmware and a 512 KiB data ROM are required\n");
         return false;
     }
     m_bus->set_mcu_control_handler(
@@ -256,6 +273,9 @@ bool system22_emulator::initialize(const std::string& rom_path,
                                         m_roms->texture_region_offset,
                                         m_roms->texture_bank_count,
                                         m_roms->texture_tile_high_bit_from_attr);
+    if (!m_roms->sprite_rom.empty())
+        m_gpu_renderer->submit_sprites(m_roms->sprite_rom.data(),
+                                       m_roms->sprite_rom.size());
     if (!m_roms->gamma_proms.empty())
         m_gpu_renderer->submit_gamma(m_roms->gamma_proms.data(),
                                      m_roms->gamma_proms.size());
@@ -304,7 +324,12 @@ void system22_emulator::run_frame() {
     // handoff into the sound-C74 shared RAM.
     m_input->set_suppressed(m_gpu_renderer->settings_visible());
     m_input->update();
-    if (m_mcu->enabled()) m_bus->update_game_inputs(m_input->state());
+    if (m_roms->super_system22) {
+        m_bus->update_game_inputs(m_input->state());
+        m_mcu->update_inputs(m_input->state());
+    } else if (m_mcu->enabled()) {
+        m_bus->update_game_inputs(m_input->state());
+    }
 
     // Vblank is source 4 in the non-Super System 22 controller. The game
     // chooses its 68020 IRQ level and acknowledges it through syscon RAM.
@@ -313,15 +338,34 @@ void system22_emulator::run_frame() {
 
     // Deterministic short slices let the 68020 and C71 observe shared-memory
     // handshakes within the same video frame without racing host threads.
-    constexpr int scheduler_slices = 64;
+    int scheduler_slices = std::getenv("RRACER_LED_TRACE") ? 4096 :
+        (m_roms->super_system22 ?
+            (m_dsp->pdp_begin_count() == 0 ? 512 : 256) : 64);
+    if (const char* configured_slices =
+            std::getenv("RRACER_SCHEDULER_SLICES")) {
+        scheduler_slices = std::clamp(
+            static_cast<int>(std::strtol(configured_slices, nullptr, 0)),
+            64, 8192);
+    }
     int previous_cpu = 0;
     int previous_dsp = 0;
     int previous_mcu = 0;
     for (int slice = 1; slice <= scheduler_slices; ++slice) {
+        if (m_roms->super_system22 && slice == scheduler_slices / 2)
+            m_mcu->signal_irq2();
+        if (m_roms->super_system22 && slice == scheduler_slices)
+            m_mcu->signal_irq0();
         const int cpu_target = cpu_cycles * slice / scheduler_slices;
         const int dsp_target = dsp_clocks * slice / scheduler_slices;
         const int mcu_target = mcu_cycles * slice / scheduler_slices;
         m_main_cpu->execute(cpu_target - previous_cpu);
+        if (std::getenv("RRACER_LED_TRACE") &&
+            m_bus->cpu_led_data() != m_last_led_data) {
+            m_last_led_data = m_bus->cpu_led_data();
+            std::printf("CPU LEDs=%04x D3=%08x PC=%08x\n",
+                        m_last_led_data, m_main_cpu->data_register(3),
+                        m_main_cpu->program_counter());
+        }
         m_dsp->execute(dsp_target - previous_dsp);
         m_mcu->execute(mcu_target - previous_mcu);
         previous_cpu = cpu_target;
@@ -330,6 +374,36 @@ void system22_emulator::run_frame() {
     }
 
     std::vector<polygon_object> polygons = m_dsp->take_rendered_polygons();
+    m_last_sprite_count = 0;
+    if (m_roms->super_system22 &&
+        (m_bus->read_mixer_byte(0x1f) & 0x01) == 0)
+        polygons.clear();
+    if (m_roms->super_system22 &&
+        (m_bus->read_mixer_byte(0x1f) & 0x02) != 0) {
+        std::vector<polygon_object> sprites = system22_sprite_decoder::decode(
+            m_bus->sprite_ram_data(), m_bus->sprite_ram_size(),
+            m_bus->vics_data(), m_bus->vics_data_size(),
+            m_bus->vics_control_data(), m_bus->vics_control_size(),
+            m_roms->sprite_rom.size());
+        m_last_sprite_count = sprites.size();
+        if (std::getenv("RRACER_SPRITE_TRACE") &&
+            m_frame_number % 60 == 0 && !sprites.empty()) {
+            const polygon_object& sample = sprites.front();
+            std::printf(
+                "Sprite sample: count=%zu tile=%u color=%02x "
+                "xy=(%.1f,%.1f)-(%.1f,%.1f) uv=(%d,%d)-(%d,%d) "
+                "control=%08x/%08x/%08x/%08x\n",
+                sprites.size(), sample.sprite_tile, sample.color,
+                sample.vertices[0].x, sample.vertices[0].y,
+                sample.vertices[2].x, sample.vertices[2].y,
+                sample.vertices[0].u, sample.vertices[0].v,
+                sample.vertices[2].u, sample.vertices[2].v,
+                m_bus->read32(0x980000), m_bus->read32(0x980004),
+                m_bus->read32(0x980008), m_bus->read32(0x98000c));
+        }
+        sprites.insert(sprites.end(), polygons.begin(), polygons.end());
+        polygons = std::move(sprites);
+    }
     if (!polygons.empty())
         m_gpu_renderer->submit_polygons(polygons.data(),
                                         static_cast<int>(polygons.size()));
@@ -374,9 +448,16 @@ void system22_emulator::run_frame() {
 
     if (m_frame_number % 60 == 0 && session_trace_enabled()) {
         const uint32_t pc = m_main_cpu->program_counter();
+        const uint32_t a6 = m_main_cpu->address_register(6);
+        const std::size_t palette_nonzero = static_cast<std::size_t>(
+            std::count_if(m_bus->palette_ram_data(),
+                          m_bus->palette_ram_data() +
+                              m_bus->palette_ram_size(),
+                          [](uint8_t value) { return value != 0; }));
         printf("Frame: %llu PC=%08x %s C71=%04x/%04x C74=%06x "
                "C352=%llu/%llu audio=%d/%d dropped=%llu polys=%llu/%llu PDP=%llu/%llu "
-               "game_vblank=%u\n",
+               "sprites=%zu layer=%02x bg=%02x%02x%02x pal=%zu "
+               "A6=%08x wait=%04x\n",
                static_cast<unsigned long long>(m_frame_number), pc,
                m_main_cpu->disassemble(pc).c_str(),
                m_dsp->master_pc(), m_dsp->slave_pc(),
@@ -389,34 +470,90 @@ void system22_emulator::run_frame() {
                static_cast<unsigned long long>(m_dsp->display_polygon_count()),
                static_cast<unsigned long long>(m_dsp->pdp_begin_count()),
                static_cast<unsigned long long>(m_dsp->display_parse_errors()),
-               m_bus->read16(0x10007ff0));
+               m_last_sprite_count, m_bus->read_mixer_byte(0x1f),
+               m_bus->read_mixer_byte(0x08),
+               m_bus->read_mixer_byte(0x09),
+               m_bus->read_mixer_byte(0x0a), palette_nonzero,
+               a6, m_bus->read16(a6 - 0x7ffa));
     }
     if (m_frame_number % 60 == 0 && std::getenv("RRACER_INPUT_TRACE")) {
-        std::printf("Input shared: flags=%04x steer=%04x gas=%04x "
-                    "brake=%04x credits=%04x\n",
-                    m_bus->read16(0x60004030),
-                    m_bus->read16(0x60004032),
-                    m_bus->read16(0x60004034),
-                    m_bus->read16(0x60004036),
-                    m_bus->read16(0x6000403a));
+        if (m_roms->super_system22) {
+            std::printf("Time Crisis input: x=%u y=%u coin=%d trigger=%d pedal=%d\n",
+                        m_bus->gun_x(), m_bus->gun_y(),
+                        m_input->state().coin1,
+                        m_input->state().buttons[0],
+                        m_input->state().buttons[1]);
+        } else {
+            std::printf("Input shared: flags=%04x steer=%04x gas=%04x "
+                        "brake=%04x credits=%04x\n",
+                        m_bus->read16(0x60004030),
+                        m_bus->read16(0x60004032),
+                        m_bus->read16(0x60004034),
+                        m_bus->read16(0x60004036),
+                        m_bus->read16(0x6000403a));
+        }
     }
 }
 
 void system22_emulator::render_frame() {
+    if (m_roms->super_system22) {
+        std::array<uint8_t, 0x300> gamma{};
+        bool programmed = false;
+        for (std::size_t component = 0; component < 3; ++component) {
+            for (std::size_t value = 0; value < 0x100; ++value) {
+                const uint8_t entry = m_bus->read_mixer_byte(
+                    (component + 1) * 0x100 + value);
+                gamma[component * 0x100 + value] = entry;
+                programmed = programmed || entry != 0;
+            }
+        }
+        if (programmed)
+            m_gpu_renderer->submit_gamma(gamma.data(), gamma.size());
+        m_gpu_renderer->set_system22_layer_mask(
+            m_bus->read_mixer_byte(0x1f));
+    } else {
+        m_gpu_renderer->set_system22_layer_mask(0x07);
+    }
     m_gpu_renderer->submit_palette(m_bus->palette_ram_data(),
                                    m_bus->palette_ram_size());
     m_gpu_renderer->submit_text_layer(
         m_bus->character_ram_data(), m_bus->character_ram_size(),
         m_bus->text_ram_data(), m_bus->text_ram_size(),
-        m_bus->text_attr_data(), m_bus->mixer_data(), m_bus->mixer_size());
-    const uint32_t background_index =
-        ((static_cast<uint32_t>(m_bus->read_mixer_byte(0x04)) << 8) &
-         0x7f00) | 0xff;
-    const uint8_t* palette = m_bus->palette_ram_data();
-    const uint32_t background_rgba =
-        (static_cast<uint32_t>(palette[background_index]) << 24) |
-        (static_cast<uint32_t>(palette[0x8000 + background_index]) << 16) |
-        (static_cast<uint32_t>(palette[0x10000 + background_index]) << 8) | 0xff;
+        m_bus->text_attr_data(), m_bus->mixer_data(), m_bus->mixer_size(),
+        m_roms->super_system22);
+    uint32_t background_rgba = 0xff;
+    if (m_roms->super_system22) {
+        uint8_t red = m_bus->read_mixer_byte(0x08);
+        uint8_t green = m_bus->read_mixer_byte(0x09);
+        uint8_t blue = m_bus->read_mixer_byte(0x0a);
+        const uint8_t fade_factor = m_bus->read_mixer_byte(0x19);
+        if ((m_bus->read_mixer_byte(0x1a) & 0x01) != 0 &&
+            fade_factor != 0) {
+            const auto fade = [fade_factor](uint8_t source,
+                                             uint8_t target) {
+                const unsigned inverse = 0xffu - fade_factor;
+                return static_cast<uint8_t>(
+                    (static_cast<unsigned>(source) * inverse +
+                     static_cast<unsigned>(target) * fade_factor) / 0xffu);
+            };
+            red = fade(red, m_bus->read_mixer_byte(0x16));
+            green = fade(green, m_bus->read_mixer_byte(0x17));
+            blue = fade(blue, m_bus->read_mixer_byte(0x18));
+        }
+        background_rgba = (static_cast<uint32_t>(red) << 24) |
+                          (static_cast<uint32_t>(green) << 16) |
+                          (static_cast<uint32_t>(blue) << 8) | 0xff;
+    } else {
+        const uint32_t background_index =
+            ((static_cast<uint32_t>(m_bus->read_mixer_byte(0x04)) << 8) &
+             0x7f00) | 0xff;
+        const uint8_t* palette = m_bus->palette_ram_data();
+        background_rgba =
+            (static_cast<uint32_t>(palette[background_index]) << 24) |
+            (static_cast<uint32_t>(palette[0x8000 + background_index]) << 16) |
+            (static_cast<uint32_t>(palette[0x10000 + background_index]) << 8) |
+            0xff;
+    }
     m_gpu_renderer->render_scene(m_viewmatrix, rgba_color(background_rgba));
 }
 

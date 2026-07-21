@@ -60,6 +60,9 @@ std::string normalized_path(const fs::path& path) {
 }
 
 const char* dip_switch_name(ridge_racer_rom_set set, int bank, int position) {
+    if (set == ridge_racer_rom_set::time_crisis)
+        return bank == 0 && position == 7 ? "Test Mode" :
+            "Reserved / undocumented - leave OFF";
     const bool ace_family = set == ridge_racer_rom_set::ace_driver ||
                             set == ridge_racer_rom_set::victory_lap;
     if (!ace_family && set != ridge_racer_rom_set::cyber_commando &&
@@ -83,7 +86,10 @@ std::string dip_bank_summary(uint16_t switches, ridge_racer_rom_set set,
     std::string result;
     const bool ace_family = set == ridge_racer_rom_set::ace_driver ||
                             set == ridge_racer_rom_set::victory_lap;
-    if (bank == 0)
+    if (set == ridge_racer_rom_set::time_crisis)
+        result = bank == 0 ? "SW4 - test mode and reserved switches" :
+                             "Unused switch bank";
+    else if (bank == 0)
         result = set == ridge_racer_rom_set::ridge_racer_2 ?
             "SW2 - test, graphics, link and time debug" :
             (ace_family ? "SW2 - reserved switches" :
@@ -111,7 +117,13 @@ std::string dip_help_text(ridge_racer_rom_set set) {
     std::string text =
         "Factory setting: ALL OFF. Coinage, difficulty, laps and sound are "
         "configured in the game's service menu, not with these switches.\n\n";
-    if (set == ridge_racer_rom_set::ridge_racer_2) {
+    if (set == ridge_racer_rom_set::time_crisis) {
+        text +=
+            "Known Time Crisis switch:\n"
+            "SW4:8  Test mode\n\n"
+            "SW4:1-7 are undocumented and should remain OFF. The second "
+            "editor bank is unused by Super System 22.";
+    } else if (set == ridge_racer_rom_set::ridge_racer_2) {
         text +=
             "Known RR2 switches:\n"
             "SW2:1  Test mode\n"
@@ -147,7 +159,9 @@ void edit_dip_bank(uint16_t& switches, ridge_racer_rom_set set, int bank) {
         for (int position = 0; position < 8; ++position) {
             const int bit = bank * 8 + position;
             const bool on = (switches & (uint16_t{1} << bit)) == 0;
-            labels.emplace_back("SW" + std::to_string(bank + 2) + ":" +
+            const int physical_bank =
+                set == ridge_racer_rom_set::time_crisis ? bank + 4 : bank + 2;
+            labels.emplace_back("SW" + std::to_string(physical_bank) + ":" +
                 std::to_string(position + 1) + "  " +
                 dip_switch_name(set, bank, position) +
                 (on ? "  [ON]" : "  [OFF]"));

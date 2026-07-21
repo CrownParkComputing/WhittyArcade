@@ -28,8 +28,8 @@ bool in_range(uint32_t address, uint32_t base, std::size_t size) {
 } // namespace
 
 system22_bus::system22_bus()
-    : m_program_rom(PROGRAM_ROM_SIZE, 0xff),
-      m_main_ram(MAIN_RAM_SIZE),
+    : m_program_rom(SUPER_PROGRAM_ROM_SIZE, 0xff),
+      m_main_ram(SUPER_MAIN_RAM_SIZE),
       m_sci_ram(SCI_RAM_SIZE),
       m_eeprom(EEPROM_SIZE, 0xff),
       m_mcu_shared(MCU_SHARED_SIZE),
@@ -38,7 +38,23 @@ system22_bus::system22_bus()
       m_mixer(MIXER_RAM_SIZE),
       m_paletteram(PALETTE_RAM_SIZE),
       m_cgram(CG_RAM_SIZE),
-      m_textram(TEXT_RAM_SIZE) {
+      m_textram(TEXT_RAM_SIZE),
+      m_vics_data(VICS_DATA_SIZE),
+      m_vics_control(VICS_CONTROL_SIZE),
+      m_sprite_ram(SPRITE_RAM_SIZE) {
+}
+
+void system22_bus::set_super_system22(bool enabled) {
+    if (m_super_system22 == enabled) return;
+    m_super_system22 = enabled;
+    m_program_loaded = false;
+    std::fill(m_program_rom.begin(), m_program_rom.end(), 0xff);
+    std::fill(m_main_ram.begin(), m_main_ram.end(), 0);
+    std::fill(m_syscontrol.begin(), m_syscontrol.end(), 0);
+    m_irq_enabled = 0;
+    m_irq_state = 0;
+    m_asserted_irq_level = 0;
+    if (m_irq_handler) m_irq_handler(0);
 }
 
 void system22_bus::set_irq_handler(std::function<void(int)> handler) {
@@ -48,12 +64,14 @@ void system22_bus::set_irq_handler(std::function<void(int)> handler) {
 
 void system22_bus::set_dsp_control_handler(std::function<void(uint8_t)> handler) {
     m_dsp_control_handler = std::move(handler);
-    if (m_dsp_control_handler) m_dsp_control_handler(m_syscontrol[0x1a]);
+    if (m_dsp_control_handler)
+        m_dsp_control_handler(m_syscontrol[m_super_system22 ? 0x1c : 0x1a]);
 }
 
 void system22_bus::set_mcu_control_handler(std::function<void(uint8_t)> handler) {
     m_mcu_control_handler = std::move(handler);
-    if (m_mcu_control_handler) m_mcu_control_handler(m_syscontrol[0x18]);
+    if (m_mcu_control_handler)
+        m_mcu_control_handler(m_syscontrol[m_super_system22 ? 0x16 : 0x18]);
 }
 
 uint8_t system22_bus::read_mcu_shared_byte(std::size_t index) const {
@@ -120,6 +138,7 @@ void system22_bus::update_driving_inputs(const input_state& state) {
             return ACE_DRIVER_CALIBRATION;
         case system22_driving_profile::ridge_racer:
         case system22_driving_profile::cyber_commando:
+        case system22_driving_profile::time_crisis:
             return RIDGE_RACER_CALIBRATION;
         }
         return RIDGE_RACER_CALIBRATION;
@@ -162,14 +181,49 @@ void system22_bus::update_cyber_commando_inputs(const input_state& state) {
 }
 
 void system22_bus::update_game_inputs(const input_state& state) {
-    if (m_driving_profile == system22_driving_profile::cyber_commando)
+    if (m_driving_profile == system22_driving_profile::time_crisis)
+        update_time_crisis_inputs(state);
+    else if (m_driving_profile == system22_driving_profile::cyber_commando)
         update_cyber_commando_inputs(state);
     else
         update_driving_inputs(state);
 }
 
+void system22_bus::update_time_crisis_inputs(const input_state& state) {
+    // Keep normal host-axis extremes just inside the calibrated CRT edges.
+    // The exact edges mean "off screen" to Time Crisis and are reserved for
+    // a future absolute light-gun device path.
+    const auto scale = [](uint8_t value, uint16_t low, uint16_t high) {
+        constexpr int host_low = 0x47;
+        constexpr int host_high = 0xb7;
+        const int clamped = std::clamp<int>(value, host_low, host_high);
+        return static_cast<uint16_t>(low +
+            (clamped - host_low) * (high - low) /
+                (host_high - host_low));
+    };
+    m_gun_x = scale(state.left_stick_x, 69, 693);
+    m_gun_y = scale(state.left_stick_y, 44, 283);
+}
+
 uint8_t system22_bus::read_cz_byte(std::size_t index) const {
     return index < m_czram.size() ? m_czram[index] : 0;
+}
+
+uint16_t system22_bus::read_super_cz_attribute(std::size_t index) const {
+    const std::size_t offset = index * 2;
+    if (offset + 1 >= m_super_czattr.size()) return 0;
+    return static_cast<uint16_t>(
+        (static_cast<uint16_t>(m_super_czattr[offset]) << 8) |
+        m_super_czattr[offset + 1]);
+}
+
+uint16_t system22_bus::read_super_cz_entry(std::size_t bank,
+                                           std::size_t index) const {
+    if (bank >= 4 || index >= 0x100) return 0;
+    const std::size_t offset = bank * 0x200 + index * 2;
+    return static_cast<uint16_t>(
+        (static_cast<uint16_t>(m_czram[offset]) << 8) |
+        m_czram[offset + 1]);
 }
 
 uint8_t system22_bus::read_mixer_byte(std::size_t index) const {
@@ -186,7 +240,8 @@ void system22_bus::write_polygon_word(std::size_t index, uint32_t value) {
 
 void system22_bus::update_irq_level() {
     int highest_level = 0;
-    for (std::size_t source = 0; source < 5; ++source) {
+    const std::size_t source_count = m_super_system22 ? 4 : 5;
+    for (std::size_t source = 0; source < source_count; ++source) {
         const uint8_t line = static_cast<uint8_t>(1u << source);
         if ((m_irq_enabled & m_irq_state & line) != 0)
             highest_level = std::max(highest_level,
@@ -199,19 +254,36 @@ void system22_bus::update_irq_level() {
 }
 
 void system22_bus::write_syscontrol(std::size_t offset, uint8_t value) {
-    // Non-Super System 22 uses bit 4 as the enable flag and bits 0-2 as
-    // the MC68020 interrupt level. Registers 5-9 acknowledge sources 0-4.
-    if (offset < 5) {
-        const uint8_t line = static_cast<uint8_t>(1u << offset);
-        if ((value & 0x10) != 0)
-            m_irq_enabled |= line;
-        else {
-            m_irq_enabled &= static_cast<uint8_t>(~line);
+    if (m_super_system22) {
+        // Super System 22 enables a source by assigning it a non-zero IRQ
+        // level in registers 0-3; registers 4-7 acknowledge those sources.
+        if (offset < 4) {
+            const uint8_t line = static_cast<uint8_t>(1u << offset);
+            if ((value & 7) != 0)
+                m_irq_enabled |= line;
+            else {
+                m_irq_enabled &= static_cast<uint8_t>(~line);
+                m_irq_state &= static_cast<uint8_t>(~line);
+            }
+        } else if (offset < 8) {
+            m_irq_state &= static_cast<uint8_t>(
+                ~(1u << static_cast<unsigned>(offset - 4)));
+        }
+    } else {
+        // Base System 22 uses bit 4 as the enable flag and bits 0-2 as the
+        // level. Registers 5-9 acknowledge sources 0-4.
+        if (offset < 5) {
+            const uint8_t line = static_cast<uint8_t>(1u << offset);
+            if ((value & 0x10) != 0)
+                m_irq_enabled |= line;
+            else {
+                m_irq_enabled &= static_cast<uint8_t>(~line);
+                m_irq_state &= static_cast<uint8_t>(~line);
+            }
+        } else if (offset < 10) {
+            const uint8_t line = static_cast<uint8_t>(1u << (offset - 5));
             m_irq_state &= static_cast<uint8_t>(~line);
         }
-    } else if (offset < 10) {
-        const uint8_t line = static_cast<uint8_t>(1u << (offset - 5));
-        m_irq_state &= static_cast<uint8_t>(~line);
     }
 
     m_syscontrol[offset] = value;
@@ -219,27 +291,32 @@ void system22_bus::write_syscontrol(std::size_t offset, uint8_t value) {
         std::printf("System controller[%02zx] = %02x, enabled=%02x state=%02x\n",
                     offset, value, m_irq_enabled, m_irq_state);
     update_irq_level();
-    if (offset == 0x18 && m_mcu_control_handler)
+    if (offset == (m_super_system22 ? 0x16u : 0x18u) &&
+        m_mcu_control_handler)
         m_mcu_control_handler(value);
-    if (offset == 0x1a && m_dsp_control_handler)
+    if (offset == (m_super_system22 ? 0x1cu : 0x1au) &&
+        m_dsp_control_handler)
         m_dsp_control_handler(value);
 }
 
 void system22_bus::signal_vblank() {
-    constexpr uint8_t vblank_line = 1u << 4;
+    const uint8_t vblank_line = m_super_system22 ? uint8_t{1} :
+                                                  uint8_t{1u << 4};
     if ((m_irq_enabled & vblank_line) == 0) return;
     m_irq_state |= vblank_line;
     update_irq_level();
 }
 
 bool system22_bus::load_program_rom(const uint8_t* data, std::size_t size) {
-    if (!data || size != PROGRAM_ROM_SIZE) {
+    const std::size_t expected = program_rom_size();
+    if (!data || size != expected) {
         std::fprintf(stderr, "MC68020 ROM must be exactly 0x%zx bytes (got 0x%zx)\n",
-                     PROGRAM_ROM_SIZE, size);
+                     expected, size);
         m_program_loaded = false;
         return false;
     }
 
+    std::fill(m_program_rom.begin(), m_program_rom.end(), 0xff);
     std::copy(data, data + size, m_program_rom.begin());
     m_program_loaded = true;
     return true;
@@ -259,7 +336,175 @@ uint16_t system22_bus::next_keycus_value() {
     return m_keycus_rng;
 }
 
+uint8_t system22_bus::read_super_mapped_byte(uint32_t address) {
+    address &= 0x00ffffffu;
+    if (address < SUPER_PROGRAM_ROM_SIZE)
+        return m_program_rom[address];
+
+    if (in_range(address, 0x400000, 0x20)) {
+        const uint32_t keycus_address =
+            0x400000u + static_cast<uint32_t>(m_keycus_register) * 2u;
+        if (m_keycus_id != 0 && (address & ~1u) == keycus_address)
+            return (address & 1) ? static_cast<uint8_t>(m_keycus_id) :
+                                   static_cast<uint8_t>(m_keycus_id >> 8);
+        const uint16_t value = next_keycus_value();
+        return (address & 1) ? static_cast<uint8_t>(value) :
+                               static_cast<uint8_t>(value >> 8);
+    }
+    if (in_range(address, 0x410000, SCI_RAM_SIZE))
+        return m_sci_ram[address - 0x410000];
+    if (in_range(address, 0x420000, 0x10))
+        return address == 0x420001 ? 0x04 : 0x00;
+
+    if (in_range(address, 0x430000, 0x10)) {
+        uint16_t position = 0;
+        const uint32_t offset = address - 0x430000;
+        if (offset < 2) position = m_gun_x;
+        else if ((offset >= 4 && offset < 6) ||
+                 (offset >= 8 && offset < 10)) position = m_gun_y;
+        if ((offset & 3u) == 0) return static_cast<uint8_t>(position >> 8);
+        if ((offset & 3u) == 1) return static_cast<uint8_t>(position);
+        return 0;
+    }
+    if (in_range(address, 0x440000, 4)) {
+        const uint32_t value = 0xff00ffffu |
+            (static_cast<uint32_t>(m_dip_switches & 0x00ffu) << 16);
+        return static_cast<uint8_t>(value >>
+            ((3u - (address - 0x440000u)) * 8u));
+    }
+    if (in_range(address, 0x460000, 0x4000)) {
+        const uint32_t offset = address - 0x460000;
+        return (offset & 1u) == 0 ? m_eeprom[offset >> 1] : 0xff;
+    }
+    if (in_range(address, 0x700000, m_syscontrol.size()))
+        return m_syscontrol[address - 0x700000];
+    if (in_range(address, 0x810000, m_super_czattr.size()))
+        return m_super_czattr[address - 0x810000];
+    if (in_range(address, 0x810200, 0x200)) {
+        const std::size_t bank = m_super_czattr[11] & 3u;
+        return m_czram[bank * 0x200 + address - 0x810200];
+    }
+    if (in_range(address, 0x824000, 0x400))
+        return m_mixer[address - 0x824000];
+    if (in_range(address, 0x828000, PALETTE_RAM_SIZE))
+        return m_paletteram[address - 0x828000];
+    if (in_range(address, 0x880000, CG_RAM_SIZE)) {
+        if (in_range(address, 0x89e000, TEXT_RAM_SIZE))
+            return m_textram[address - 0x89e000];
+        return m_cgram[address - 0x880000];
+    }
+    if (in_range(address, 0x8a0000, TEXT_ATTR_SIZE))
+        return m_textattr[address - 0x8a0000];
+    if (in_range(address, 0x900000, VICS_DATA_SIZE))
+        return m_vics_data[address - 0x900000];
+    if (in_range(address, 0x940000, VICS_CONTROL_SIZE)) {
+        const std::size_t offset = address - 0x940000;
+        if (offset < 4) return 0;
+        uint8_t value = m_vics_control[offset];
+        if ((offset == 0x40 || offset == 0x50 ||
+             offset == 0x60 || offset == 0x70))
+            value &= 0x7f;
+        return value;
+    }
+    if (in_range(address, 0x980000, SPRITE_RAM_SIZE))
+        return m_sprite_ram[address - 0x980000];
+    if (in_range(address, 0xa04000, MCU_SHARED_SIZE))
+        return m_mcu_shared[address - 0xa04000];
+    if (in_range(address, 0xc00000, POLYGON_RAM_SIZE)) {
+        const uint32_t offset = address - 0xc00000;
+        const uint32_t word = m_polygon_ram[offset >> 2];
+        return static_cast<uint8_t>(word >> ((3 - (offset & 3)) * 8));
+    }
+    if (in_range(address, 0xe00000, SUPER_MAIN_RAM_SIZE))
+        return m_main_ram[address - 0xe00000];
+    return 0;
+}
+
+void system22_bus::write_super_mapped_byte(uint32_t address, uint8_t value) {
+    address &= 0x00ffffffu;
+    if (in_range(address, 0x410000, SCI_RAM_SIZE)) {
+        m_sci_ram[address - 0x410000] = value;
+        return;
+    }
+    if (in_range(address, 0x420000, 0x10) ||
+        in_range(address, 0x430000, 4))
+        return;
+    if (in_range(address, 0x460000, 0x4000)) {
+        const uint32_t offset = address - 0x460000;
+        if ((offset & 1u) == 0) m_eeprom[offset >> 1] = value;
+        return;
+    }
+    if (in_range(address, 0x700000, m_syscontrol.size())) {
+        write_syscontrol(address - 0x700000, value);
+        return;
+    }
+    if (in_range(address, 0x810000, m_super_czattr.size())) {
+        m_super_czattr[address - 0x810000] = value;
+        return;
+    }
+    if (in_range(address, 0x810200, 0x200)) {
+        const uint16_t flags = static_cast<uint16_t>(
+            (static_cast<uint16_t>(m_super_czattr[8]) << 8) |
+            m_super_czattr[9]);
+        const std::size_t offset = address - 0x810200;
+        for (std::size_t bank = 0; bank < 4; ++bank)
+            if (((flags >> (bank * 4)) & 1u) == 0)
+                m_czram[bank * 0x200 + offset] = value;
+        return;
+    }
+    if (in_range(address, 0x820000, 0x300)) return;
+    if (in_range(address, 0x824000, 0x400)) {
+        m_mixer[address - 0x824000] = value;
+        return;
+    }
+    if (in_range(address, 0x828000, PALETTE_RAM_SIZE)) {
+        m_paletteram[address - 0x828000] = value;
+        return;
+    }
+    if (in_range(address, 0x880000, CG_RAM_SIZE)) {
+        if (in_range(address, 0x89e000, TEXT_RAM_SIZE)) {
+            const std::size_t offset = address - 0x89e000;
+            m_textram[offset] = value;
+            m_cgram[0x1e000 + offset] = value;
+        } else {
+            m_cgram[address - 0x880000] = value;
+        }
+        return;
+    }
+    if (in_range(address, 0x8a0000, TEXT_ATTR_SIZE)) {
+        m_textattr[address - 0x8a0000] = value;
+        return;
+    }
+    if (in_range(address, 0x900000, VICS_DATA_SIZE)) {
+        m_vics_data[address - 0x900000] = value;
+        return;
+    }
+    if (in_range(address, 0x940000, VICS_CONTROL_SIZE)) {
+        m_vics_control[address - 0x940000] = value;
+        return;
+    }
+    if (in_range(address, 0x980000, SPRITE_RAM_SIZE)) {
+        m_sprite_ram[address - 0x980000] = value;
+        return;
+    }
+    if (in_range(address, 0xa04000, MCU_SHARED_SIZE)) {
+        m_mcu_shared[address - 0xa04000] = value;
+        return;
+    }
+    if (in_range(address, 0xc00000, POLYGON_RAM_SIZE)) {
+        const uint32_t offset = address - 0xc00000;
+        uint32_t& word = m_polygon_ram[offset >> 2];
+        const unsigned shift = (3 - (offset & 3)) * 8;
+        word = (word & ~(0xffu << shift)) |
+               (static_cast<uint32_t>(value) << shift);
+        return;
+    }
+    if (in_range(address, 0xe00000, SUPER_MAIN_RAM_SIZE))
+        m_main_ram[address - 0xe00000] = value;
+}
+
 uint8_t system22_bus::read_mapped_byte(uint32_t address) {
+    if (m_super_system22) return read_super_mapped_byte(address);
     if (address < PROGRAM_ROM_SIZE)
         return m_program_rom[address];
 
@@ -323,6 +568,10 @@ uint8_t system22_bus::read_mapped_byte(uint32_t address) {
 }
 
 void system22_bus::write_mapped_byte(uint32_t address, uint8_t value) {
+    if (m_super_system22) {
+        write_super_mapped_byte(address, value);
+        return;
+    }
     const uint32_t ram_address = address & ~0x08000000u;
     if (in_range(ram_address, 0x10000000, MAIN_RAM_SIZE)) {
         m_main_ram[ram_address - 0x10000000] = value;
@@ -387,24 +636,47 @@ uint8_t system22_bus::read8(uint32_t address) {
 }
 
 uint16_t system22_bus::read16(uint32_t address) {
-    const uint32_t keycus_address =
-        0x20000000u + static_cast<uint32_t>(m_keycus_register) * 2u;
+    if (m_super_system22) address &= 0x00ffffffu;
+    const uint32_t keycus_base = m_super_system22 ? 0x400000u : 0x20000000u;
+    const uint32_t keycus_size = m_super_system22 ? 0x20u : 0x10u;
+    const uint32_t keycus_address = keycus_base +
+        static_cast<uint32_t>(m_keycus_register) * 2u;
     if (m_keycus_id != 0 && address == keycus_address)
         return m_keycus_id;
-    if (in_range(address, 0x20000000, 0x10) && (address & 1) == 0)
+    if (in_range(address, keycus_base, keycus_size) && (address & 1) == 0)
         return next_keycus_value();
-    if (address == 0x50000008 || address == 0x5000000a) {
-        const std::size_t index = (address - 0x50000008) / 2;
+    const uint32_t portbit_base = m_super_system22 ? 0x450008u : 0x50000008u;
+    if (address == portbit_base || address == portbit_base + 2) {
+        const std::size_t index = (address - portbit_base) / 2;
         const uint16_t result = m_portbits[index] & 1u;
         m_portbits[index] = static_cast<uint16_t>(
             (m_portbits[index] >> 1) | 0x8000u);
         return result;
+    }
+    if (m_super_system22 && in_range(address, 0x860000, 8) &&
+        (address & 1u) == 0) {
+        const std::size_t offset = (address - 0x860000) >> 1;
+        if (offset == 2) {
+            const std::size_t index = m_spot_address & 0x0ffeu;
+            const uint16_t result = static_cast<uint16_t>(
+                (static_cast<uint16_t>(m_spot_ram[index]) << 8) |
+                m_spot_ram[index + 1]);
+            m_spot_address = static_cast<uint16_t>(m_spot_address + 2);
+            return result;
+        }
+        return 0;
     }
     return static_cast<uint16_t>((static_cast<uint16_t>(read_mapped_byte(address)) << 8) |
                                  read_mapped_byte(address + 1));
 }
 
 uint32_t system22_bus::read32(uint32_t address) {
+    if (m_super_system22) {
+        address &= 0x00ffffffu;
+        if (in_range(address, 0x400000, 0x20) && (address & 1u) == 0)
+            return (static_cast<uint32_t>(read16(address)) << 16) |
+                   read16(address + 2);
+    }
     return (static_cast<uint32_t>(read_mapped_byte(address)) << 24) |
            (static_cast<uint32_t>(read_mapped_byte(address + 1)) << 16) |
            (static_cast<uint32_t>(read_mapped_byte(address + 2)) << 8) |
@@ -416,10 +688,31 @@ void system22_bus::write8(uint32_t address, uint8_t value) {
 }
 
 void system22_bus::write16(uint32_t address, uint16_t value) {
-    if (address == 0x50000008 || address == 0x5000000a) {
+    if (m_super_system22) address &= 0x00ffffffu;
+    if (m_super_system22 && address == 0x430000) {
+        m_cpu_led_data = value;
+        return;
+    }
+    const uint32_t portbit_base = m_super_system22 ? 0x450008u : 0x50000008u;
+    if (address == portbit_base || address == portbit_base + 2) {
         // The write value is ignored; it reloads the corresponding serial
         // debug-input latch. No developer controls are connected by default.
-        m_portbits[(address - 0x50000008) / 2] = 0xffff;
+        m_portbits[(address - portbit_base) / 2] = 0xffff;
+        return;
+    }
+    if (m_super_system22 && in_range(address, 0x860000, 8) &&
+        (address & 1u) == 0) {
+        const std::size_t offset = (address - 0x860000) >> 1;
+        if (offset == 0) {
+            m_spot_address = value;
+        } else if (offset == 1) {
+            const std::size_t index = m_spot_address & 0x0ffeu;
+            m_spot_ram[index] = static_cast<uint8_t>(value >> 8);
+            m_spot_ram[index + 1] = static_cast<uint8_t>(value);
+            m_spot_address = static_cast<uint16_t>(m_spot_address + 2);
+        } else if (offset == 3) {
+            m_spot_enable = value;
+        }
         return;
     }
     write_mapped_byte(address, static_cast<uint8_t>(value >> 8));
@@ -489,6 +782,13 @@ uint32_t mc68020_core::data_register(unsigned index) const {
     set_active_musashi_memory(const_cast<mc68020_core*>(this));
     return m68k_get_reg(nullptr,
                         static_cast<m68k_register_t>(M68K_REG_D0 + index));
+}
+
+uint32_t mc68020_core::address_register(unsigned index) const {
+    if (index > 7) return 0;
+    set_active_musashi_memory(const_cast<mc68020_core*>(this));
+    return m68k_get_reg(nullptr,
+                        static_cast<m68k_register_t>(M68K_REG_A0 + index));
 }
 
 std::string mc68020_core::disassemble(uint32_t address, std::size_t* length) const {

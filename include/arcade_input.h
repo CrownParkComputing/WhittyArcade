@@ -54,7 +54,10 @@ private:
     std::array<std::atomic_bool, 4> m_cabinet_events{};
     std::array<std::atomic_int, 4> m_watch_keyboard_codes{};
     std::array<std::atomic_int, 4> m_watch_controller_buttons{};
+    std::atomic_bool m_mouse_activity{false};
     std::atomic_bool m_test_input_enabled{true};
+    bool m_time_crisis_mouse{false};
+    bool m_lightgun_mouse_active{false};
     bool m_event_watch_installed{false};
     bool m_initialized{false};
     bool m_suppressed{false};

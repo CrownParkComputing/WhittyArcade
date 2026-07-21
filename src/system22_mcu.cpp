@@ -23,8 +23,37 @@ system22_c74_mcu::system22_c74_mcu(system22_bus& bus, audio_system& audio)
         [this](uint32_t address) { return read_word(address); },
         [this](uint32_t address, uint16_t value) { write_word(address, value); });
 
-    // C74 firmware selects its sound-CPU role by sampling bit 4 of port 4.
-    m_cpu.set_port_callbacks(4, [] { return uint8_t{0x10}; });
+    m_cpu.set_port_callbacks(
+        4,
+        [this] { return m_super_system22 ? m_iocontrol : uint8_t{0x10}; },
+        [this](uint8_t data) {
+            if (m_super_system22) m_iocontrol = data;
+        });
+    m_cpu.set_port_callbacks(
+        5,
+        [this] {
+            if (!m_super_system22) return uint8_t{0xff};
+            const uint16_t inputs = digital_inputs();
+            return (m_iocontrol & 0x08) != 0 ?
+                static_cast<uint8_t>(inputs) :
+                static_cast<uint8_t>(inputs >> 8);
+        },
+        [this](uint8_t data) {
+            if (m_super_system22) m_output_data = data;
+        });
+    m_cpu.set_port_callbacks(6, [] { return uint8_t{0}; });
+    for (unsigned channel = 0; channel < 4; ++channel)
+        m_cpu.set_analog_callback(channel, [] { return uint16_t{0}; });
+}
+
+void system22_c74_mcu::reset_runtime_state() {
+    std::fill(m_c352_registers.begin(), m_c352_registers.end(), 0);
+    m_c352_read_count = 0;
+    m_c352_write_count = 0;
+    m_inputs = input_state{};
+    m_iocontrol = 0;
+    m_output_data = 0;
+    m_enabled = false;
 }
 
 bool system22_c74_mcu::initialize(const uint8_t* firmware,
@@ -35,11 +64,22 @@ bool system22_c74_mcu::initialize(const uint8_t* firmware,
         !data_rom || data_rom_size != DATA_ROM_SIZE)
         return false;
 
+    m_super_system22 = false;
     m_data_rom.assign(data_rom, data_rom + data_rom_size);
-    std::fill(m_c352_registers.begin(), m_c352_registers.end(), 0);
-    m_c352_read_count = 0;
-    m_c352_write_count = 0;
-    m_enabled = false;
+    reset_runtime_state();
+    m_initialized = true;
+    return true;
+}
+
+bool system22_c74_mcu::initialize_super_system22(
+        const uint8_t* data_rom, std::size_t data_rom_size) {
+    if (!data_rom || data_rom_size != DATA_ROM_SIZE ||
+        !m_cpu.load_internal_rom(data_rom + 0xc000, 0x4000))
+        return false;
+
+    m_super_system22 = true;
+    m_data_rom.assign(data_rom, data_rom + data_rom_size);
+    reset_runtime_state();
     m_initialized = true;
     return true;
 }
@@ -52,6 +92,26 @@ void system22_c74_mcu::control(uint8_t value) {
 
 int system22_c74_mcu::execute(int cycles) {
     return m_enabled ? m_cpu.execute(cycles) : 0;
+}
+
+uint16_t system22_c74_mcu::digital_inputs() const {
+    uint16_t value = 0xffff;
+    if (m_inputs.coin1) value &= ~0x0001u;
+    if (m_inputs.service) value &= ~0x0004u;
+    if (m_inputs.test) value &= ~0x0008u;
+    if (m_inputs.buttons[0]) value &= ~0x0010u; // gun trigger
+    if (m_inputs.buttons[1]) value &= ~0x0020u; // foot pedal
+    return value;
+}
+
+void system22_c74_mcu::signal_irq0() {
+    if (m_enabled && m_super_system22)
+        m_cpu.set_input(M37710_LINE_IRQ0, true);
+}
+
+void system22_c74_mcu::signal_irq2() {
+    if (m_enabled && m_super_system22)
+        m_cpu.set_input(M37710_LINE_IRQ2, true);
 }
 
 uint8_t system22_c74_mcu::read_byte(uint32_t address) const {

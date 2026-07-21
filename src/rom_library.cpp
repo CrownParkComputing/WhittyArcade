@@ -141,7 +141,8 @@ std::string readiness_suffix(const fs::path& candidate,
         if (!sibling_exists(candidate, "namcoc71.zip") &&
             !archive_contains(candidate, "c71.bin"))
             missing.emplace_back("namcoc71.zip");
-        if (!sibling_exists(candidate, "namcoc74.zip") &&
+        if (std::string(manifest.short_name) != "timecris" &&
+            !sibling_exists(candidate, "namcoc74.zip") &&
             !archive_contains(candidate, "c74.bin"))
             missing.emplace_back("namcoc74.zip");
     } else if (std::string(manifest.short_name) == "vformula" &&
@@ -422,10 +423,11 @@ rom_audit_result audit_rom_path(const std::string& path) {
         valid = roms.has_complete_program() && !roms.mcu_rom.empty() &&
                 !roms.texture_rom.empty() && !roms.tilemap_rom.empty() &&
                 !roms.point_rom.empty() && !roms.c352_samples.empty() &&
-                !roms.gamma_proms.empty() && roms.has_c71_firmware() &&
-                roms.has_c74_firmware();
+                (roms.super_system22 ? !roms.sprite_rom.empty() :
+                                       !roms.gamma_proms.empty()) &&
+                roms.has_c71_firmware() && roms.has_mcu_firmware();
         if (!valid)
-            loader_error = "One or more game ROMs or C71/C74 firmware "
+            loader_error = "One or more game ROMs or required device firmware "
                            "archives are missing or invalid.";
         break;
     }

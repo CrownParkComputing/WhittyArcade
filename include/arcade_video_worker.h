@@ -51,6 +51,7 @@ public:
     bool take_controls_request();
     bool take_settings_change(emulator_settings& settings);
     void set_f2_opens_dip(bool enabled);
+    void set_lightgun_cursor(bool enabled, uint8_t player = 0);
     void apply_display_settings(const emulator_settings& settings);
 
     void submit_polygons(const polygon_object* polygons, int count);
@@ -60,12 +61,15 @@ public:
                          std::size_t bank_count = 4,
                          bool tile_high_bit_from_attr = true);
     void submit_gamma(const uint8_t* gamma_proms, std::size_t size);
+    void submit_sprites(const uint8_t* sprite_rom, std::size_t size);
+    void set_system22_layer_mask(uint8_t mask);
     void submit_palette(const uint8_t* palette_ram, std::size_t size);
     void submit_text_layer(const uint8_t* character_ram,
                            std::size_t character_size,
                            const uint8_t* text_ram, std::size_t text_size,
                            const uint8_t* text_attributes,
-                           const uint8_t* mixer, std::size_t mixer_size);
+                           const uint8_t* mixer, std::size_t mixer_size,
+                           bool super_system22);
     void render_scene(const view_matrix& view, const rgba_color& fog_color);
     void present_rgba_frame(const uint8_t* pixels, int width, int height);
     void present_model2_frame(model2_gpu_frame frame);

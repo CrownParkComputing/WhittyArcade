@@ -18,8 +18,10 @@ struct rom_entry {
 
 // Ridge Racer ROM layout (from MAME namcos22.cpp)
 struct ridge_racer_roms {
-    // Main CPU program (2MB, 32-bit wide, 4 files)
+    // Main CPU program (2 MiB on System 22, 4 MiB on Super System 22).
     std::vector<uint8_t> maincpu_rom;
+
+    bool super_system22{false};
 
     // MCU sound data (512KB)
     std::vector<uint8_t> mcu_rom;
@@ -37,6 +39,10 @@ struct ridge_racer_roms {
     // Texture tilemap (2.5MB)
     std::vector<uint8_t> tilemap_rom;
 
+    // Super System 22 adds 32x32x8bpp object tiles alongside the polygon
+    // texture hardware. Base System 22 games leave this region empty.
+    std::vector<uint8_t> sprite_rom;
+
     // Point ROM (3D model data, 1.5MB)
     std::vector<uint8_t> point_rom;
 
@@ -53,9 +59,17 @@ struct ridge_racer_roms {
     std::vector<uint8_t> c71_firmware;
     std::vector<uint8_t> c74_firmware;
 
-    bool has_complete_program() const { return maincpu_rom.size() == 0x200000; }
+    bool has_complete_program() const {
+        return maincpu_rom.size() ==
+            (super_system22 ? std::size_t{0x400000} : std::size_t{0x200000});
+    }
     bool has_c71_firmware() const { return c71_firmware.size() == 0x2000; }
     bool has_c74_firmware() const { return c74_firmware.size() == 0x4000; }
+    bool has_mcu_firmware() const {
+        // Super System 22 maps the internal 16 KiB MCU window from the game
+        // data ROM; earlier boards use the separate c74.bin image.
+        return super_system22 ? mcu_rom.size() == 0x80000 : has_c74_firmware();
+    }
 };
 
 enum class ridge_racer_rom_set : uint8_t {
@@ -67,6 +81,7 @@ enum class ridge_racer_rom_set : uint8_t {
     ace_driver,
     victory_lap,
     cyber_commando,
+    time_crisis,
 };
 
 // ROM loader class - supports ZIP files
@@ -84,6 +99,8 @@ public:
     static bool is_working_set(ridge_racer_rom_set set);
 
 private:
-    static void load_system_firmware(const std::string& path, ridge_racer_roms& roms);
+    static void load_system_firmware(const std::string& path,
+                                     ridge_racer_roms& roms,
+                                     bool load_c74 = true);
 
 };

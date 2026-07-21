@@ -68,6 +68,11 @@ int arcade_input::watch_cabinet_button_events(void* userdata,
                     true, std::memory_order_relaxed);
             }
         }
+    } else if (input->m_time_crisis_mouse &&
+               (event->type == SDL_MOUSEMOTION ||
+                event->type == SDL_MOUSEBUTTONDOWN ||
+                event->type == SDL_MOUSEBUTTONUP)) {
+        input->m_mouse_activity.store(true, std::memory_order_relaxed);
     }
     return 0;
 }
@@ -85,6 +90,9 @@ bool arcade_input::initialize(std::string_view game_short_name) {
     }
 
     m_game_short_name = game_short_name;
+    m_time_crisis_mouse = m_game_short_name == "timecris";
+    m_lightgun_mouse_active = false;
+    m_mouse_activity.store(false, std::memory_order_relaxed);
     m_mappings = load_input_mappings();
     m_keyboard_bindings = keyboard_bindings_for(m_mappings,
                                                  m_game_short_name);
@@ -107,6 +115,10 @@ bool arcade_input::initialize(std::string_view game_short_name) {
     scan_for_controller();
     if (!m_controller)
         std::printf("Input: keyboard active; waiting for an SDL controller\n");
+    if (m_time_crisis_mouse)
+        std::printf("Time Crisis mouse gun: move to aim, left click fires, "
+                    "hold Space to stand, release Space or right click to "
+                    "take cover/reload\n");
     return true;
 }
 
@@ -161,6 +173,9 @@ void arcade_input::shutdown() {
         SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK);
         m_initialized = false;
     }
+    m_time_crisis_mouse = false;
+    m_lightgun_mouse_active = false;
+    m_mouse_activity.store(false, std::memory_order_relaxed);
 }
 
 void arcade_input::set_controller_watch_bindings() {
@@ -304,6 +319,8 @@ void arcade_input::update() {
     if (m_suppressed) {
         m_keyboard_steering = 0.0f;
         m_cabinet_pulse_frames.fill(0);
+        m_lightgun_mouse_active = false;
+        m_mouse_activity.store(false, std::memory_order_relaxed);
         m_state = input_state{};
         return;
     }
@@ -380,14 +397,71 @@ void arcade_input::update() {
                     cabinet_press_threshold;
     m_state.view4 = action_value(input_action::view4, keys) >=
                     cabinet_press_threshold;
-    m_state.buttons[0] = action_value(input_action::p1_action1, keys) >=
-                         cabinet_press_threshold;
-    m_state.buttons[1] = action_value(input_action::p1_action2, keys) >=
-                         cabinet_press_threshold;
+    const float action1 = action_value(input_action::p1_action1, keys);
+    const float action2 = action_value(input_action::p1_action2, keys);
+    m_state.buttons[0] = action1 >= cabinet_press_threshold;
+    m_state.buttons[1] = action2 >= cabinet_press_threshold;
     m_state.buttons[2] = action_value(input_action::p1_action3, keys) >=
                          cabinet_press_threshold;
     m_state.p2_buttons[0] = action_value(input_action::p2_action1, keys) >=
                             cabinet_press_threshold;
+
+    if (m_time_crisis_mouse) {
+        const bool mouse_activity = m_mouse_activity.exchange(
+            false, std::memory_order_relaxed);
+        const bool alternate_gun_activity =
+            std::fabs(left_x) > 0.0f || std::fabs(left_y) > 0.0f;
+        if (mouse_activity)
+            m_lightgun_mouse_active = true;
+        else if (alternate_gun_activity)
+            m_lightgun_mouse_active = false;
+
+        SDL_Window* mouse_window = SDL_GetMouseFocus();
+        if (m_lightgun_mouse_active && mouse_window) {
+            int mouse_x = 0;
+            int mouse_y = 0;
+            const uint32_t mouse_buttons = SDL_GetMouseState(
+                &mouse_x, &mouse_y);
+            int window_width = 0;
+            int window_height = 0;
+            SDL_GetWindowSize(mouse_window, &window_width, &window_height);
+            if (window_width > 1 && window_height > 1) {
+                // Host presentation preserves the board's 4:3 image. Remove
+                // any pillarbox/letterbox area before mapping the cursor to
+                // the calibrated gun ADC range.
+                int content_x = 0;
+                int content_y = 0;
+                int content_width = window_width;
+                int content_height = window_height;
+                if (window_width * 3 > window_height * 4) {
+                    content_width = window_height * 4 / 3;
+                    content_x = (window_width - content_width) / 2;
+                } else if (window_height * 4 > window_width * 3) {
+                    content_height = window_width * 3 / 4;
+                    content_y = (window_height - content_height) / 2;
+                }
+                const float normalized_x = std::clamp(
+                    static_cast<float>(mouse_x - content_x) /
+                        static_cast<float>(std::max(content_width - 1, 1)),
+                    0.0f, 1.0f);
+                const float normalized_y = std::clamp(
+                    static_cast<float>(mouse_y - content_y) /
+                        static_cast<float>(std::max(content_height - 1, 1)),
+                    0.0f, 1.0f);
+                m_state.left_stick_x = cyber_axis(normalized_x * 2.0f - 1.0f);
+                m_state.left_stick_y = cyber_axis(normalized_y * 2.0f - 1.0f);
+                m_state.buttons[0] =
+                    (mouse_buttons & SDL_BUTTON_LMASK) != 0 ||
+                    action1 >= cabinet_press_threshold;
+                // The real pedal is held while Richard is exposed. Releasing
+                // it ducks into cover and reloads, so right mouse reverses
+                // the held Space/controller pedal for an intuitive reload.
+                m_state.buttons[1] =
+                    action2 >= cabinet_press_threshold &&
+                    (mouse_buttons & SDL_BUTTON_RMASK) == 0;
+            }
+        }
+    }
 
     for (uint8_t& frames : m_cabinet_pulse_frames)
         if (frames != 0) --frames;

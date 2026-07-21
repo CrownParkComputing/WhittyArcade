@@ -25,6 +25,24 @@ module and keep application code board-neutral.
    a full ROM/boot regression. The catalog test must continue to prove that
    every loader short name resolves uniquely.
 
+### Worked example: Time Crisis
+
+Time Crisis demonstrates both the short extension path and how board variants
+stay contained. Its launcher support is one catalog manifest plus a declarative
+`timecris` ROM profile. The frontend, ROM browser, audit, persistent-data page
+and controller page discover it automatically.
+
+The game also exposed real Super System 22 differences, so the owning board
+module gained a variant flag, the later 24-bit bus layout, M37710 boot path,
+C374/VICS sprites, mixer/fade handling and light-gun registers. Mouse aim,
+trigger and pedal are translated into the existing neutral `input_state`; no
+Time Crisis branch was added to the launcher or application entry point.
+
+For another game on an already covered hardware revision, only the ROM
+profile, manifest, genuine protection/cabinet differences and tests should be
+needed. A newly discovered board revision should extend the board module as
+Time Crisis did, rather than leaking special cases into the application shell.
+
 ## Add a new hardware board
 
 1. Add one value to `arcade_board_type` and one descriptor to the board table
@@ -55,7 +73,7 @@ cmake -S . -B build \
   -DMODEL1_TEST_ROM=/path/to/vformula.zip \
   -DMODEL2_TEST_ROM=/path/to/srallyc.zip \
   -DSHINOBI_TEST_ROM=/path/to/shinobi.zip \
-  '-DSYSTEM22_TEST_ROMS=/path/to/ridgerac.zip;/path/to/raverace.zip'
+  '-DSYSTEM22_TEST_ROMS=/path/to/ridgerac.zip;/path/to/raverace.zip;/path/to/timecris.zip'
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```

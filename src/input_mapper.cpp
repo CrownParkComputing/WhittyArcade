@@ -82,6 +82,10 @@ std::vector<input_action> relevant_actions(std::string_view short_name) {
              input_action::right_up, input_action::right_down,
              input_action::shift_down, input_action::shift_up,
              input_action::view1});
+    } else if (short_name == "timecris") {
+        add({input_action::p1_left, input_action::p1_right,
+             input_action::p1_up, input_action::p1_down,
+             input_action::p1_action1, input_action::p1_action2});
     } else if (short_name == "vf") {
         add({input_action::p1_left, input_action::p1_right,
              input_action::p1_up, input_action::p1_down,
@@ -140,6 +144,19 @@ std::string action_label(const mapper_profile& profile,
             return "Weapons - Gun trigger";
         if (action.action == input_action::shift_up)
             return "Weapons - Missile";
+    } else if (profile.short_name == "timecris") {
+        if (action.action == input_action::p1_left)
+            return "Light gun - Aim left";
+        if (action.action == input_action::p1_right)
+            return "Light gun - Aim right";
+        if (action.action == input_action::p1_up)
+            return "Light gun - Aim up";
+        if (action.action == input_action::p1_down)
+            return "Light gun - Aim down";
+        if (action.action == input_action::p1_action1)
+            return "Light gun - Trigger (mouse left click)";
+        if (action.action == input_action::p1_action2)
+            return "Foot pedal - Hold to stand (Space; right click reloads)";
     } else if (profile.short_name == "wingwar") {
         if (action.action == input_action::shift_down)
             return "Weapons - Machine gun";
@@ -198,6 +215,10 @@ control_category category_for(const mapper_profile& profile,
     if (profile.short_name == "vf" && action >= input_action::view1 &&
         action <= input_action::view3)
         return control_category::player1;
+    if (profile.short_name == "timecris" &&
+        action >= input_action::p1_left &&
+        action <= input_action::p1_action2)
+        return control_category::shooting;
     const bool weapons_game = profile.short_name == "cybrcomm" ||
                               profile.short_name == "swa" ||
                               profile.short_name == "wingwar";

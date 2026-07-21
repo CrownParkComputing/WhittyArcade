@@ -245,6 +245,58 @@ const flexible_game_asset_set cyber_commando_assets{
     0x480000, 0x800000, 4, 0x20000, true,
 };
 
+constexpr std::array<asset_spec, 4> time_crisis_program{{
+    {"ts2verb.1", 0x100000, 0x29b377f7, 3},
+    {"ts2verb.2", 0x100000, 0x79512e25, 2},
+    {"ts2verb.3", 0x100000, 0x9f4ced33, 1},
+    {"ts2verb.4", 0x100000, 0x3e0cfb38, 0},
+}};
+
+constexpr std::array<asset_spec, 1> time_crisis_mcu{{
+    {"ts1data.8k", 0x080000, 0xe68aa973, 0},
+}};
+
+constexpr std::array<asset_spec, 6> time_crisis_sprites{{
+    {"ts1scg0.12f", 0x200000, 0x14a3674d, 0x000000},
+    {"ts1scg1.10f", 0x200000, 0x11791dbf, 0x200000},
+    {"ts1scg2.8f",  0x200000, 0xd630fff9, 0x400000},
+    {"ts1scg3.7f",  0x200000, 0x1a62f015, 0x600000},
+    {"ts1scg4.5f",  0x200000, 0x511b8dd6, 0x800000},
+    {"ts1scg5.3f",  0x200000, 0x553bb246, 0xa00000},
+}};
+
+constexpr std::array<asset_spec, 7> time_crisis_textures{{
+    {"ts1cg0.8d",  0x200000, 0xde07b22c, 0x000000},
+    {"ts1cg1.10d", 0x200000, 0x992d26f6, 0x200000},
+    {"ts1cg2.12d", 0x200000, 0x6273954f, 0x400000},
+    {"ts1cg3.13d", 0x200000, 0x38171f24, 0x600000},
+    {"ts1cg4.14d", 0x200000, 0x51f09856, 0x800000},
+    {"ts1cg5.16d", 0x200000, 0x4cd9fd79, 0xa00000},
+    {"ts1cg6.18d", 0x200000, 0xf17f2ec9, 0xc00000},
+}};
+
+constexpr std::array<asset_spec, 2> time_crisis_tilemap{{
+    {"ts1ccrl.3d", 0x200000, 0x56cad2df, 0x000000},
+    {"ts1ccrh.1d", 0x080000, 0xa1cc3741, 0x200000},
+}};
+
+constexpr std::array<asset_spec, 9> time_crisis_points{{
+    {"ts1ptrl0.18k", 0x080000, 0xe5f2d275, 0x000000},
+    {"ts1ptrl1.16k", 0x080000, 0x2bba3800, 0x080000},
+    {"ts1ptrl2.15k", 0x080000, 0xd4441c08, 0x100000},
+    {"ts1ptrm0.18j", 0x080000, 0x8aea02ba, 0x180000},
+    {"ts1ptrm1.16j", 0x080000, 0xbccf19bc, 0x200000},
+    {"ts1ptrm2.15j", 0x080000, 0x7280be31, 0x280000},
+    {"ts1ptru0.18f", 0x080000, 0xc30d6332, 0x300000},
+    {"ts1ptru1.16f", 0x080000, 0x993cde84, 0x380000},
+    {"ts1ptru2.15f", 0x080000, 0x7cb25c73, 0x400000},
+}};
+
+constexpr std::array<asset_spec, 2> time_crisis_samples{{
+    {"ts1wavea.2l", 0x400000, 0xd1123301, 0x000000},
+    {"ts1waveb.1l", 0x200000, 0xbf4d7272, 0x800000},
+}};
+
 bool has_zip_extension(const fs::path& path) {
     std::string extension = path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
@@ -332,6 +384,14 @@ bool read_zip_entry(const fs::path& archive_path, const std::string& entry,
     return true;
 }
 
+std::string alternate_asset_name(std::string name) {
+    // Older merged Time Crisis collections include a hyphen that MAME's
+    // current canonical TS2 Ver.B filenames omit.
+    if (name.rfind("ts2verb.", 0) == 0)
+        name.replace(0, 7, "ts2ver-b");
+    return name;
+}
+
 bool read_from_source(const fs::path& source, const std::string& name,
                       std::vector<uint8_t>& data) {
     if (has_zip_extension(source)) {
@@ -341,21 +401,32 @@ bool read_from_source(const fs::path& source, const std::string& name,
         if (alias.rfind("rrs2_prg", 0) == 0)
             alias.replace(0, 8, "rrs_8_prg");
         if (alias != name && read_zip_entry(source, alias, data)) return true;
+        alias = alternate_asset_name(name);
+        if (alias != name && read_zip_entry(source, alias, data)) return true;
         return false;
     }
-    return read_file_bytes(source / name, data);
+    if (read_file_bytes(source / name, data)) return true;
+    const std::string alias = alternate_asset_name(name);
+    return alias != name && read_file_bytes(source / alias, data);
 }
 
 bool source_contains(const fs::path& source, const char* name) {
-    if (!has_zip_extension(source)) return fs::exists(source / name);
-    unzFile archive = unzOpen64(source.string().c_str());
-    if (!archive) return false;
-    const bool found = locate_zip_basename(archive, name);
-    unzClose(archive);
-    return found;
+    const auto contains = [&](const std::string& candidate) {
+        if (!has_zip_extension(source)) return fs::exists(source / candidate);
+        unzFile archive = unzOpen64(source.string().c_str());
+        if (!archive) return false;
+        const bool found = locate_zip_basename(archive, candidate);
+        unzClose(archive);
+        return found;
+    };
+    if (contains(name)) return true;
+    const std::string alias = alternate_asset_name(name);
+    return alias != name && contains(alias);
 }
 
 ridge_racer_rom_set identify_source(const fs::path& source) {
+    if (source_contains(source, time_crisis_program[0].name))
+        return ridge_racer_rom_set::time_crisis;
     if (source_contains(source, ace_driver_assets.program[0].name))
         return ridge_racer_rom_set::ace_driver;
     if (source_contains(source, victory_lap_assets.program[0].name))
@@ -387,6 +458,7 @@ const game_asset_set* assets_for(ridge_racer_rom_set set) {
     case ridge_racer_rom_set::ace_driver:
     case ridge_racer_rom_set::victory_lap:
     case ridge_racer_rom_set::cyber_commando:
+    case ridge_racer_rom_set::time_crisis:
     case ridge_racer_rom_set::unknown:
         return nullptr;
     }
@@ -401,6 +473,7 @@ const flexible_game_asset_set* flexible_assets_for(ridge_racer_rom_set set) {
         return &victory_lap_assets;
     case ridge_racer_rom_set::cyber_commando:
         return &cyber_commando_assets;
+    case ridge_racer_rom_set::time_crisis:
     case ridge_racer_rom_set::unknown:
     case ridge_racer_rom_set::ridge_racer:
     case ridge_racer_rom_set::ridge_racer_full_scale:
@@ -442,8 +515,9 @@ bool load_checked(const fs::path& source, const asset_spec& spec,
 
 template <typename Container>
 bool load_region(const fs::path& source, const Container& specs,
-                 std::size_t region_size, std::vector<uint8_t>& region) {
-    region.assign(region_size, 0);
+                 std::size_t region_size, std::vector<uint8_t>& region,
+                 uint8_t fill = 0) {
+    region.assign(region_size, fill);
     std::vector<uint8_t> file;
     bool complete = true;
     for (const asset_spec& spec : specs) {
@@ -588,16 +662,57 @@ ridge_racer_roms load_flexible_game_set(
     load_region(source, gamma, 0x300, roms.gamma_proms);
     return roms;
 }
+
+ridge_racer_roms load_time_crisis_set(const fs::path& source) {
+    ridge_racer_roms roms;
+    roms.super_system22 = true;
+    roms.texture_region_offset = 0;
+    roms.texture_bank_count = 8;
+    roms.texture_tile_high_bit_from_attr = false;
+
+    roms.maincpu_rom.assign(0x400000, 0);
+    std::vector<uint8_t> file;
+    bool program_complete = true;
+    for (const asset_spec& spec : time_crisis_program) {
+        if (!load_checked(source, spec, file)) {
+            program_complete = false;
+            continue;
+        }
+        for (std::size_t index = 0; index < file.size(); ++index)
+            roms.maincpu_rom[index * 4 + spec.offset] = file[index];
+    }
+    if (!program_complete) roms.maincpu_rom.clear();
+
+    load_region(source, time_crisis_mcu, 0x080000, roms.mcu_rom);
+    load_region(source, time_crisis_sprites, 0x1000000,
+                roms.sprite_rom, 0xff);
+    load_region(source, time_crisis_textures, 0x1000000,
+                roms.texture_rom);
+    load_region(source, time_crisis_tilemap, 0x280000,
+                roms.tilemap_rom);
+    load_region(source, time_crisis_points, 0x480000,
+                roms.point_rom);
+    if (load_region(source, time_crisis_samples, 0x1000000,
+                    roms.c352_samples)) {
+        // ts1wavea is wired as 16-bit words with the byte lanes swapped.
+        for (std::size_t offset = 0; offset < 0x400000; offset += 2)
+            std::swap(roms.c352_samples[offset],
+                      roms.c352_samples[offset + 1]);
+    }
+    return roms;
+}
 } // namespace
 
 void rom_loader::load_system_firmware(const std::string& path,
-                                      ridge_racer_roms& roms) {
+                                      ridge_racer_roms& roms,
+                                      bool load_c74) {
     if (path.empty()) return;
     const fs::path source(path);
     const asset_spec c71{"c71.bin", 0x2000, 0x47c623ab, 0};
     const asset_spec c74{"c74.bin", 0x4000, 0xa3dce360, 0};
     load_firmware_asset(source, "namcoc71.zip", c71, roms.c71_firmware);
-    load_firmware_asset(source, "namcoc74.zip", c74, roms.c74_firmware);
+    if (load_c74)
+        load_firmware_asset(source, "namcoc74.zip", c74, roms.c74_firmware);
 }
 
 ridge_racer_roms rom_loader::load_ridge_racer(const std::string& path,
@@ -616,7 +731,8 @@ ridge_racer_roms rom_loader::load_ridge_racer(const std::string& path,
     }
     const game_asset_set* assets = assets_for(set);
     const flexible_game_asset_set* flexible_assets = flexible_assets_for(set);
-    if (!assets && !flexible_assets && set != ridge_racer_rom_set::rave_racer) {
+    if (!assets && !flexible_assets && set != ridge_racer_rom_set::rave_racer &&
+        set != ridge_racer_rom_set::time_crisis) {
         std::fprintf(stderr, "Unsupported System 22 ROM set: %s\n",
                      path.c_str());
         return {};
@@ -625,17 +741,21 @@ ridge_racer_roms rom_loader::load_ridge_racer(const std::string& path,
     std::printf("Loading %s ROMs from: %s\n", set_display_name(set),
                 path.c_str());
     ridge_racer_roms roms;
-    if (set == ridge_racer_rom_set::rave_racer)
+    if (set == ridge_racer_rom_set::time_crisis)
+        roms = load_time_crisis_set(fs::path(path));
+    else if (set == ridge_racer_rom_set::rave_racer)
         roms = load_rave_racer_set(fs::path(path));
     else if (flexible_assets)
         roms = load_flexible_game_set(fs::path(path), *flexible_assets);
     else
         roms = load_game_set(fs::path(path), *assets);
-    load_system_firmware(bios_path.empty() ? path : bios_path, roms);
-    std::printf("ROM regions: main=%zu texture=%zu tilemap=%zu point=%zu "
-                "samples=%zu gamma=%zu c71=%zu c74=%zu\n",
+    load_system_firmware(bios_path.empty() ? path : bios_path, roms,
+                         set != ridge_racer_rom_set::time_crisis);
+    std::printf("ROM regions: main=%zu texture=%zu tilemap=%zu sprite=%zu "
+                "point=%zu samples=%zu gamma=%zu c71=%zu c74=%zu\n",
                 roms.maincpu_rom.size(), roms.texture_rom.size(),
-                roms.tilemap_rom.size(), roms.point_rom.size(),
+                roms.tilemap_rom.size(), roms.sprite_rom.size(),
+                roms.point_rom.size(),
                 roms.c352_samples.size(), roms.gamma_proms.size(),
                 roms.c71_firmware.size(), roms.c74_firmware.size());
     return roms;
@@ -654,6 +774,7 @@ const char* rom_loader::set_short_name(ridge_racer_rom_set set) {
     case ridge_racer_rom_set::ace_driver: return "acedrive";
     case ridge_racer_rom_set::victory_lap: return "victlap";
     case ridge_racer_rom_set::cyber_commando: return "cybrcomm";
+    case ridge_racer_rom_set::time_crisis: return "timecris";
     case ridge_racer_rom_set::unknown: return "unknown";
     }
     return "unknown";
@@ -664,6 +785,8 @@ const char* rom_loader::set_display_name(ridge_racer_rom_set set) {
         return "Ridge Racer Full Scale — not working";
     if (set == ridge_racer_rom_set::rave_racer)
         return "Rave Racer";
+    if (set == ridge_racer_rom_set::time_crisis)
+        return "Time Crisis (World, TS2 Ver.B)";
     if (const flexible_game_asset_set* assets = flexible_assets_for(set))
         return assets->display_name;
     const game_asset_set* assets = assets_for(set);
@@ -676,5 +799,6 @@ bool rom_loader::is_working_set(ridge_racer_rom_set set) {
            set == ridge_racer_rom_set::rave_racer ||
            set == ridge_racer_rom_set::ace_driver ||
            set == ridge_racer_rom_set::victory_lap ||
-           set == ridge_racer_rom_set::cyber_commando;
+           set == ridge_racer_rom_set::cyber_commando ||
+           set == ridge_racer_rom_set::time_crisis;
 }
