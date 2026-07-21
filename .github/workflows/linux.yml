@@ -62,7 +62,9 @@ jobs:
           cmake -E copy RELEASE_README.md artifact/README.md
           cmake -E copy LICENSE artifact/LICENSE.txt
           cmake -E copy THIRD_PARTY_NOTICES.md artifact/THIRD_PARTY_NOTICES.md
+          strip --strip-unneeded artifact/WhittyArcade
           chmod +x artifact/WhittyArcade
+          artifact/WhittyArcade --list-roms > /dev/null
           cd artifact
           sha256sum WhittyArcade > WhittyArcade.sha256
 
