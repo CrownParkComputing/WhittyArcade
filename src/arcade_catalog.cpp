@@ -50,6 +50,8 @@ constexpr arcade_game_list manifests{{
      "", "", true},
     {"mooncrst", "Moon Cresta (Nichibutsu)", arcade_board_type::mooncrst,
      "", "", true},
+    {"uniwars", "UniWar S (Irem)", arcade_board_type::mooncrst,
+     "", "", true},
     {"shinobi4", "Shinobi (System 16B, set 4)",
      arcade_board_type::shinobi, "shinobi.zip",
      "shinobi6.zip for unencrypted sound ROM in split collections", true},

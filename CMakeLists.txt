@@ -608,6 +608,31 @@ else()
         COMMAND galaxian_mooncrst_machine_test)
 endif()
 
+add_executable(galaxian_uniwars_machine_test
+    tests/galaxian_uniwars_machine_test.cpp
+    src/galaxian_audio_mooncrst.cpp
+    src/high_scores.cpp
+    src/galaxian_machine.cpp
+    src/galaxian_machine_mooncrst.cpp
+)
+target_include_directories(galaxian_uniwars_machine_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(galaxian_uniwars_machine_test SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/chips)
+target_link_libraries(galaxian_uniwars_machine_test PRIVATE
+    chips_z80 PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(galaxian_uniwars_machine_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+set(GALAXIAN_UNIWARS_TEST_ROM "" CACHE FILEPATH
+    "Optional UniWar S archive used by the Galaxian board integration test")
+if(GALAXIAN_UNIWARS_TEST_ROM)
+    add_test(NAME galaxian_uniwars_machine_test
+        COMMAND galaxian_uniwars_machine_test "${GALAXIAN_UNIWARS_TEST_ROM}")
+else()
+    add_test(NAME galaxian_uniwars_machine_test
+        COMMAND galaxian_uniwars_machine_test)
+endif()
+
 add_executable(galaxian_audio_test
     tests/galaxian_audio_test.cpp
     src/galaxian_audio.cpp
@@ -632,10 +657,12 @@ target_link_libraries(galaxian_rom_loader_test PRIVATE
     PkgConfig::MINIZIP ZLIB::ZLIB)
 target_compile_options(galaxian_rom_loader_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
-if(GALAXIAN_PHOENIX_TEST_ROM AND GALAXIAN_MOONCRST_TEST_ROM)
+if(GALAXIAN_PHOENIX_TEST_ROM AND GALAXIAN_MOONCRST_TEST_ROM AND
+   GALAXIAN_UNIWARS_TEST_ROM)
     add_test(NAME galaxian_rom_loader_test
         COMMAND galaxian_rom_loader_test
-            ${GALAXIAN_PHOENIX_TEST_ROM} ${GALAXIAN_MOONCRST_TEST_ROM})
+            ${GALAXIAN_PHOENIX_TEST_ROM} ${GALAXIAN_MOONCRST_TEST_ROM}
+            ${GALAXIAN_UNIWARS_TEST_ROM})
 else()
     add_test(NAME galaxian_rom_loader_test
         COMMAND galaxian_rom_loader_test)

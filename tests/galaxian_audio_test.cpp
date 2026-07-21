@@ -1,6 +1,6 @@
 // galaxian_audio_test - merged Galaxian-family sound synth test
 //
-// Exercises both phoenix_sound_synth and mooncrst_sound_synth through
+// Exercises Phoenix, Moon Cresta and UniWar S synth profiles through
 // the shared galaxian_sound_synth interface, calling the per-game
 // factory functions in galaxian_audio.h. Pure unit test: no audio
 // system, no OpenAL. The two old tests (phoenix_audio_test, mooncrst
@@ -139,6 +139,36 @@ int main() {
                     hit_peak, fire_peak);
     }
 
-    std::puts("Galaxian audio: both synths exercised via shared base");
+    // --- UniWar S / base Galaxian discrete mixer path ---
+    {
+        auto synth = make_uniwars_sound_synth();
+        synth->reset();
+        std::fill(samples.begin(), samples.end(), 0);
+        synth->generate(samples.data(), kFrames, 100, 100);
+        assert(silent(samples.data(), samples.size()));
+
+        synth->write_control(mooncrst_audio_port::pitch, 0x80);
+        synth->write_control(mooncrst_audio_port::sound_base | 6u, 1);
+        std::fill(samples.begin(), samples.end(), 0);
+        synth->generate(samples.data(), kFrames, 100, 100);
+        const int pitch_peak = peak(samples.data(), samples.size());
+        const std::size_t pitch_edges =
+            zero_crossings(samples.data(), samples.size());
+        assert(pitch_peak > 1000);
+        assert(pitch_edges > 20);
+
+        synth->reset();
+        synth->write_control(mooncrst_audio_port::lfo_base | 0u, 1);
+        synth->write_control(mooncrst_audio_port::sound_base | 0u, 1);
+        std::fill(samples.begin(), samples.end(), 0);
+        synth->generate(samples.data(), kFrames, 100, 100);
+        const int background_peak = peak(samples.data(), samples.size());
+        assert(background_peak > 100);
+
+        std::printf("UniWar S discrete: pitch=%d edges=%zu background=%d\n",
+                    pitch_peak, pitch_edges, background_peak);
+    }
+
+    std::puts("Galaxian audio: all synth profiles exercised via shared base");
     return 0;
 }

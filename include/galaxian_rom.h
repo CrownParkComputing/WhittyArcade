@@ -2,12 +2,9 @@
 // both accepted; matching is case-insensitive and by basename (mirrors the
 // source_reader convention in model1_rom.cpp / model2_rom.cpp).
 //
-// Out of scope for this header: the wider Galaxian family beyond Phoenix and
-// Moon Cresta. The Galaxian, Scramble, Frogger and Amidar boards share the
-// Z80 + tile pipeline but their memory maps and I/O behaviour diverge
-// enough that they want their own board_interface impls. A follow-up PR
-// should add the matching rom set here and the corresponding
-// galaxian_machine_<name>.cpp.
+// The loader currently covers Phoenix, Moon Cresta and UniWar S. The wider
+// Galaxian family shares the Z80 + tile pipeline but memory maps and I/O
+// behaviour still belong in explicit board profiles.
 #pragma once
 
 #include <array>
@@ -18,6 +15,7 @@ enum class galaxian_rom_set : uint8_t {
     unknown,
     phoenix,
     mooncrst,
+    uniwars,
 };
 
 struct galaxian_roms {
@@ -38,11 +36,11 @@ struct galaxian_roms {
     // Phoenix: two 256-byte palette PROMs, 4 bits per gun.
     std::array<uint8_t, 0x0200> palette_prom{};
 
-    // Moon Cresta: 32-byte palette PROM (the mmi6331.6l). Loader
-    // populates the first 32 bytes; remainder is zero.
+    // Moon Cresta / UniWar S: 32-byte palette PROM. The loader populates the
+    // complete array with the set-specific PROM.
     std::array<uint8_t, 32> mooncrst_palette_prom{};
 
-    // Moon Cresta: 4 x 0x800 character ROMs concatenated to 0x2000.
+    // Moon Cresta / UniWar S: 4 x 0x800 character ROMs concatenated to 0x2000.
     std::array<uint8_t, 0x2000> char_rom{};
 
     // True iff the populated fields match the set the load was performed

@@ -194,6 +194,17 @@ constexpr std::array<const char*, 4> kMooncrstCharRoms = {
 
 constexpr const char* kMooncrstPaletteRom = "mmi6331.6l";
 
+constexpr std::array<const char*, 8> kUniwarsProgram = {
+    "f07_1a.bin", "h07_2a.bin", "k07_3a.bin", "m07_4a.bin",
+    "d08p_5a.bin", "gg6", "m08p_7a.bin", "n08p_8a.bin",
+};
+
+constexpr std::array<const char*, 4> kUniwarsCharRoms = {
+    "egg10", "h01_2.bin", "egg9", "k01_2.bin",
+};
+
+constexpr const char* kUniwarsPaletteRom = "uniwars.clr";
+
 template <std::size_t RegionSize, std::size_t N>
 bool load_region(const source_reader& source,
                  const std::array<std::pair<const char*, std::size_t>, N>&
@@ -267,6 +278,58 @@ bool load_mooncrst_palette(const source_reader& source,
     return true;
 }
 
+bool load_fixed_2k_roms(const source_reader& source,
+                        const std::array<const char*, 8>& files,
+                        std::array<uint8_t, kProgramSize>& destination,
+                        std::string& error) {
+    destination.fill(0xff);
+    for (std::size_t index = 0; index < files.size(); ++index) {
+        std::vector<uint8_t> bytes;
+        if (!source.read(files[index], bytes) || bytes.size() != 0x800) {
+            error += "Galaxian-family ROM missing or invalid: ";
+            error += files[index];
+            error += '\n';
+            return false;
+        }
+        std::copy(bytes.begin(), bytes.end(),
+                  destination.begin() + index * 0x800);
+    }
+    return true;
+}
+
+bool load_fixed_2k_graphics(const source_reader& source,
+                            const std::array<const char*, 4>& files,
+                            std::array<uint8_t, 0x2000>& destination,
+                            std::string& error) {
+    destination.fill(0);
+    for (std::size_t index = 0; index < files.size(); ++index) {
+        std::vector<uint8_t> bytes;
+        if (!source.read(files[index], bytes) || bytes.size() != 0x800) {
+            error += "Galaxian-family graphics ROM missing or invalid: ";
+            error += files[index];
+            error += '\n';
+            return false;
+        }
+        std::copy(bytes.begin(), bytes.end(),
+                  destination.begin() + index * 0x800);
+    }
+    return true;
+}
+
+bool load_palette32(const source_reader& source, const char* name,
+                    std::array<uint8_t, 32>& destination,
+                    std::string& error) {
+    std::vector<uint8_t> bytes;
+    if (!source.read(name, bytes) || bytes.size() < destination.size()) {
+        error += "Galaxian-family palette PROM missing or invalid: ";
+        error += name;
+        error += '\n';
+        return false;
+    }
+    std::copy_n(bytes.begin(), destination.size(), destination.begin());
+    return true;
+}
+
 galaxian_roms load_phoenix(const source_reader& source, std::string& error) {
     galaxian_roms roms;
     if (!load_region<kProgramSize>(source, kPhoenixProgram, roms.program,
@@ -293,6 +356,19 @@ galaxian_roms load_mooncrst(const source_reader& source, std::string& error) {
     return roms;
 }
 
+galaxian_roms load_uniwars(const source_reader& source, std::string& error) {
+    galaxian_roms roms;
+    if (!load_fixed_2k_roms(source, kUniwarsProgram, roms.program, error))
+        return {};
+    if (!load_fixed_2k_graphics(source, kUniwarsCharRoms, roms.char_rom,
+                                error))
+        return {};
+    if (!load_palette32(source, kUniwarsPaletteRom,
+                        roms.mooncrst_palette_prom, error))
+        return {};
+    return roms;
+}
+
 }  // namespace
 
 bool galaxian_roms::complete() const {
@@ -307,9 +383,9 @@ bool galaxian_roms::complete() const {
     if (any_nonzero(program) && any_nonzero(background_graphics) &&
         any_nonzero(foreground_graphics) && any_nonzero(palette_prom))
         return true;
-    // Moon Cresta: program populated + 4 char ROMs concatenated to 0x2000
-    // (any non-zero char byte implies the load reached the file stage) +
-    // 32 palette bytes loaded.
+    // Moon Cresta / UniWar S: program populated + 4 char ROMs concatenated
+    // to 0x2000 (any non-zero char byte implies the load reached the file
+    // stage) + 32 palette bytes loaded.
     return any_nonzero(program) && any_nonzero(char_rom) &&
            any_nonzero(mooncrst_palette_prom);
 }
@@ -332,6 +408,13 @@ galaxian_rom_set galaxian_rom_loader::identify_set(const std::string& path) {
     if (source.contains("mmi6331.6l")) ++mooncrst_hits;
     if (mooncrst_hits >= 2) return galaxian_rom_set::mooncrst;
 
+    // UniWar S: Pisces-derived board with a distinctive 0x6002 graphics bank.
+    int uniwars_hits = 0;
+    if (source.contains("f07_1a.bin")) ++uniwars_hits;
+    if (source.contains("egg10")) ++uniwars_hits;
+    if (source.contains("uniwars.clr")) ++uniwars_hits;
+    if (uniwars_hits >= 2) return galaxian_rom_set::uniwars;
+
     return galaxian_rom_set::unknown;
 }
 
@@ -339,6 +422,7 @@ const char* galaxian_rom_loader::set_short_name(galaxian_rom_set set) {
     switch (set) {
     case galaxian_rom_set::phoenix: return "phoenix";
     case galaxian_rom_set::mooncrst: return "mooncrst";
+    case galaxian_rom_set::uniwars: return "uniwars";
     case galaxian_rom_set::unknown: return "";
     }
     return "";
@@ -350,6 +434,8 @@ const char* galaxian_rom_loader::set_display_name(galaxian_rom_set set) {
         return "Phoenix";
     case galaxian_rom_set::mooncrst:
         return "Moon Cresta";
+    case galaxian_rom_set::uniwars:
+        return "UniWar S";
     case galaxian_rom_set::unknown:
         return "Unsupported Galaxian-family ROM set";
     }
@@ -367,6 +453,10 @@ galaxian_rom_load_result galaxian_rom_loader::load(const std::string& path) {
     case galaxian_rom_set::mooncrst: {
         galaxian_roms roms = load_mooncrst(source, error);
         return {galaxian_rom_set::mooncrst, std::move(roms), std::move(error)};
+    }
+    case galaxian_rom_set::uniwars: {
+        galaxian_roms roms = load_uniwars(source, error);
+        return {galaxian_rom_set::uniwars, std::move(roms), std::move(error)};
     }
     case galaxian_rom_set::unknown:
         return {galaxian_rom_set::unknown, {},

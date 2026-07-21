@@ -116,8 +116,8 @@ private:
     std::thread m_thread;
 };
 
-// Per-game factory functions. Defined in galaxian_audio_phoenix.cpp and
-// galaxian_audio_mooncrst.cpp respectively. The frontend session picks
-// the right one based on the galaxian_rom_set result.
+// Per-game factory functions. The discrete Galaxian implementation exposes
+// Moon Cresta and UniWar S mixer profiles over the same hardware nodes.
 std::unique_ptr<galaxian_sound_synth> make_phoenix_sound_synth();
 std::unique_ptr<galaxian_sound_synth> make_mooncrst_sound_synth();
+std::unique_ptr<galaxian_sound_synth> make_uniwars_sound_synth();

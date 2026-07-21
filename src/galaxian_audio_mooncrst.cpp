@@ -53,6 +53,7 @@ constexpr double kR30 = 10'000.0;
 constexpr double kR31 = 47'000.0;
 constexpr double kR32 = 47'000.0;
 constexpr double kR33 = 10'000.0;
+constexpr double kGalaxianR34 = 5'100.0;
 constexpr double kMoonCrestaR34 = 15'000.0;
 constexpr double kR35 = 150'000.0;
 constexpr double kR36 = 22'000.0;
@@ -68,6 +69,7 @@ constexpr double kR49 = 10'000.0;
 constexpr double kR50 = 22'000.0;
 constexpr double kR51 = 33'000.0;
 constexpr double kR52 = 15'000.0;
+constexpr double kR91 = 10'000.0;
 
 constexpr double kC15 = 0.000001;
 constexpr double kC17 = 0.00000001;
@@ -101,6 +103,11 @@ constexpr std::array<double, 3> kBackgroundCapacitors{kC17, kC18, kC19};
 constexpr double kBackgroundMixResistance =
     1.0 / (1.0 / kR24 + 1.0 / kR27 + 1.0 / kR30);
 
+enum class discrete_mix_profile : uint8_t {
+    mooncrst,
+    galaxian,
+};
+
 double parallel(std::initializer_list<double> resistors) {
     double inverse = 0.0;
     for (const double resistor : resistors) inverse += 1.0 / resistor;
@@ -132,10 +139,58 @@ double overshoot_discharge_time(double before, double after, double trigger,
     return std::max(0.0, rc * std::log(1.0 / (1.0 - fraction)));
 }
 
+double resistor_dac(double r0_inverse, double r1_inverse) {
+    const double r0 = 1.0 / r0_inverse;
+    const double r1 = 1.0 / r1_inverse;
+    return 2.0 * r0 / (r0 + r1) - 1.0;
+}
+
+std::array<std::array<double, 16>, 4> make_tone_wave() {
+    std::array<std::array<double, 16>, 4> waves{};
+    for (int value = 0; value < 16; ++value) {
+        double r0a = 1.0 / kOpenCircuit;
+        double r1a = 1.0 / kOpenCircuit;
+        double r0b = 1.0 / kOpenCircuit;
+        double r1b = 1.0 / kOpenCircuit;
+
+        if ((value & 0x01) != 0) {
+            r1a += 1.0 / kR51;
+            r1b += 1.0 / kR51;
+        } else {
+            r0a += 1.0 / kR51;
+            r0b += 1.0 / kR51;
+        }
+        if ((value & 0x04) != 0) {
+            r1a += 1.0 / kR50;
+            r1b += 1.0 / kR50;
+        } else {
+            r0a += 1.0 / kR50;
+            r0b += 1.0 / kR50;
+        }
+        waves[0][value] = resistor_dac(r0a, r1a);
+
+        if ((value & 0x04) != 0) r1a += 1.0 / kR49;
+        else r0a += 1.0 / kR49;
+        waves[1][value] = resistor_dac(r0a, r1a);
+
+        if ((value & 0x08) != 0) r1b += 1.0 / kR52;
+        else r0b += 1.0 / kR52;
+        waves[2][value] = resistor_dac(r0b, r1b);
+
+        if ((value & 0x04) != 0) r0b += 1.0 / kR49;
+        else r1b += 1.0 / kR49;
+        waves[3][value] = resistor_dac(r0b, r1b);
+    }
+    return waves;
+}
+
 } // namespace
 
-class mooncrst_sound_synth final : public galaxian_sound_synth {
+class galaxian_discrete_sound_synth final : public galaxian_sound_synth {
 public:
+    explicit galaxian_discrete_sound_synth(discrete_mix_profile profile)
+        : m_mix_profile(profile) {}
+
     void reset() override {
         m_sound_lines.fill(0);
         m_background_bits.fill(0);
@@ -336,6 +391,14 @@ private:
             kTtlOut * m_pitch_level : 0.0;
     }
 
+    double pitch_wave() const {
+        const unsigned volume =
+            static_cast<unsigned>(m_sound_lines[kVolume1Line]) |
+            (static_cast<unsigned>(m_sound_lines[kVolume2Line]) << 1);
+        return ((m_tone_wave[volume][m_pitch_counter] + 1.0) * 0.5 *
+                kTtlOut) * m_pitch_level;
+    }
+
     double next_hit(double noise) {
         if (m_sound_lines[kHitLine] != 0)
             m_hit_envelope = 1.0;
@@ -454,6 +517,32 @@ private:
 
     double mix_output(double background, double hit, double fire,
                       double music_gain, double effects_gain) const {
+        if (m_mix_profile == discrete_mix_profile::galaxian) {
+            const double pitch = pitch_wave();
+            const double volume1 =
+                m_sound_lines[kVolume1Line] != 0 ? kR49 : 0.0;
+            const double volume2 =
+                m_sound_lines[kVolume2Line] != 0 ? kR52 : 0.0;
+            const double pre_conductance =
+                1.0 / kR51 + 1.0 / (kR50 + volume1) + 1.0 / kR50 +
+                1.0 / (kR50 + volume2) + 1.0 / kGalaxianR34;
+            const double pre_voltage =
+                (pitch / kR51 + pitch / (kR50 + volume1) +
+                 pitch / kR50 + pitch / (kR50 + volume2) +
+                 background / kGalaxianR34) /
+                pre_conductance;
+
+            const double final_conductance =
+                1.0 / kGalaxianR34 + 1.0 / kR40 + 1.0 / kR43 +
+                1.0 / kR91;
+            const double final_voltage =
+                (pre_voltage / kGalaxianR34 * music_gain +
+                 hit / kR40 * effects_gain +
+                 fire / kR43 * effects_gain) /
+                final_conductance;
+            return (final_voltage / kTtlOut) * kMixGain;
+        }
+
         double conductance = 0.0;
         double music_current = 0.0;
         double effects_current = 0.0;
@@ -489,6 +578,7 @@ private:
         return sample - m_output_dc;
     }
 
+    discrete_mix_profile m_mix_profile;
     std::array<uint8_t, 8> m_sound_lines{};
     std::array<uint8_t, 4> m_background_bits{};
     uint8_t m_pitch_latch{0xff};
@@ -513,6 +603,8 @@ private:
     double m_fire_output_cap{};
     double m_fire_mixer_cap{};
     double m_output_dc{};
+    const std::array<std::array<double, 16>, 4> m_tone_wave{
+        make_tone_wave()};
 
     const double m_gate_coefficient{one_pole_coefficient(90.0)};
     const double m_hit_highpass_coefficient{one_pole_coefficient(290.0)};
@@ -533,5 +625,11 @@ private:
 };
 
 std::unique_ptr<galaxian_sound_synth> make_mooncrst_sound_synth() {
-    return std::make_unique<mooncrst_sound_synth>();
+    return std::make_unique<galaxian_discrete_sound_synth>(
+        discrete_mix_profile::mooncrst);
+}
+
+std::unique_ptr<galaxian_sound_synth> make_uniwars_sound_synth() {
+    return std::make_unique<galaxian_discrete_sound_synth>(
+        discrete_mix_profile::galaxian);
 }

@@ -34,6 +34,22 @@ public:
 
     bool initialize(const std::string& rom_path, const std::string&,
                     const emulator_settings& settings) override {
+        const galaxian_rom_set detected =
+            galaxian_rom_loader::identify_set(rom_path);
+        const bool expected_family =
+            (m_set == galaxian_rom_set::phoenix &&
+             detected == galaxian_rom_set::phoenix) ||
+            (m_set == galaxian_rom_set::mooncrst &&
+             (detected == galaxian_rom_set::mooncrst ||
+              detected == galaxian_rom_set::uniwars));
+        if (!expected_family) {
+            std::fprintf(stderr,
+                         "Selected ROM is not supported by this Galaxian session: %s\n",
+                         rom_path.c_str());
+            return false;
+        }
+        m_set = detected;
+
         m_input = std::make_unique<arcade_input>();
         if (!m_gpu_renderer->initialize(settings)) return false;
         if (!m_input->initialize(galaxian_rom_loader::set_short_name(m_set)))
@@ -43,6 +59,10 @@ public:
             m_machine = std::make_unique<galaxian_machine>(
                 make_phoenix_board_interface());
             synth = make_phoenix_sound_synth();
+        } else if (m_set == galaxian_rom_set::uniwars) {
+            m_machine = std::make_unique<galaxian_machine>(
+                make_uniwars_board_interface());
+            synth = make_uniwars_sound_synth();
         } else {
             m_machine = std::make_unique<galaxian_machine>(
                 make_mooncrst_board_interface());
@@ -86,7 +106,8 @@ public:
                             m_audio ? m_audio->control(0) : 0,
                             m_audio ? m_audio->control(1) : 0);
             } else {
-                std::printf("Moon Cresta frame %lu audio=%d\n",
+                std::printf("%s frame %lu audio=%d\n",
+                            galaxian_rom_loader::set_display_name(m_set),
                             m_frame_number,
                             m_audio ? m_audio->peak_sample() : 0);
             }

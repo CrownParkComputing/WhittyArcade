@@ -87,6 +87,9 @@ int main() {
     assert_registered(galaxian_rom_loader::set_short_name(
                           galaxian_rom_set::mooncrst),
                       arcade_board_type::mooncrst);
+    assert_registered(galaxian_rom_loader::set_short_name(
+                          galaxian_rom_set::uniwars),
+                      arcade_board_type::mooncrst);
     assert_registered(shinobi::shinobi_rom_loader::set_short_name(
                           shinobi::shinobi_rom_set::shinobi_us),
                       arcade_board_type::shinobi);
@@ -119,6 +122,8 @@ int main() {
           arcade_board_type::phoenix, "phoenix");
     probe("mooncrst", {"mc1", "mcs_b"},
           arcade_board_type::mooncrst, "mooncrst");
+    probe("uniwars", {"f07_1a.bin", "egg10"},
+          arcade_board_type::mooncrst, "uniwars");
     probe("shinobi", {"epr-11360.a7"}, arcade_board_type::shinobi,
           "shinobi4");
 

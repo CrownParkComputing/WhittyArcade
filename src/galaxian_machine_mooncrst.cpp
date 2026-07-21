@@ -1,11 +1,11 @@
-// galaxian_machine_mooncrst.cpp - Moon Cresta (Nichibutsu, 1977) board.
+// galaxian_machine_mooncrst.cpp - discrete-sound Galaxian board profiles.
 //
 // Ported from the Kotlin reference in AndroidStudioProjects/zarcade
-// machine-galaxian (MoonCrestaBoard / GalaxianVideo / GalaxianRoms).
-// Video is the Galaxian generator (32x32 8x8 background tilemap + 8
-// 16x16 sprites + a 17-bit-LFSR starfield) rotated ROT90, with the
-// Moon Cresta graphics-bank and memory-map overrides. The Z80 core is
-// the shared chips/z80.h implementation.
+// machine-galaxian (MoonCrestaBoard, PiscesBoard, GalaxianVideo and
+// GalaxianRoms). Video is the shared 32x32 tilemap + 8 sprites + 17-bit LFSR
+// starfield rotated ROT90. Board profiles contain Moon Cresta's alternate
+// memory map/decryption and UniWar S's Pisces graphics bank at 0x6002. The
+// CPU remains the shared native chips/z80.h implementation.
 
 #include "galaxian_machine.h"
 #include "galaxian_audio.h"
@@ -25,11 +25,28 @@
 
 namespace {
 
-constexpr std::array<const char*, 8> kProgramRoms = {
+constexpr std::array<const char*, 8> kMooncrstProgramRoms = {
     "mc1", "mc2", "mc3", "mc4", "mc5.7r", "mc6.8d", "mc7.8e", "mc8"};
-constexpr std::array<const char*, 4> kCharRoms = {
+constexpr std::array<const char*, 4> kMooncrstCharRoms = {
     "mcs_b", "mcs_d", "mcs_a", "mcs_c"};
-constexpr char kPaletteRom[] = "mmi6331.6l";
+constexpr char kMooncrstPaletteRom[] = "mmi6331.6l";
+
+constexpr std::array<const char*, 8> kUniwarsProgramRoms = {
+    "f07_1a.bin", "h07_2a.bin", "k07_3a.bin", "m07_4a.bin",
+    "d08p_5a.bin", "gg6", "m08p_7a.bin", "n08p_8a.bin"};
+constexpr std::array<const char*, 4> kUniwarsCharRoms = {
+    "egg10", "h01_2.bin", "egg9", "k01_2.bin"};
+constexpr char kUniwarsPaletteRom[] = "uniwars.clr";
+
+enum class galaxian_discrete_profile : uint8_t {
+    mooncrst,
+    uniwars,
+};
+
+const char* profile_name(galaxian_discrete_profile profile) {
+    return profile == galaxian_discrete_profile::uniwars ? "UniWar S" :
+                                                           "Moon Cresta";
+}
 
 bool load_zip_entry(unzFile archive, const char* name,
                     std::vector<uint8_t>& bytes) {
@@ -114,8 +131,20 @@ constexpr int kClocksPerFrame = kCpuHz / static_cast<int>(kRefreshHz);
 
 }  // namespace
 
-class mooncrst_board_interface final : public galaxian_board_interface {
+class galaxian_discrete_board_interface final :
+        public galaxian_board_interface {
 public:
+    explicit galaxian_discrete_board_interface(
+            galaxian_discrete_profile profile)
+        : m_profile(profile),
+          high_scores(profile == galaxian_discrete_profile::mooncrst ?
+                          "mooncrst" : "uniwars") {
+        if (m_profile == galaxian_discrete_profile::uniwars) {
+            dip1 = 0x00;
+            dip2 = 0x01;
+        }
+    }
+
     void configure(galaxian_machine* self) override {
         m_machine = self;
         self->set_dimensions(kScreenWidth, kScreenHeight, kRefreshHz,
@@ -128,18 +157,40 @@ public:
     uint8_t cpu_read(uint16_t address, int /*frame_clock*/) override {
         const uint16_t a = address & 0xffff;
         if (a < 0x4000) return program[a];
-        if (a >= 0x8000 && a < 0x8800) return ram[a - 0x8000];
-        if (a >= 0x9000 && a < 0x9800) return vram[a - 0x9000];
-        if (a >= 0x9800 && a < 0xa000) return objram[a - 0x9800];
-        if (a >= 0xa000 && a < 0xa800) return in0;
-        if (a >= 0xa800 && a < 0xb000) return in1;
-        if (a >= 0xb000 && a < 0xb800) return dsw;
+        if (m_profile == galaxian_discrete_profile::uniwars) {
+            if (a >= 0x4000 && a < 0x4800) return ram[a - 0x4000];
+            if (a >= 0x5000 && a < 0x5800)
+                return vram[(a - 0x5000) & 0x03ff];
+            if (a >= 0x5800 && a < 0x6000)
+                return objram[(a - 0x5800) & 0x00ff];
+            if (a >= 0x6000 && a < 0x6800) return in0;
+            if (a >= 0x6800 && a < 0x7000) return in1;
+            if (a >= 0x7000 && a < 0x7800) return dsw;
+        } else {
+            if (a >= 0x8000 && a < 0x8800) return ram[a - 0x8000];
+            if (a >= 0x9000 && a < 0x9800)
+                return vram[(a - 0x9000) & 0x03ff];
+            if (a >= 0x9800 && a < 0xa000)
+                return objram[(a - 0x9800) & 0x00ff];
+            if (a >= 0xa000 && a < 0xa800) return in0;
+            if (a >= 0xa800 && a < 0xb000) return in1;
+            if (a >= 0xb000 && a < 0xb800) return dsw;
+        }
         return 0xff;
     }
 
     void cpu_write(uint16_t address, uint8_t data) override {
         const uint16_t a = address & 0xffff;
         const uint8_t v = data & 0xff;
+        if (m_profile == galaxian_discrete_profile::uniwars) {
+            cpu_write_uniwars(a, v);
+            return;
+        }
+        cpu_write_mooncrst(a, v);
+    }
+
+private:
+    void cpu_write_mooncrst(uint16_t a, uint8_t v) {
         if (a >= 0x8000 && a < 0x8800) {
             ram[a - 0x8000] = v;
         } else if (a >= 0x9000 && a < 0x9800) {
@@ -176,6 +227,46 @@ public:
         }
     }
 
+    void cpu_write_uniwars(uint16_t a, uint8_t v) {
+        if (a >= 0x4000 && a < 0x4800) {
+            ram[a - 0x4000] = v;
+        } else if (a >= 0x5000 && a < 0x5800) {
+            vram[(a - 0x5000) & 0x03ff] = v;
+        } else if (a >= 0x5800 && a < 0x6000) {
+            objram[(a - 0x5800) & 0x00ff] = v;
+        } else if (a >= 0x6000 && a < 0x6800) {
+            const int off = a & 0x07;
+            if (off == 2) {
+                // Pisces replaces the Galaxian coin-lockout output with a
+                // graphics-bank latch (tiles +0x100, sprites +0x40).
+                gfx_bank[0] = v & 1;
+            } else if (off >= 4) {
+                if (auto& h = m_machine->sound_write_handler())
+                    h(mooncrst_audio_port::lfo_base |
+                          static_cast<unsigned>(off - 4),
+                      v);
+            }
+        } else if (a >= 0x6800 && a < 0x7000) {
+            if (auto& h = m_machine->sound_write_handler())
+                h(mooncrst_audio_port::sound_base |
+                      static_cast<unsigned>(a & 0x07),
+                  v);
+        } else if (a >= 0x7000 && a < 0x7800) {
+            switch (a & 0x07) {
+                case 1: nmi_enabled = (v & 1) != 0; break;
+                case 4: stars_enabled = (v & 1) != 0; break;
+                case 6: flip_x = (v & 1) != 0; break;
+                case 7: flip_y = (v & 1) != 0; break;
+                default: break;
+            }
+        } else if (a >= 0x7800 && a < 0x8000) {
+            if (auto& h = m_machine->sound_write_handler())
+                h(mooncrst_audio_port::pitch, v);
+        }
+    }
+
+public:
+
     void on_frame_start() override {
         nmi_armed = nmi_enabled;
     }
@@ -207,6 +298,7 @@ public:
     }
 
     void service_high_scores() override {
+        if (m_profile != galaxian_discrete_profile::mooncrst) return;
         high_scores.update(
             [this](std::uint32_t address) {
                 return cpu_read(static_cast<std::uint16_t>(address), 0);
@@ -217,6 +309,7 @@ public:
     }
 
     void flush_high_scores() override {
+        if (m_profile != galaxian_discrete_profile::mooncrst) return;
         high_scores.flush([this](std::uint32_t address) {
             return cpu_read(static_cast<std::uint16_t>(address), 0);
         });
@@ -262,51 +355,67 @@ private:
         char_rom.clear();
         std::vector<uint8_t> bytes;
 
-        for (std::size_t i = 0; i < kProgramRoms.size(); ++i) {
-            if (!loader(kProgramRoms[i], bytes) || bytes.size() != 0x800) {
-                *err = std::string("Moon Cresta ") + rom_label +
-                       " missing: " + kProgramRoms[i];
+        const auto& program_roms =
+            m_profile == galaxian_discrete_profile::uniwars ?
+                kUniwarsProgramRoms : kMooncrstProgramRoms;
+        const auto& char_roms =
+            m_profile == galaxian_discrete_profile::uniwars ?
+                kUniwarsCharRoms : kMooncrstCharRoms;
+        const char* palette_rom =
+            m_profile == galaxian_discrete_profile::uniwars ?
+                kUniwarsPaletteRom : kMooncrstPaletteRom;
+        const char* title = profile_name(m_profile);
+
+        for (std::size_t i = 0; i < program_roms.size(); ++i) {
+            if (!loader(program_roms[i], bytes) || bytes.size() != 0x800) {
+                *err = std::string(title) + " " + rom_label +
+                       " missing: " + program_roms[i];
                 return false;
             }
             std::copy(bytes.begin(), bytes.end(),
                       program.begin() + i * 0x800);
         }
-        decode_mooncrst(program);
+        if (m_profile == galaxian_discrete_profile::mooncrst)
+            decode_mooncrst(program);
 
-        for (const char* name : kCharRoms) {
+        for (const char* name : char_roms) {
             if (!loader(name, bytes) || bytes.size() != 0x800) {
-                *err = std::string("Moon Cresta graphics ROM missing: ") +
-                       name;
+                *err = std::string(title) + " graphics ROM missing: " + name;
                 return false;
             }
             char_rom.insert(char_rom.end(), bytes.begin(), bytes.end());
         }
 
         std::vector<uint8_t> prom;
-        if (!loader(kPaletteRom, prom) || prom.size() < 32) {
-            *err = "Moon Cresta palette PROM missing: ";
-            *err += kPaletteRom;
+        if (!loader(palette_rom, prom) || prom.size() < 32) {
+            *err = std::string(title) + " palette PROM missing: ";
+            *err += palette_rom;
             return false;
         }
         plane_split = char_rom.size() / 2;
         build_palette(prom);
-        std::printf("Moon Cresta: loaded 8 program, 4 graphics and 1 palette ROM from %s\n",
-                    source_label);
+        std::printf(
+            "%s: loaded 8 program, 4 graphics and 1 palette ROM from %s\n",
+            title, source_label);
         return true;
     }
 
     void apply_input(const input_state& s, uint8_t* ports,
                      std::size_t port_count) override {
-        // MAME mooncrst IN0: coin 1/2, P1 left/right/fire, cabinet DIP.
+        // Both profiles use the Galaxian active-high joystick layout.
         uint8_t port0 = dip0 & 0x20;
-        // Moon Cresta's inputs are active-high (unlike Phoenix and Shinobi).
         if (s.coin1) port0 |= 0x01;
-        if (s.coin2) port0 |= 0x02;
+        if (m_profile == galaxian_discrete_profile::mooncrst && s.coin2)
+            port0 |= 0x02;
         if (s.left_stick_x < 0x60) port0 |= 0x04;
         if (s.left_stick_x > 0x90) port0 |= 0x08;
         if (s.buttons[0]) port0 |= 0x10;
-        // IN0 bit 6 is the board's undocumented RESET input, not service
-        // test.  Keep it inactive rather than resetting the game from F2.
+        // Moon Cresta's bit 6 is an undocumented RESET input. UniWar S uses
+        // the standard Galaxian test/service inputs on bits 6/7.
+        if (m_profile == galaxian_discrete_profile::uniwars) {
+            if (s.test) port0 |= 0x40;
+            if (s.service) port0 |= 0x80;
+        }
         in0 = port0;
         if (port_count >= 1) ports[0] = port0;
 
@@ -421,6 +530,8 @@ private:
     }
 
     int extend_tile_code(int code) const {
+        if (m_profile == galaxian_discrete_profile::uniwars)
+            return code | (gfx_bank[0] << 8);
         if (gfx_bank[2] != 0 && (code & 0xc0) == 0x80)
             return (code & 0x3f) | (gfx_bank[0] << 6) |
                    (gfx_bank[1] << 7) | 0x0100;
@@ -428,6 +539,8 @@ private:
     }
 
     int extend_sprite_code(int code) const {
+        if (m_profile == galaxian_discrete_profile::uniwars)
+            return code | (gfx_bank[0] << 6);
         if (gfx_bank[2] != 0 && (code & 0x30) == 0x20)
             return (code & 0x0f) | (gfx_bank[0] << 4) |
                    (gfx_bank[1] << 5) | 0x40;
@@ -547,6 +660,7 @@ private:
         }
     }
 
+    galaxian_discrete_profile m_profile;
     galaxian_machine* m_machine{nullptr};
     std::vector<uint8_t> program;
     std::array<uint8_t, 0x800> ram{};
@@ -576,9 +690,15 @@ private:
 
     bool nmi_enabled{false};
     bool nmi_armed{false};
-    high_score_runtime high_scores{"mooncrst"};
+    high_score_runtime high_scores;
 };
 
 std::unique_ptr<galaxian_board_interface> make_mooncrst_board_interface() {
-    return std::make_unique<mooncrst_board_interface>();
+    return std::make_unique<galaxian_discrete_board_interface>(
+        galaxian_discrete_profile::mooncrst);
+}
+
+std::unique_ptr<galaxian_board_interface> make_uniwars_board_interface() {
+    return std::make_unique<galaxian_discrete_board_interface>(
+        galaxian_discrete_profile::uniwars);
 }

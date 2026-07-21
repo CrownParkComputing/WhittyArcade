@@ -52,6 +52,18 @@ WhittyArcade does not provide them or link to downloads.
 Open **Controllers / Keyboard** in the launcher to inspect or change every
 binding. Profiles can be set globally, per arcade board, or per game.
 
+## UniWar S
+
+Import the standard MAME `uniwars` ZIP through **ROM Library / Import**. No
+parent or firmware archive is required, and no ROM data is included here.
+
+- `5`: insert coin; `1`: start Player 1
+- A/D: move left/right; Z: fire
+- Cocktail Player 2: J/L to move, U to fire; `2` to start
+
+All cabinet and player actions can be reassigned in the UniWar S controller
+profile.
+
 ## Time Crisis mouse gun
 
 Use the World TS2 Ver.B `timecris` set with `namcoc71.zip` in the same ROM

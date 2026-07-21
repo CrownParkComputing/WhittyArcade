@@ -79,8 +79,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 Use `GALAXIAN_PHOENIX_TEST_ROM`, `GALAXIAN_MOONCRST_TEST_ROM`,
-`MODEL1_VF_TEST_ROM`, `MODEL1_SWA_TEST_ROM` and `MODEL1_WINGWAR_TEST_ROM` for
-the other existing integrations.
+`GALAXIAN_UNIWARS_TEST_ROM`, `MODEL1_VF_TEST_ROM`, `MODEL1_SWA_TEST_ROM` and
+`MODEL1_WINGWAR_TEST_ROM` for the other existing integrations.
 
 ## Completion checklist
 
