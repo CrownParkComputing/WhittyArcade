@@ -363,9 +363,10 @@ switch word, three calibrated ADC values and credit counters once per second.
 - `third_party/v60` — standalone NEC V60 CPU core
 - `tests` — catalog/lifecycle, ROM, CPU/bus, audio, video and boot regressions
 
-See [architecture](docs/architecture.md) and
-[adding games and boards](docs/adding_games_and_boards.md) for extension
-contracts and the required test path.
+See [architecture](docs/architecture.md),
+[adding games and boards](docs/adding_games_and_boards.md), and the
+[cross-platform build scope](docs/cross_platform_build_scope.md) for extension
+contracts, the required test path, and the Android-first release plan.
 
 ## Credits and licensing
 
