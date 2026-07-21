@@ -366,7 +366,9 @@ switch word, three calibrated ADC values and credit counters once per second.
 See [architecture](docs/architecture.md),
 [adding games and boards](docs/adding_games_and_boards.md), and the
 [cross-platform build scope](docs/cross_platform_build_scope.md) for extension
-contracts, the required test path, and the Android-first release plan.
+contracts, the required test path, and the Android-first release plan. The
+separate [Google Play paid-distribution assessment](docs/google_play_sale_feasibility.md)
+records the commercial licence, policy, privacy and store-release gates.
 
 ## Credits and licensing
 

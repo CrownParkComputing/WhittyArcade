@@ -109,6 +109,11 @@ existing `std::filesystem` ROM loaders see it.
 
 ## Workstream 1: Android ARM64
 
+Paid Google Play distribution has additional IP, dependency, privacy, EULA and
+store-review gates. See the dated
+[Google Play paid-distribution assessment](google_play_sale_feasibility.md);
+an Android APK/AAB is not considered sale-ready merely because it builds.
+
 ### Target and packaging
 
 - First public target: `arm64-v8a`, landscape phone/tablet, minimum Android 8
@@ -117,8 +122,10 @@ existing `std::filesystem` ROM loaders see it.
   Gradle Plugin `externalNativeBuild` calling the NDK CMake toolchain.
 - Build with the latest stable SDK/NDK selected when implementation begins,
   and ensure every native library is compatible with 16 KB page-size devices.
-- Publish a signed standalone APK for GitHub downloads. An AAB and store-policy
-  review are separate release steps, not prerequisites for sideload testing.
+- Produce a signed standalone APK for sideload/device testing. Public GitHub
+  APK distribution is a business decision: a paid Play package should not also
+  be published there as the same free binary. Google Play delivery uses an AAB
+  and the additional commercial gates linked above.
 
 SDL documents the required Activity/JNI and shared-library arrangement in its
 [Android README](https://wiki.libsdl.org/SDL2/README-android), while Android's
@@ -296,7 +303,7 @@ first native `.exe`.
 | Platform | CI deliverable | Public asset |
 |---|---|---|
 | CachyOS x86-64 | Existing build, 46 tests, package smoke test | `.tar.gz` + checksum |
-| Android ARM64 | NDK build/tests, APK install/smoke on emulator, physical-device release gate | signed `.apk` + checksum |
+| Android ARM64 | NDK build/tests, APK install/smoke on emulator, physical-device release gate | AAB for Play; signed `.apk` + checksum only if direct public distribution is selected |
 | Windows x86-64 | UCRT64 build/tests and clean-VM package smoke | `.zip` + checksum |
 | Generic Linux x86-64 | baseline build/tests plus AppImage extraction/run smoke | `.AppImage` + checksum |
 | Flatpak x86-64 | manifest build and sandbox smoke | bundle/repository metadata as selected |
@@ -308,8 +315,9 @@ Every release job must:
 - strip release binaries where appropriate and generate SHA-256 checksums;
 - include the proprietary licence and third-party notices;
 - publish to the public releases repository only after platform acceptance;
-- extend the anonymous GitHub asset-download counter to recognise APK, ZIP,
-  AppImage and selected Flatpak assets while excluding checksum downloads.
+- extend the anonymous GitHub asset-download counter to recognise any
+  directly published APK, ZIP, AppImage and selected Flatpak assets while
+  excluding checksum downloads. Play-only installs use Play Console metrics.
 
 ## Planning estimate and sequence
 
