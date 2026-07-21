@@ -63,7 +63,8 @@ jobs:
           cmake -E copy LICENSE artifact/LICENSE.txt
           cmake -E copy THIRD_PARTY_NOTICES.md artifact/THIRD_PARTY_NOTICES.md
           chmod +x artifact/WhittyArcade
-          sha256sum artifact/WhittyArcade > artifact/WhittyArcade.sha256
+          cd artifact
+          sha256sum WhittyArcade > WhittyArcade.sha256
 
       - name: Upload CachyOS x86_64 build
         uses: actions/upload-artifact@v7
