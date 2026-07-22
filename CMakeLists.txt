@@ -347,7 +347,11 @@ add_executable(input_mapping_test
 )
 target_include_directories(input_mapping_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(input_mapping_test PRIVATE ${SDL2_LIBRARIES})
+if(TARGET SDL2::SDL2)
+    target_link_libraries(input_mapping_test PRIVATE SDL2::SDL2)
+else()
+    target_link_libraries(input_mapping_test PRIVATE ${SDL2_LIBRARIES})
+endif()
 target_compile_options(input_mapping_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME input_mapping_test COMMAND input_mapping_test)

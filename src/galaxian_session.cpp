@@ -105,15 +105,15 @@ public:
             m_machine->screen_width(), m_machine->screen_height());
         if (++m_frame_number % 600 == 0 && session_trace_enabled()) {
             if (m_set == galaxian_rom_set::phoenix) {
-                std::printf("Phoenix frame %lu audio=%d latch=%02x/%02x\n",
-                            m_frame_number,
+                std::printf("Phoenix frame %llu audio=%d latch=%02x/%02x\n",
+                            static_cast<unsigned long long>(m_frame_number),
                             m_audio ? m_audio->peak_sample() : 0,
                             m_audio ? m_audio->control(0) : 0,
                             m_audio ? m_audio->control(1) : 0);
             } else {
-                std::printf("%s frame %lu audio=%d\n",
+                std::printf("%s frame %llu audio=%d\n",
                             galaxian_rom_loader::set_display_name(m_set),
-                            m_frame_number,
+                            static_cast<unsigned long long>(m_frame_number),
                             m_audio ? m_audio->peak_sample() : 0);
             }
         }

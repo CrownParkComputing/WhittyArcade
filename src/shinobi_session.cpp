@@ -78,8 +78,8 @@ public:
             reinterpret_cast<const uint8_t*>(m_machine->frame_buffer()),
             m_machine->screen_width(), m_machine->screen_height());
         if (++m_frame_number % 600 == 0 && session_trace_enabled()) {
-            std::printf("Shinobi frame %lu audio=%d\n",
-                        m_frame_number,
+            std::printf("Shinobi frame %llu audio=%d\n",
+                        static_cast<unsigned long long>(m_frame_number),
                         m_audio ? m_audio->peak_sample() : 0);
         }
     }
