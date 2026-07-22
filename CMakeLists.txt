@@ -22,6 +22,17 @@ pkg_check_modules(MINIZIP REQUIRED IMPORTED_TARGET minizip)
 pkg_check_modules(SDL2_TTF REQUIRED IMPORTED_TARGET SDL2_ttf)
 pkg_check_modules(MPG123 REQUIRED IMPORTED_TARGET libmpg123)
 
+# FindGLEW can be backed by either CMake's module or a distribution-provided
+# config package. Prefer its imported target because openSUSE's config does
+# not populate the legacy GLEW_LIBRARIES variable.
+if(TARGET GLEW::GLEW)
+    set(WHITTY_GLEW_TARGET GLEW::GLEW)
+elseif(TARGET GLEW::glew)
+    set(WHITTY_GLEW_TARGET GLEW::glew)
+else()
+    set(WHITTY_GLEW_TARGET ${GLEW_LIBRARIES})
+endif()
+
 # Standalone MC68020 core. Musashi's 020 effective-address implementation
 # shares compile-time model predicates with the 010 and EC020 paths, so those
 # lower variants must remain enabled even though this machine selects a 68020.
@@ -262,10 +273,11 @@ target_include_directories(WhittyArcade PRIVATE
 
 # Link libraries
 target_link_libraries(WhittyArcade
+    PRIVATE
     ${OPENGL_LIBRARIES}
     ${SDL2_LIBRARIES}
     ${OPENAL_LIBRARY}
-    ${GLEW_LIBRARIES}
+    ${WHITTY_GLEW_TARGET}
     musashi
     m37710
     v60
