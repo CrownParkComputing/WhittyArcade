@@ -1,4 +1,5 @@
 #include "rom_library.h"
+#include "test_platform.h"
 
 #include <minizip/zip.h>
 
@@ -6,7 +7,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -30,12 +30,14 @@ void make_zip(const fs::path& path, const std::vector<std::string>& entries) {
 
 int main() {
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-rom-library-test-" + std::to_string(getpid()));
+        ("whittyarcade-rom-library-test-" +
+         std::to_string(test_process_id()));
     const fs::path source = root / "mame";
     const fs::path data = root / "data";
     fs::create_directories(source);
-    setenv("XDG_DATA_HOME", data.c_str(), 1);
-    setenv("WHITTYARCADE_NO_LEGACY_ROM_SCAN", "1", 1);
+    if (!test_set_environment("XDG_DATA_HOME", data)) return 1;
+    if (!test_set_environment("WHITTYARCADE_NO_LEGACY_ROM_SCAN", "1"))
+        return 1;
 
     // A merged archive may use per-set subdirectories; identification is by
     // basename and import must retain the archive unchanged.

@@ -83,6 +83,7 @@ enum class ridge_racer_rom_set : uint8_t {
     cyber_commando,
     time_crisis,
     dirt_dash,
+    aqua_jet,
 };
 
 // ROM loader class - supports ZIP files

@@ -34,7 +34,7 @@ struct rom_set_manifest {
 constexpr std::size_t arcade_board_count = 6;
 using arcade_board_list =
     std::array<arcade_board_descriptor, arcade_board_count>;
-constexpr std::size_t arcade_game_count = 19;
+constexpr std::size_t arcade_game_count = 20;
 using arcade_game_list =
     std::array<rom_set_manifest, arcade_game_count>;
 

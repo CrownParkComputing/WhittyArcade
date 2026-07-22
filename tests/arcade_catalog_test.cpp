@@ -1,4 +1,5 @@
 #include "arcade_catalog.h"
+#include "test_platform.h"
 #include "galaxian_rom.h"
 #include "model1_rom.h"
 #include "model2_rom.h"
@@ -11,7 +12,6 @@
 #include <fstream>
 #include <set>
 #include <string>
-#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -69,7 +69,8 @@ int main() {
              ridge_racer_rom_set::victory_lap,
              ridge_racer_rom_set::cyber_commando,
              ridge_racer_rom_set::time_crisis,
-             ridge_racer_rom_set::dirt_dash})
+             ridge_racer_rom_set::dirt_dash,
+             ridge_racer_rom_set::aqua_jet})
         assert_registered(rom_loader::set_short_name(set),
                           arcade_board_type::system22);
     for (model1_rom_set set : {
@@ -101,7 +102,7 @@ int main() {
     // Exercise the central probe using minimal directory fixtures. This
     // checks routing only; individual loaders have separate full-ROM tests.
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-catalog-test-" + std::to_string(getpid()));
+        ("whittyarcade-catalog-test-" + std::to_string(test_process_id()));
     fs::create_directories(root);
     const auto probe = [&](const char* name,
                            std::initializer_list<const char*> entries,
@@ -120,6 +121,11 @@ int main() {
           "timecris");
     probe("dirtdash", {"dt2verc.rom1"}, arcade_board_type::system22,
           "dirtdash");
+    probe("aquajet", {"aj2verb.1"}, arcade_board_type::system22,
+          "aquajet");
+    // Collections that keep the hyphenated dump name must probe identically.
+    probe("aquajet-alias", {"aj2ver-b.1"}, arcade_board_type::system22,
+          "aquajet");
     probe("model1", {"epr-15638.14", "epr-15639.15"},
           arcade_board_type::model1, "vformula");
     probe("model2", {"epr-17888c.12", "epr-17889c.13"},

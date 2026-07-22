@@ -1,4 +1,5 @@
 #include "input_mapping.h"
+#include "platform_paths.h"
 
 #include <SDL2/SDL.h>
 
@@ -66,11 +67,7 @@ input_binding controller_axis(SDL_GameControllerAxis axis, int direction) {
 }
 
 fs::path config_root() {
-    if (const char* config_home = std::getenv("XDG_CONFIG_HOME"))
-        return fs::path(config_home);
-    if (const char* user_home = std::getenv("HOME"))
-        return fs::path(user_home) / ".config";
-    return {};
+    return whitty_platform::config_root();
 }
 
 std::optional<int> parse_integer(std::string_view text) {

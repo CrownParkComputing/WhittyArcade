@@ -140,6 +140,7 @@ void system22_bus::update_driving_inputs(const input_state& state) {
         case system22_driving_profile::cyber_commando:
         case system22_driving_profile::time_crisis:
         case system22_driving_profile::dirt_dash:
+        case system22_driving_profile::aqua_jet:
             return RIDGE_RACER_CALIBRATION;
         }
         return RIDGE_RACER_CALIBRATION;
@@ -184,8 +185,9 @@ void system22_bus::update_cyber_commando_inputs(const input_state& state) {
 void system22_bus::update_game_inputs(const input_state& state) {
     if (m_driving_profile == system22_driving_profile::time_crisis)
         update_time_crisis_inputs(state);
-    else if (m_driving_profile == system22_driving_profile::dirt_dash)
-        return; // Dirt Dash's Super System 22 M37710 owns its cabinet I/O.
+    else if (m_driving_profile == system22_driving_profile::dirt_dash ||
+             m_driving_profile == system22_driving_profile::aqua_jet)
+        return; // These Super System 22 M37710s own their cabinet I/O.
     else if (m_driving_profile == system22_driving_profile::cyber_commando)
         update_cyber_commando_inputs(state);
     else

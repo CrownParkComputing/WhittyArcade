@@ -1,4 +1,5 @@
 #include "input_mapping.h"
+#include "test_platform.h"
 
 #include <SDL2/SDL.h>
 
@@ -6,7 +7,6 @@
 #include <fstream>
 #include <set>
 #include <string>
-#include <unistd.h>
 
 int main() {
     namespace fs = std::filesystem;
@@ -126,7 +126,7 @@ int main() {
         return 23;
 
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-input-test-" + std::to_string(getpid()));
+        ("whittyarcade-input-test-" + std::to_string(test_process_id()));
     const fs::path path = root / "nested" / "input.ini";
     fs::remove_all(root);
     if (!save_input_mappings(config, path.string())) return 8;

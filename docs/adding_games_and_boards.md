@@ -73,7 +73,7 @@ cmake -S . -B build \
   -DMODEL1_TEST_ROM=/path/to/vformula.zip \
   -DMODEL2_TEST_ROM=/path/to/srallyc.zip \
   -DSHINOBI_TEST_ROM=/path/to/shinobi.zip \
-  '-DSYSTEM22_TEST_ROMS=/path/to/ridgerac.zip;/path/to/raverace.zip;/path/to/timecris.zip;/path/to/dirtdash.zip'
+  '-DSYSTEM22_TEST_ROMS=/path/to/ridgerac.zip;/path/to/raverace.zip;/path/to/timecris.zip;/path/to/dirtdash.zip;/path/to/aquajet.zip'
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```

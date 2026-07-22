@@ -153,10 +153,15 @@ freely, subject to the following restrictions:
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 
-## System libraries
+## Runtime libraries
 
 The Linux executable dynamically links to system-provided libraries including
 SDL, SDL_ttf, OpenAL, OpenGL/GLX, GLEW, Vulkan, zlib, minizip, mpg123,
 FreeType, HarfBuzz, libpng, and their dependencies. Those libraries are not
 included in the WhittyArcade release archive and remain under their own
 licences as installed by the user's Linux distribution.
+
+The portable Windows archive includes the UCRT64 DLLs required by the
+executable, excluding Windows system libraries and the MSYS2 POSIX runtime.
+Their package-provided licence texts are included under
+`THIRD_PARTY_LICENSES`; those licences govern the corresponding DLLs.

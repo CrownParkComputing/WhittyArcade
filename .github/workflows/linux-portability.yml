@@ -1,0 +1,108 @@
+name: Linux distribution builds
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-distros-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: ubuntu-24.04
+            family: apt
+            image: ubuntu:24.04
+          - distro: debian-13
+            family: apt
+            image: debian:13
+          - distro: fedora-43
+            family: dnf
+            image: fedora:43
+          - distro: opensuse-tumbleweed
+            family: zypper
+            image: opensuse/tumbleweed:latest
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - name: Install ${{ matrix.distro }} build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          case "${{ matrix.family }}" in
+            apt)
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential ca-certificates cmake git ninja-build \
+                pkg-config libgl1-mesa-dev libsdl2-dev libsdl2-ttf-dev \
+                libopenal-dev libglew-dev libglm-dev zlib1g-dev \
+                libminizip-dev libvulkan-dev libmpg123-dev \
+                fonts-dejavu-core
+              ;;
+            dnf)
+              dnf -y --setopt=install_weak_deps=False install \
+                ca-certificates gcc gcc-c++ cmake git ninja-build \
+                pkgconf-pkg-config libglvnd-devel mesa-libGL-devel \
+                SDL2-devel SDL2_ttf-devel openal-soft-devel glew-devel \
+                glm-devel zlib-ng-compat-devel minizip-ng-compat-devel \
+                vulkan-loader-devel mpg123-devel dejavu-sans-fonts
+              ;;
+            zypper)
+              zypper --non-interactive refresh
+              zypper --non-interactive install --no-recommends \
+                ca-certificates gcc gcc-c++ cmake git ninja pkgconf-pkg-config \
+                Mesa-libGL-devel sdl2-compat-devel SDL2_ttf-devel \
+                openal-soft-devel glew-devel glm-devel zlib-devel \
+                minizip-devel vulkan-devel mpg123-devel dejavu-fonts
+              ;;
+          esac
+
+      - name: Check out source and submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Configure release build
+        run: cmake -S . -B build-${{ matrix.distro }} -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      # Moira's generated tables are memory-heavy under parallel GCC builds.
+      - name: Build WhittyArcade
+        run: cmake --build build-${{ matrix.distro }} --parallel 2
+
+      - name: Run tests
+        run: ctest --test-dir build-${{ matrix.distro }} --output-on-failure --parallel 2
+
+      - name: Stage ${{ matrix.distro }} executable
+        run: |
+          cmake -E make_directory artifact
+          cmake -E copy \
+            build-${{ matrix.distro }}/WhittyArcade artifact/WhittyArcade
+          cmake -E copy LINUX_README.md artifact/README.md
+          cmake -E copy LICENSE artifact/LICENSE.txt
+          cmake -E copy THIRD_PARTY_NOTICES.md \
+            artifact/THIRD_PARTY_NOTICES.md
+          strip --strip-unneeded artifact/WhittyArcade
+          chmod +x artifact/WhittyArcade
+          WHITTYARCADE_HEADLESS=1 \
+            artifact/WhittyArcade --list-roms > /dev/null
+          (cd artifact && sha256sum WhittyArcade > WhittyArcade.sha256)
+
+      - name: Upload ${{ matrix.distro }} x86-64 build
+        uses: actions/upload-artifact@v7
+        with:
+          name: WhittyArcade-${{ matrix.distro }}-x86_64
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30

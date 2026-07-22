@@ -98,6 +98,20 @@ folder. The game carries its own M37710 program and does not need
 The wheel, pedals, shifter and cabinet buttons can all be reassigned in the
 game-specific controller profile.
 
+## Aqua Jet
+
+Use the World AJ2 Ver.B `aquajet` set with `namcoc71.zip` in the same ROM
+folder. Like Dirt Dash it carries its own M37710 program and does not need
+`namcoc74.zip`. No ROM or firmware is included in this archive.
+
+- Left/Right: handlebar; Up: throttle lever
+- P1 up/down: fore/aft body lean
+- `5`: insert coin; `1`: start
+
+The jet-ski cabinet has no brake, gearshift or view button, so only these
+controls appear in the game-specific controller profile, where they can all
+be reassigned.
+
 ## Licence
 
 Official, unmodified WhittyArcade binaries are licensed for personal,

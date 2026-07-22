@@ -1,6 +1,7 @@
 #include "persistent_data.h"
 #include "arcade_catalog.h"
 #include "model1_cabinet.h"
+#include "platform_paths.h"
 
 #include <algorithm>
 #include <chrono>
@@ -16,11 +17,8 @@ namespace fs = std::filesystem;
 namespace {
 
 fs::path config_root() {
-    if (const char* config_home = std::getenv("XDG_CONFIG_HOME"))
-        return fs::path(config_home);
-    if (const char* user_home = std::getenv("HOME"))
-        return fs::path(user_home) / ".config";
-    return fs::current_path();
+    const fs::path root = whitty_platform::config_root();
+    return root.empty() ? fs::current_path() : root;
 }
 
 fs::path nvram_root() {

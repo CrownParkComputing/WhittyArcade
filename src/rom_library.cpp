@@ -4,6 +4,7 @@
 #include "galaxian_rom.h"
 #include "model1_rom.h"
 #include "model2_rom.h"
+#include "platform_paths.h"
 #include "shinobi_rom.h"
 #include "system22_rom.h"
 
@@ -38,11 +39,8 @@ std::string normalized_path(const fs::path& path) {
 }
 
 fs::path data_root() {
-    if (const char* data_home = std::getenv("XDG_DATA_HOME"))
-        return fs::path(data_home);
-    if (const char* user_home = std::getenv("HOME"))
-        return fs::path(user_home) / ".local" / "share";
-    return fs::current_path();
+    const fs::path root = whitty_platform::data_root();
+    return root.empty() ? fs::current_path() : root;
 }
 
 struct identified_archive {
@@ -143,6 +141,7 @@ std::string readiness_suffix(const fs::path& candidate,
             missing.emplace_back("namcoc71.zip");
         const std::string short_name(manifest.short_name);
         if (short_name != "timecris" && short_name != "dirtdash" &&
+            short_name != "aquajet" &&
             !sibling_exists(candidate, "namcoc74.zip") &&
             !archive_contains(candidate, "c74.bin"))
             missing.emplace_back("namcoc74.zip");
@@ -323,8 +322,8 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
     // Imported copies win over transitory downloads and command-line peers.
     scan(rom_library_path(), true, true);
     if (!std::getenv("WHITTYARCADE_NO_LEGACY_ROM_SCAN")) {
-        if (const char* user_home = std::getenv("HOME")) {
-            const fs::path downloads = fs::path(user_home) / "Downloads";
+        if (const fs::path downloads = whitty_platform::downloads_root();
+            !downloads.empty()) {
             scan(downloads / "WhittyArcade-Roms", true, false);
             scan(downloads, false, false);
         }
@@ -332,7 +331,8 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
     if (const char* search_path = std::getenv("WHITTYARCADE_ROM_PATH")) {
         std::stringstream paths(search_path);
         std::string path;
-        while (std::getline(paths, path, ':'))
+        while (std::getline(paths, path,
+                            whitty_platform::path_list_separator()))
             if (!path.empty()) scan(path, true, false);
     }
 

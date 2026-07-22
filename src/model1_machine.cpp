@@ -6,6 +6,7 @@
 #include "model1_io_board.h"
 #include "model1_cabinet.h"
 #include "model1_video.h"
+#include "platform_paths.h"
 #include "v60.h"
 
 #include <algorithm>
@@ -21,13 +22,8 @@ constexpr uint32_t address_mask = 0x00ffffff;
 namespace fs = std::filesystem;
 
 fs::path model1_nvram_path(model1_rom_set set) {
-    fs::path root;
-    if (const char* config_home = std::getenv("XDG_CONFIG_HOME"))
-        root = config_home;
-    else if (const char* user_home = std::getenv("HOME"))
-        root = fs::path(user_home) / ".config";
-    else
-        root = ".";
+    fs::path root = whitty_platform::config_root();
+    if (root.empty()) root = ".";
     const char* short_name = model1_rom_loader::set_short_name(set);
     const std::string filename = std::string(
         short_name && *short_name ? short_name : "model1-unknown") + ".nv";

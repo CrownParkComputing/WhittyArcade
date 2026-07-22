@@ -1,4 +1,5 @@
 #include "model2_machine.h"
+#include "test_platform.h"
 
 #include <algorithm>
 #include <array>
@@ -15,7 +16,7 @@ namespace {
 
 bool write_capture(const model2_machine& machine,
                    const std::filesystem::path& path) {
-    std::FILE* output = std::fopen(path.c_str(), "wb");
+    std::FILE* output = std::fopen(path.string().c_str(), "wb");
     if (!output) return false;
 
     std::fprintf(output, "P6\n%d %d\n255\n",
@@ -58,10 +59,13 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(capture_dir_text);
     // Boot from factory defaults, never the user's persistent NVRAM. A test
     // may opt into an isolated prepared image for restart/persistence traces.
-    if (const char* config = std::getenv("MODEL2_TEST_CONFIG_HOME"))
-        setenv("XDG_CONFIG_HOME", config, 1);
-    else
-        setenv("XDG_CONFIG_HOME", "/nonexistent/whitty-boot-test", 1);
+    if (const char* config = std::getenv("MODEL2_TEST_CONFIG_HOME")) {
+        if (!test_set_environment("XDG_CONFIG_HOME", config)) return 2;
+    } else {
+        if (!test_set_environment("XDG_CONFIG_HOME",
+                                  "/nonexistent/whitty-boot-test"))
+            return 2;
+    }
     model2_machine machine;
     if (!machine.initialize(argv[1])) return 1;
     std::vector<uint8_t> midi;

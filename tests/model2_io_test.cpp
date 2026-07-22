@@ -1,4 +1,5 @@
 #include "model2_bus.h"
+#include "test_platform.h"
 
 #include <cassert>
 #include <cstdlib>
@@ -10,7 +11,7 @@ int main() {
         std::filesystem::temp_directory_path() / "whitty-model2-io-test";
     std::error_code cleanup_error;
     std::filesystem::remove_all(config_root, cleanup_error);
-    setenv("XDG_CONFIG_HOME", config_root.c_str(), 1);
+    if (!test_set_environment("XDG_CONFIG_HOME", config_root)) return 1;
     model2_roms roms;
     roms.copro_data.assign(0x1000, 0);
     roms.copro_tgp_tables.assign(0x40000, 0);
@@ -171,7 +172,7 @@ int main() {
     // cabinet is attached and it refuses normal standalone coin/start input.
     assert(bus.read8(0x01a04000) == 0xfe);
     assert(bus.read8(0x01a04002) == 0xfe);
-    unsetenv("MODEL2_COMM_LINK");
+    if (!test_unset_environment("MODEL2_COMM_LINK")) return 1;
     bus.write8(0x01a04000, 1);
     assert(bus.read8(0x01a04000) == 0xff);
     assert(bus.read8(0x01a00000) == 0x00); // peer search pending
@@ -183,7 +184,7 @@ int main() {
     // MAME's default local/remote socket pair links back to itself. The
     // board remains pending for its 232-tick discovery period, then reports
     // a one-node ring even when the game's cabinet setting is NOTLINK.
-    setenv("MODEL2_COMM_LINK", "1", 1);
+    if (!test_set_environment("MODEL2_COMM_LINK", "1")) return 1;
     bus.write8(0x01a04000, 1);
     bus.write8(0x01a04002, 1);
     for (unsigned tick = 0; tick < 0x00e7; ++tick) bus.vblank();
@@ -202,7 +203,7 @@ int main() {
     assert(bus.read8(0x01a021c0) == 0x5a);
     assert(bus.read8(0x01a021c1) == 0xc3);
     bus.write8(0x01a04000, 0);
-    unsetenv("MODEL2_COMM_LINK");
+    if (!test_unset_environment("MODEL2_COMM_LINK")) return 1;
     assert(bus.read8(0x01a04000) == 0xfe);
     assert(bus.read8(0x01a04002) == 0xfe);
 

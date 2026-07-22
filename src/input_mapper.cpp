@@ -71,6 +71,12 @@ std::vector<input_action> relevant_actions(std::string_view short_name) {
              input_action::gas, input_action::brake,
              input_action::shift_down, input_action::shift_up,
              input_action::view1, input_action::view4});
+    } else if (short_name == "aquajet") {
+        // Handlebar, throttle lever and fore/aft body lean. The cabinet has
+        // no brake, gearshift or view button.
+        add({input_action::steer_left, input_action::steer_right,
+             input_action::gas,
+             input_action::p1_up, input_action::p1_down});
     } else if (short_name == "ridgerac" || short_name == "ridgera2" ||
         short_name == "raverace" || short_name == "acedrive" ||
         short_name == "victlap" || short_name == "ridgeracf" ||
@@ -155,6 +161,17 @@ std::string action_label(const mapper_profile& profile,
             return "Driving - View change";
         if (action.action == input_action::view4)
             return "Cabinet - Motion stop";
+    } else if (profile.short_name == "aquajet") {
+        if (action.action == input_action::steer_left)
+            return "Handlebar - Turn left";
+        if (action.action == input_action::steer_right)
+            return "Handlebar - Turn right";
+        if (action.action == input_action::gas)
+            return "Throttle lever";
+        if (action.action == input_action::p1_up)
+            return "Body lean - Forward";
+        if (action.action == input_action::p1_down)
+            return "Body lean - Back";
     } else if (profile.short_name == "timecris") {
         if (action.action == input_action::p1_left)
             return "Light gun - Aim left";

@@ -1,4 +1,5 @@
 #include "persistent_data.h"
+#include "test_platform.h"
 #include "arcade_catalog.h"
 
 #include <array>
@@ -7,16 +8,16 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 
 namespace fs = std::filesystem;
 
 int main() {
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-persistent-test-" + std::to_string(getpid()));
+        ("whittyarcade-persistent-test-" +
+         std::to_string(test_process_id()));
     const fs::path config = root / "config";
     fs::create_directories(config);
-    setenv("XDG_CONFIG_HOME", config.c_str(), 1);
+    if (!test_set_environment("XDG_CONFIG_HOME", config)) return 1;
 
     std::array<unsigned char, 0x2000> expected{};
     for (std::size_t index = 0; index < expected.size(); ++index)

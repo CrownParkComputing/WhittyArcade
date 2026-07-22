@@ -27,12 +27,23 @@ int main(int argc, char** argv) {
     assert(roms.has_c71_firmware());
     assert(roms.has_mcu_firmware());
     if (set == ridge_racer_rom_set::time_crisis ||
-        set == ridge_racer_rom_set::dirt_dash) {
+        set == ridge_racer_rom_set::dirt_dash ||
+        set == ridge_racer_rom_set::aqua_jet) {
         assert(roms.super_system22);
         assert(roms.maincpu_rom.size() == 0x400000);
         assert(roms.sprite_rom.size() == 0x1000000);
         assert(roms.gamma_proms.empty());
         assert(!roms.has_c74_firmware());
+        // The DSP splits the point region into equal low/middle/high lanes.
+        assert(roms.point_rom.size() % 3 == 0);
+        if (set == ridge_racer_rom_set::aqua_jet) {
+            // Aqua Jet carries a fourth point ROM per lane and ships a
+            // factory EEPROM image the other two sets do not.
+            assert(roms.point_rom.size() == 0x600000);
+            assert(roms.eeprom.size() == 0x2000);
+        } else {
+            assert(roms.point_rom.size() == 0x480000);
+        }
     } else {
         assert(!roms.super_system22);
         assert(roms.sprite_rom.empty());

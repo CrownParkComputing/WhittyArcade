@@ -123,17 +123,37 @@ synchronisation before CPU parallelism is safe.
 Dependencies: CMake 3.16+, SDL2, SDL2_ttf, OpenGL 4.3, Vulkan, GLEW, GLM,
 OpenAL, zlib, MiniZip, libmpg123 and a C/C++17 compiler.
 
+### Linux
+
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-The `CachyOS build` GitHub Actions workflow performs the same release build and
-test suite in the official rolling Arch Linux container, matching CachyOS's
-glibc and pacman ecosystem. Successful runs publish a
-`WhittyArcade-cachyos-x86_64` artifact containing the executable, README and
-SHA-256 checksum.
+GitHub Actions builds and tests native x86-64 artifacts for Ubuntu 24.04,
+Debian 13, Fedora 43, openSUSE Tumbleweed and CachyOS/Arch on every push and
+pull request. Each artifact contains the executable, licence, runtime notes
+and a SHA-256 checksum. See `docs/building_windows_linux.md` for the package
+names used by each distribution.
+
+### Windows 10/11 x86-64
+
+Open an **MSYS2 UCRT64** terminal, install the dependencies listed in
+`docs/building_windows_linux.md`, then run:
+
+```bash
+cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-windows --parallel 2
+ctest --test-dir build-windows --output-on-failure --parallel 2
+```
+
+The `Windows x86-64 build` workflow performs this native UCRT64 build on every
+push and pull request. It publishes `WhittyArcade-windows-x86_64.zip` with
+`WhittyArcade.exe`, all required non-system DLLs, licence files, runtime notes
+and SHA-256 manifests. Debug symbols are retained as a separate CI
+artifact. Windows uses its native file picker; no `zenity` or MSYS2 runtime is
+required by the packaged executable.
 
 ## Run
 
@@ -146,6 +166,7 @@ firmware archives or loose firmware files.
 ./build/WhittyArcade /path/to/ridgerac.zip /path/to/bios
 ./build/WhittyArcade /path/to/timecris.zip /path/to/bios
 ./build/WhittyArcade /path/to/dirtdash.zip /path/to/bios
+./build/WhittyArcade /path/to/aquajet.zip /path/to/bios
 ./build/WhittyArcade /path/to/vformula.zip
 ./build/WhittyArcade /path/to/galaxian.zip
 ./build/WhittyArcade /path/to/uniwars.zip
@@ -156,7 +177,9 @@ firmware archives or loose firmware files.
 The launcher has a **ROM Library / Import** page. It can import selected ZIPs
 or scan a complete MAME ROM folder. Imported archives are copied unchanged to
 `$XDG_DATA_HOME/WhittyArcade/roms` (normally
-`~/.local/share/WhittyArcade/roms`) and grouped into board subdirectories.
+`~/.local/share/WhittyArcade/roms`) on Linux, or
+`%LOCALAPPDATA%\WhittyArcade\roms` on Windows, and grouped into board
+subdirectories.
 WhittyArcade never extracts, modifies or repacks ROM contents, so the imported
 files remain usable by MAME. The original download can safely be removed after
 importing.
@@ -184,7 +207,7 @@ Required MAME short names for this build:
 | Board | Games | Additional archives |
 |---|---|---|
 | Namco System 22 | `ridgerac`, `ridgera2`, `raverace`, `acedrive`, `victlap`, `cybrcomm` | `namcoc71.zip`, `namcoc74.zip` |
-| Namco Super System 22 | `timecris` (World, TS2 Ver.B), `dirtdash` (World, DT2 Ver.C) | `namcoc71.zip`; each set carries its M37710 firmware data |
+| Namco Super System 22 | `timecris` (World, TS2 Ver.B), `dirtdash` (World, DT2 Ver.C), `aquajet` (World, AJ2 Ver.B) | `namcoc71.zip`; each set carries its M37710 firmware data |
 | Sega Model 1 | `vformula`, `vf`, `swa`, `wingwar` | Split `vformula` also needs `vr.zip`; merged `vr.zip` works directly |
 | Sega Model 2 | `srallyc` | None (`segabill.zip` is optional) |
 | Phoenix hardware | `phoenix` | None |
@@ -198,7 +221,8 @@ listed above are not silently substituted for the supported program revision.
 Besides the durable library, discovery checks the explicitly selected path,
 its directory, the legacy `~/Downloads/WhittyArcade-Roms` tree and ZIPs placed
 directly in `~/Downloads`. Extra read-only library roots can be supplied as a
-colon-separated `WHITTYARCADE_ROM_PATH`.
+colon-separated `WHITTYARCADE_ROM_PATH` on Linux, or a semicolon-separated
+value on Windows.
 
 Expected firmware:
 
@@ -276,14 +300,27 @@ Dirt Dash driving defaults:
   profile; standard and deluxe cabinet analog ranges are calibrated by the
   Super System 22 M37710 input path.
 
+Aqua Jet cabinet defaults:
+
+- Left/Right steer the handlebar; Up applies the throttle lever.
+- The jet-ski cabinet's fore/aft body lean is mapped to the P1 up/down
+  actions, so a controller stick or the mapped keys tilt the rider.
+- There is no brake, gearshift or view button on this cabinet, so only the
+  controls above appear in the `aquajet` controller profile.
+- `5` inserts a coin and `1` starts a game.
+- All three axes are driven backwards on the real board; the M37710 input
+  path applies that inversion, so the host controls behave normally.
+
 Settings are saved to
-`~/.config/WhittyArcade/settings.ini` (or `$XDG_CONFIG_HOME`). Existing
-`ridge_racer_emulator` settings are imported automatically. Music
+`~/.config/WhittyArcade/settings.ini` (or `$XDG_CONFIG_HOME`) on Linux and
+`%LOCALAPPDATA%\WhittyArcade\settings.ini` on Windows. Existing
+`ridge_racer_emulator` settings are imported automatically on Linux. Music
 volume controls looping C352 voices; effects/speech volume controls one-shot
 voices. Every board uses the same programme-loudness target and peak limiter;
 the master volume is applied afterwards as the global listening level.
 Input mappings are saved separately in
-`~/.config/WhittyArcade/input.ini` (or `$XDG_CONFIG_HOME`) and are reloaded for
+`~/.config/WhittyArcade/input.ini` (or `$XDG_CONFIG_HOME`) on Linux and the
+same `%LOCALAPPDATA%\WhittyArcade` directory on Windows. They are reloaded for
 each newly launched cabinet.
 
 ## EEPROM, NVRAM and high scores
@@ -295,7 +332,8 @@ perform a recoverable factory reset. Existing data is backed up before restore
 or reset.
 
 Operator data lives below `$XDG_CONFIG_HOME/WhittyArcade/nvram` (normally
-`~/.config/WhittyArcade/nvram`):
+`~/.config/WhittyArcade/nvram`) on Linux or
+`%LOCALAPPDATA%\WhittyArcade\nvram` on Windows:
 
 - System 22: one MAME-style 8192-byte `eeprom` file per set.
 - Model 1: one 128-byte operator EEPROM (`vformula.nv`, `vf.nv`, `swa.nv`, or
@@ -309,10 +347,12 @@ The **High Scores** page displays verified score tables for Phoenix, Moon
 Cresta and Shinobi without launching the game. WhittyArcade saves these as
 MAME-compatible `.hi` files below
 `$XDG_CONFIG_HOME/WhittyArcade/hi` (normally
-`~/.config/WhittyArcade/hi`) and also detects existing files in MAME's usual
-`~/.mame/hi` and `~/.local/share/mame/hi` folders. A score file is restored
-only after the game initializes its default table. Other games remain clearly
-marked as not decoded; raw EEPROM bytes are never presented as guessed scores.
+`~/.config/WhittyArcade/hi`) on Linux or
+`%LOCALAPPDATA%\WhittyArcade\hi` on Windows, and also detects existing files
+in MAME's usual Linux `~/.mame/hi` and `~/.local/share/mame/hi` folders. A
+score file is restored only after the game initializes its default table.
+Other games remain clearly marked as not decoded; raw EEPROM bytes are never
+presented as guessed scores.
 
 On Hyprland the emulator uses the stable `WhittyArcade` window class
 and should be floated with an app-specific window rule. Tiled clients cannot

@@ -1,14 +1,15 @@
 # Cross-platform build scope
 
-Status: implementation scope for the builds following Preview 2. This document
-does not claim that the Android, Windows or portable Linux packages exist yet.
+Status: Windows UCRT64 packaging and native Linux distribution CI were
+implemented in July 2026. Android, AppImage and Flatpak remain scoped future
+work; Android is deliberately deferred while the desktop builds settle.
 
-The delivery order is:
+The revised delivery order is:
 
 1. shared platform foundation;
-2. Android ARM64, preserving the current GUI composition;
-3. Windows x86-64;
-4. portable Linux x86-64, followed by selected native distro packages.
+2. Windows x86-64;
+3. native Linux distribution coverage, followed by portable packaging;
+4. Android ARM64, preserving the current GUI composition, when resumed.
 
 The emulator cores, game manifests and ROM validation remain shared. No
 platform package may contain ROMs, firmware, keys or other copyrighted game
@@ -238,7 +239,8 @@ when a physical controller is active.
   presentation where the runtime supports it.
 - Replace `zenity` with the platform picker implementation based on Windows
   `IFileOpenDialog`; use the shared service for ROM import and save export.
-- Use the shared path service below local app data and bundle the same font.
+- Use the shared path service below local app data and the Windows Segoe UI
+  system font.
 - Port test temp/environment helpers and remove unconditional GNU options and
   `libm` links.
 
@@ -247,7 +249,7 @@ when a physical controller is active.
 - Add a native Windows GitHub Actions job that configures UCRT64 with CMake +
   Ninja, runs all non-ROM tests, and performs a headless command-line smoke
   test.
-- Package `WhittyArcade.exe`, required runtime DLLs, font/assets, README,
+- Package `WhittyArcade.exe`, required runtime DLLs, README,
   proprietary licence, third-party notices and a SHA-256 manifest as one
   `WhittyArcade-windows-x86_64.zip`.
 - Verify the ZIP on clean Windows 10 and 11 machines with Intel, AMD and NVIDIA

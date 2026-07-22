@@ -1,4 +1,5 @@
 #include "high_scores.h"
+#include "platform_paths.h"
 
 #include <algorithm>
 #include <array>
@@ -231,11 +232,8 @@ std::size_t expected_size(const score_spec& spec) {
 }
 
 fs::path config_root() {
-    if (const char* config_home = std::getenv("XDG_CONFIG_HOME"))
-        return fs::path(config_home);
-    if (const char* user_home = std::getenv("HOME"))
-        return fs::path(user_home) / ".config";
-    return fs::current_path();
+    const fs::path root = whitty_platform::config_root();
+    return root.empty() ? fs::current_path() : root;
 }
 
 fs::path score_root() {
@@ -253,8 +251,7 @@ std::vector<fs::path> score_candidates(const std::string& short_name) {
     if (short_name == "shinobi4") names.push_back("shinobi");
     std::vector<fs::path> result;
     result.push_back(own_score_path(short_name));
-    if (const char* user_home = std::getenv("HOME")) {
-        const fs::path home(user_home);
+    if (const fs::path home = whitty_platform::home_root(); !home.empty()) {
         for (const std::string& name : names) {
             result.push_back(home / ".mame" / "hi" / (name + ".hi"));
             result.push_back(home / ".local" / "share" / "mame" / "hi" /

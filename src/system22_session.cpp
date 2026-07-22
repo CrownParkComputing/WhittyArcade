@@ -137,7 +137,8 @@ bool system22_emulator::initialize(const std::string& rom_path,
         m_nvram_short_name = rom_loader::set_short_name(game_set);
     m_bus->set_super_system22(
         game_set == ridge_racer_rom_set::time_crisis ||
-        game_set == ridge_racer_rom_set::dirt_dash);
+        game_set == ridge_racer_rom_set::dirt_dash ||
+        game_set == ridge_racer_rom_set::aqua_jet);
 
     // Initialize GPU renderer
     if (!m_gpu_renderer->initialize(settings)) {
@@ -181,6 +182,9 @@ bool system22_emulator::initialize(const std::string& rom_path,
         break;
     case ridge_racer_rom_set::dirt_dash:
         m_bus->set_driving_profile(system22_driving_profile::dirt_dash);
+        break;
+    case ridge_racer_rom_set::aqua_jet:
+        m_bus->set_driving_profile(system22_driving_profile::aqua_jet);
         break;
     default:
         m_bus->set_driving_profile(system22_driving_profile::ridge_racer);
@@ -265,6 +269,8 @@ bool system22_emulator::initialize(const std::string& rom_path,
         m_mcu->set_input_profile(system22_mcu_input_profile::dirt_dash);
     } else if (game_set == ridge_racer_rom_set::time_crisis) {
         m_mcu->set_input_profile(system22_mcu_input_profile::time_crisis);
+    } else if (game_set == ridge_racer_rom_set::aqua_jet) {
+        m_mcu->set_input_profile(system22_mcu_input_profile::aqua_jet);
     }
     const bool mcu_ready = m_roms->super_system22 ?
         m_mcu->initialize_super_system22(m_roms->mcu_rom.data(),
@@ -560,6 +566,13 @@ void system22_emulator::run_frame() {
                 "coin=%d view=%d shift=%d/%d\n",
                 state.steering, state.gas, state.brake, state.coin1,
                 state.view, state.shift_down, state.shift_up);
+        } else if (m_game_set == ridge_racer_rom_set::aqua_jet) {
+            const input_state& state = m_input->state();
+            std::printf(
+                "Aqua Jet input: handle=%04x throttle=%04x lean=%02x "
+                "coin=%d start=%d\n",
+                state.steering, state.gas, state.left_stick_y, state.coin1,
+                state.start);
         } else if (m_roms->super_system22) {
             std::printf("Time Crisis input: x=%u y=%u coin=%d trigger=%d pedal=%d\n",
                         m_bus->gun_x(), m_bus->gun_y(),

@@ -4,6 +4,7 @@
 #include "input_mapper.h"
 #include "launcher_menu.h"
 #include "persistent_data.h"
+#include "platform_file_dialog.h"
 #include "rom_library.h"
 
 #include <SDL2/SDL.h>
@@ -17,9 +18,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include <sys/wait.h>
-#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -61,7 +59,8 @@ std::string normalized_path(const fs::path& path) {
 
 bool is_super_system22_set(ridge_racer_rom_set set) {
     return set == ridge_racer_rom_set::time_crisis ||
-           set == ridge_racer_rom_set::dirt_dash;
+           set == ridge_racer_rom_set::dirt_dash ||
+           set == ridge_racer_rom_set::aqua_jet;
 }
 
 const char* dip_switch_name(ridge_racer_rom_set set, int bank, int position) {
@@ -95,9 +94,9 @@ std::string dip_bank_summary(uint16_t switches, ridge_racer_rom_set set,
                             set == ridge_racer_rom_set::victory_lap;
     if (is_super_system22_set(set))
         result = bank == 0 ?
-            (set == ridge_racer_rom_set::time_crisis ?
-                "SW4 - test mode and reserved switches" :
-                "SW4 - reserved switches") :
+            (set == ridge_racer_rom_set::dirt_dash ?
+                "SW4 - reserved switches" :
+                "SW4 - test mode and reserved switches") :
             "Unused switch bank";
     else if (bank == 0)
         result = set == ridge_racer_rom_set::ridge_racer_2 ?
@@ -138,6 +137,12 @@ std::string dip_help_text(ridge_racer_rom_set set) {
             "Dirt Dash SW4:1-8 are undocumented and should remain OFF. Use "
             "F2 for the service/test input. The second editor bank is unused "
             "by Super System 22.";
+    } else if (set == ridge_racer_rom_set::aqua_jet) {
+        text +=
+            "Known Aqua Jet switch:\n"
+            "SW4:1  Test mode\n\n"
+            "SW4:2-8 are undocumented and should remain OFF. The second "
+            "editor bank is unused by Super System 22.";
     } else if (set == ridge_racer_rom_set::ridge_racer_2) {
         text +=
             "Known RR2 switches:\n"
@@ -212,57 +217,6 @@ void edit_dip_bank(uint16_t& switches, ridge_racer_rom_set set, int bank) {
     }
 }
 
-std::vector<std::string> zenity_selection(bool directory, bool multiple,
-                                          const char* title) {
-    int output_pipe[2]{};
-    if (pipe(output_pipe) != 0) return {};
-    const pid_t child = fork();
-    if (child < 0) {
-        close(output_pipe[0]);
-        close(output_pipe[1]);
-        return {};
-    }
-    if (child == 0) {
-        dup2(output_pipe[1], STDOUT_FILENO);
-        close(output_pipe[0]);
-        close(output_pipe[1]);
-        if (directory) {
-            execlp("zenity", "zenity", "--file-selection", "--directory",
-                   "--modal", title, static_cast<char*>(nullptr));
-        } else if (multiple) {
-            execlp("zenity", "zenity", "--file-selection", "--multiple",
-                   "--separator=\n", "--modal",
-                   "--file-filter=MAME ROM archives | *.zip *.ZIP", title,
-                   static_cast<char*>(nullptr));
-        } else {
-            execlp("zenity", "zenity", "--file-selection", "--modal", title,
-                   static_cast<char*>(nullptr));
-        }
-        _exit(127);
-    }
-    close(output_pipe[1]);
-    std::string output;
-    std::array<char, 4096> buffer{};
-    for (;;) {
-        const ssize_t count = read(output_pipe[0], buffer.data(), buffer.size());
-        if (count <= 0) break;
-        output.append(buffer.data(), static_cast<std::size_t>(count));
-    }
-    close(output_pipe[0]);
-    int status = 0;
-    waitpid(child, &status, 0);
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return {};
-
-    std::vector<std::string> paths;
-    std::stringstream lines(output);
-    std::string path;
-    while (std::getline(lines, path)) {
-        if (!path.empty() && path.back() == '\r') path.pop_back();
-        if (!path.empty()) paths.push_back(std::move(path));
-    }
-    return paths;
-}
-
 void show_action_result(launcher_menu& menu, const char* title, bool success,
                         const std::string& message) {
     menu.show_text(success ? title : std::string(title) + " - Error", message);
@@ -307,10 +261,10 @@ void show_rom_library_manager(launcher_menu& menu) {
             items, "Back to Main Menu");
         if (selected < 0) return;
         if (selected == 0 || selected == 1) {
-            const std::vector<std::string> paths = zenity_selection(
+            const std::vector<std::string> paths = platform_file_selection(
                 selected == 0, selected == 1,
-                selected == 0 ? "--title=Import a MAME ROM folder" :
-                                "--title=Import MAME ROM ZIPs");
+                selected == 0 ? "Import a MAME ROM folder" :
+                                "Import MAME ROM ZIPs");
             if (paths.empty()) continue;
             const rom_import_result imported = import_rom_paths(paths);
             show_action_result(menu, "ROM import", imported.error.empty(),
@@ -379,16 +333,16 @@ void show_persistent_game_manager(launcher_menu& menu,
         if (selected == 0) {
             result = backup_persistent_game(short_name);
         } else if (selected == 1) {
-            const auto paths = zenity_selection(
-                true, false, "--title=Choose a save export folder");
+            const auto paths = platform_file_selection(
+                true, false, "Choose a save export folder");
             if (paths.empty()) continue;
             result = export_persistent_game(short_name, paths.front());
         } else if (selected == 2) {
             const bool folder = game->files.size() > 1;
-            const auto paths = zenity_selection(
+            const auto paths = platform_file_selection(
                 folder, false, folder ?
-                    "--title=Choose a folder containing eeprom and backup1" :
-                    "--title=Choose an EEPROM file");
+                    "Choose a folder containing eeprom and backup1" :
+                    "Choose an EEPROM file");
             if (paths.empty()) continue;
             result = import_persistent_game(short_name, paths.front());
         } else {

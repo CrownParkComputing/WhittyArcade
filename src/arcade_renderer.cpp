@@ -4,8 +4,8 @@
 #include "system22_config.h"
 #include "arcade_presenter.h"
 #include "arcade_sdl_guard.h"
+#include "platform_paths.h"
 
-#define GLEW_STATIC
 #include <GL/glew.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <string>
 
 namespace {
@@ -888,13 +889,7 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "WhittyArcade");
     SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "WhittyArcade");
 
-    // Check if we have a display
-    const char* display = getenv("DISPLAY");
-    const char* wayland_display = getenv("WAYLAND_DISPLAY");
-    bool has_display = (display != nullptr && display[0] != '\0') ||
-        (wayland_display != nullptr && wayland_display[0] != '\0');
-
-    if (!has_display) {
+    if (!whitty_platform::video_available()) {
         printf("No display available, initializing headless mode\n");
         printf("GPU renderer initialized (headless)\n");
         m_headless = true;
@@ -2768,13 +2763,8 @@ bool polygon_renderer_gpu::create_settings_overlay() {
         return false;
     }
     m_ttf_initialized = true;
-    constexpr std::array<const char*, 3> font_paths{
-        "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    };
-    for (const char* path : font_paths) {
-        m_settings_font = TTF_OpenFont(path, 20);
+    for (const std::filesystem::path& path : whitty_platform::font_paths()) {
+        m_settings_font = TTF_OpenFont(path.string().c_str(), 20);
         if (m_settings_font) break;
     }
     if (!m_settings_font) {

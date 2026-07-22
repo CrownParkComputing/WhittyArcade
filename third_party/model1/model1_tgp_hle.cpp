@@ -16,6 +16,10 @@
 
 #define TGP_FUNCTION(name) void name()
 
+namespace {
+constexpr double model1_pi = 3.14159265358979323846264338327950288;
+}
+
 model1_tgp_hle::model1_tgp_hle()
     : m_copro_ram_data(0x8000, 0)
 {
@@ -130,7 +134,7 @@ float model1_tgp_hle::tcos(s16 a)
 	else if(a == 0)
 		return 1;
 	else
-		return cos(a*(2*M_PI/65536.0));
+		return cos(a*(2*model1_pi/65536.0));
 }
 
 float model1_tgp_hle::tsin(s16 a)
@@ -142,7 +146,7 @@ float model1_tgp_hle::tsin(s16 a)
 	else if(a == -16384)
 		return -1;
 	else
-		return sin(a*(2*M_PI/65536.0));
+		return sin(a*(2*model1_pi/65536.0));
 }
 
 u16 model1_tgp_hle::ram_get_i()
@@ -274,7 +278,7 @@ TGP_FUNCTION( model1_tgp_hle::anglev )
 		else
 			fifoout_push((u32)-16384);
 	} else
-		fifoout_push((s16)(atan2(b, a)*32768/M_PI));
+		fifoout_push((s16)(atan2(b, a)*32768/model1_pi));
 }
 
 TGP_FUNCTION( model1_tgp_hle::triangle_normal )
@@ -375,7 +379,7 @@ TGP_FUNCTION( model1_tgp_hle::anglep )
 		else
 			fifoout_push((u32)-16384);
 	} else
-		fifoout_push((s16)(atan2(d, c)*32768/M_PI));
+		fifoout_push((s16)(atan2(d, c)*32768/model1_pi));
 }
 
 TGP_FUNCTION( model1_tgp_hle::matrix_ident )
@@ -737,7 +741,7 @@ TGP_FUNCTION( model1_tgp_hle::xyz2rqf )
 		else
 			fifoout_push((u32)-16384);
 	} else
-		fifoout_push((s16)(atan2(c, a)*32768/M_PI));
+		fifoout_push((s16)(atan2(c, a)*32768/model1_pi));
 
 	if(!b)
 		fifoout_push(0);
@@ -747,7 +751,7 @@ TGP_FUNCTION( model1_tgp_hle::xyz2rqf )
 		else
 			fifoout_push((u32)-16384);
 	} else
-		fifoout_push((s16)(atan2(b, norm)*32768/M_PI));
+		fifoout_push((s16)(atan2(b, norm)*32768/model1_pi));
 }
 
 TGP_FUNCTION( model1_tgp_hle::f43 )

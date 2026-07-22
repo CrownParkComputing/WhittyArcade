@@ -7,8 +7,13 @@
 /cmake_install.cmake
 /compile_commands.json
 *.a
+*.debug
+*.dll
+*.exe
 *.o
 *.so
+/artifact*/
+/symbols/
 
 # Test, diagnostic and local cache output
 /Testing/

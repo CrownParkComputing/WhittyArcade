@@ -1,4 +1,5 @@
 #include "high_scores.h"
+#include "test_platform.h"
 
 #include <algorithm>
 #include <array>
@@ -6,7 +7,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -68,10 +68,11 @@ int main() {
     assert(!decode_high_score_table("phoenix", invalid, table, &error));
 
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-high-score-test-" + std::to_string(getpid()));
+        ("whittyarcade-high-score-test-" +
+         std::to_string(test_process_id()));
     fs::create_directories(root);
-    setenv("WHITTYARCADE_HISCORE_PATH", root.c_str(), 1);
-    setenv("HOME", root.c_str(), 1);
+    if (!test_set_environment("WHITTYARCADE_HISCORE_PATH", root)) return 1;
+    if (!test_set_environment("HOME", root)) return 1;
 
     std::array<std::uint8_t, 0x10000> memory{};
     constexpr std::array<std::uint16_t, 18> spaces{{

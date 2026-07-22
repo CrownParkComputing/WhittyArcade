@@ -1,17 +1,18 @@
 #include "arcade_settings.h"
+#include "test_platform.h"
 
+#include <cassert>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 
 int main() {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-settings-test-" + std::to_string(getpid()));
+        ("whittyarcade-settings-test-" + std::to_string(test_process_id()));
     fs::create_directories(root / "WhittyArcade");
-    setenv("XDG_CONFIG_HOME", root.c_str(), 1);
+    if (!test_set_environment("XDG_CONFIG_HOME", root)) return 1;
 
     {
         std::ofstream output(root / "WhittyArcade" / "settings.ini");

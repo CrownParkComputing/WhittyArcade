@@ -1,4 +1,5 @@
 #include "model2_bus.h"
+#include "platform_paths.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -26,13 +27,8 @@ namespace fs = std::filesystem;
 // nvram file names and layout so a working MAME configuration can be
 // copied straight into place.
 fs::path model2_nvram_directory() {
-    fs::path root;
-    if (const char* config_home = std::getenv("XDG_CONFIG_HOME"))
-        root = config_home;
-    else if (const char* user_home = std::getenv("HOME"))
-        root = fs::path(user_home) / ".config";
-    else
-        root = ".";
+    fs::path root = whitty_platform::config_root();
+    if (root.empty()) root = ".";
     return root / "WhittyArcade" / "nvram" / "srallyc";
 }
 

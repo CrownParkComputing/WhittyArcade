@@ -5,6 +5,7 @@
 #include "system22_types.h"
 #include "arcade_settings.h"
 #include "model2_gpu_frame.h"
+#include <SDL2/SDL_ttf.h>
 #include <array>
 #include <memory>
 #include <atomic>
@@ -16,7 +17,6 @@
 
 // Forward declarations
 struct opengl_context;
-struct TTF_Font;
 struct SDL_Cursor;
 class alternate_presenter;
 

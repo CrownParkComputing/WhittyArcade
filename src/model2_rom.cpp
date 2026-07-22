@@ -246,6 +246,7 @@ model2_rom_load_result load_sega_rally(const source_reader& source,
     model2_rom_load_result result;
     result.set = model2_rom_set::sega_rally_revision_c;
     model2_roms& roms = result.roms;
+    roms.set = model2_rom_set::sega_rally_revision_c;
     std::ostringstream errors;
 
     roms.main_cpu.assign(0x200000, 0xff);
@@ -352,19 +353,150 @@ model2_rom_load_result load_sega_rally(const source_reader& source,
     result.error = errors.str();
     return result;
 }
+
+model2_rom_load_result load_virtua_cop_2(const source_reader& source) {
+    // Virtua Cop 2 is a Model 2A-CRX light-gun game. It shares the
+    // TGP lookup tables (opr-1474X) and video board tables (mpr-16310
+    // / 16311 / 16312) byte-for-byte with Sega Rally; everything else
+    // is unique to the game. There is no drive CPU, no M2COMM comm
+    // board, and no billboard.
+    //
+    // MAME reference: src/mame/sega/model2.cpp ROM_START(vcop2)
+    //                 (Model 2A, Sega Game ID# 833-12266).
+    model2_rom_load_result result;
+    result.set = model2_rom_set::virtua_cop_2;
+    model2_roms& roms = result.roms;
+    roms.set = model2_rom_set::virtua_cop_2;
+    std::ostringstream errors;
+
+    // i960 program: 4x 0x80000 word32 ROMs. The first pair interleaves
+    // at word 0 (offset 0x000000 lane 0, offset 0x000002 lane 2); the
+    // second pair starts at word 0x80000 (offset 0x100000 lane 0,
+    // offset 0x100002 lane 2), not at lane 0 of the next word.
+    roms.main_cpu.assign(0x200000, 0xff);
+    copy_word32(source, {"epr-18524.12", 0x080000, 0x1858988b},
+                roms.main_cpu, 0x000000, errors);
+    copy_word32(source, {"epr-18525.13", 0x080000, 0x0c13df3f},
+                roms.main_cpu, 0x000002, errors);
+    copy_word32(source, {"epr-18518.14", 0x080000, 0x7842951b},
+                roms.main_cpu, 0x100000, errors);
+    copy_word32(source, {"epr-18519.15", 0x080000, 0x31a30edc},
+                roms.main_cpu, 0x100002, errors);
+
+    // Main data bus. 0x2400000 total, with two 0x80000 EPRs in the
+    // final 0x400000 region that MAME then ROM_COPY's three times
+    // from 0xc00000 onto 0xd00000, 0xe00000 and 0xf00000. We mirror
+    // that copy here so reads from 0x06000000+ hit the right bytes.
+    roms.main_data.assign(0x2400000, 0xff);
+    constexpr std::array<rom_spec, 6> main_data_2m{{
+        {"mpr-18516.10", 0x200000, 0xa3928ff0},
+        {"mpr-18517.11", 0x200000, 0x4bd73da4},
+        {"mpr-18514.8",  0x200000, 0x791283c5},
+        {"mpr-18515.9",  0x200000, 0x6ba1ffec},
+        {"mpr-18522.6",  0x200000, 0x61d18536},
+        {"mpr-18523.7",  0x200000, 0x61d08dc4},
+    }};
+    for (std::size_t index = 0; index < main_data_2m.size(); ++index)
+        copy_word32(source, main_data_2m[index], roms.main_data,
+                    (index / 2) * 0x400000 + (index & 1) * 2, errors);
+
+    constexpr std::array<rom_spec, 2> main_data_512k{{
+        {"epr-18520.4", 0x080000, 0x1d4ec5e8},
+        {"epr-18521.5", 0x080000, 0xb8b3781c},
+    }};
+    for (std::size_t index = 0; index < main_data_512k.size(); ++index)
+        copy_word32(source, main_data_512k[index], roms.main_data,
+                    0xc00000 + (index & 1) * 2, errors);
+
+    // Three ROM_COPY expansions from 0xc00000 to 0xd/e/f00000.
+    for (std::size_t copy_target = 0xd00000; copy_target <= 0xf00000;
+         copy_target += 0x100000) {
+        std::copy(roms.main_data.begin() + 0xc00000,
+                  roms.main_data.begin() + 0xd00000,
+                  roms.main_data.begin() +
+                      static_cast<std::vector<uint8_t>::difference_type>(
+                          copy_target));
+    }
+
+    // Coprocessor data socket is empty for vcop2; MAME uses
+    // ROMREGION_ERASE00 so the read path sees 0x00 instead of 0xff.
+    roms.copro_data.assign(0x800000, 0x00);
+
+    // Polygons: only two 0x200000 word32 ROMs (0x800000 total). The
+    // board's polygon-fetch window remains the same; the games just
+    // pack less geometry into it.
+    roms.polygon_data.assign(0x800000, 0xff);
+    copy_word32(source, {"mpr-18513.16", 0x200000, 0x777a3633},
+                roms.polygon_data, 0x000000, errors);
+    copy_word32(source, {"mpr-18510.20", 0x200000, 0xe83de997},
+                roms.polygon_data, 0x000002, errors);
+
+    // Textures: two 0x200000 word32 ROMs (0x400000 total). MAME
+    // interleaves them with mpr-18512.25 at lane 0 and mpr-18511.24
+    // at lane 2 — opposite of the srallyc layout, so we explicitly
+    // pass the per-ROM offsets rather than relying on the srallyc
+    // for-each pattern.
+    roms.texture_data.assign(0x400000, 0xff);
+    copy_word32(source, {"mpr-18512.25", 0x200000, 0xd9bc7e71},
+                roms.texture_data, 0x000000, errors);
+    copy_word32(source, {"mpr-18511.24", 0x200000, 0xcae77a4f},
+                roms.texture_data, 0x000002, errors);
+
+    // Sound CPU: full 0x80000, single word-swapped ROM.
+    roms.sound_cpu.assign(0x80000, 0xff);
+    copy_word_swapped(source, {"epr-18530.30", 0x80000, 0xac9c8357},
+                      roms.sound_cpu, 0, errors);
+
+    // SCSP samples: 4x 0x200000 word-swapped ROMs at 0/0x200000/
+    // 0x400000/0x600000. Same total size as srallyc.
+    roms.samples.assign(0x800000, 0xff);
+    constexpr std::array<rom_spec, 4> samples{{
+        {"mpr-18529.31", 0x200000, 0xf76715b1},
+        {"mpr-18528.32", 0x200000, 0x287a2f9a},
+        {"mpr-18527.36", 0x200000, 0xe6a49314},
+        {"mpr-18526.37", 0x200000, 0x6516d9b5},
+    }};
+    for (std::size_t index = 0; index < samples.size(); ++index)
+        copy_word_swapped(source, samples[index], roms.samples,
+                          index * 0x200000, errors);
+
+    // TGP lookup tables and 1/x, 1/sqrt(x) tables. Same CRCs and
+    // filenames as srallyc — these ROMs are part of the Model 2A-CRX
+    // CPU board and are not game-specific.
+    roms.copro_tgp_tables.assign(0x40000, 0xff);
+    copy_word32(source, {"opr-14742a.45", 0x20000, 0x90c6b117},
+                roms.copro_tgp_tables, 0, errors);
+    copy_word32(source, {"opr-14743a.46", 0x20000, 0xae7f446b},
+                roms.copro_tgp_tables, 2, errors);
+
+    roms.other_data.assign(0x80000, 0xff);
+    constexpr std::array<rom_spec, 4> other{{
+        {"opr-14744.58", 0x20000, 0x730ea9e0},
+        {"opr-14745.59", 0x20000, 0x4c934d96},
+        {"opr-14746.62", 0x20000, 0x2a266cbd},
+        {"opr-14747.63", 0x20000, 0xa4ad5e19},
+    }};
+    for (std::size_t index = 0; index < other.size(); ++index)
+        copy_word32(source, other[index], roms.other_data,
+                    (index / 2) * 0x40000 + (index & 1) * 2, errors);
+
+    // Video board tables — same CRCs and filenames as srallyc; the
+    // Sega Model 2A video board carries these regardless of game.
+    roms.video_tables.assign(0x200000, 0);
+    copy_byte32(source, {"mpr-16310.15", 0x80000, 0xc078a780},
+                roms.video_tables, 0, errors);
+    copy_byte32(source, {"mpr-16311.16", 0x80000, 0x452a492b},
+                roms.video_tables, 1, errors);
+    copy_byte32(source, {"mpr-16312.14", 0x80000, 0xa25fef5b},
+                roms.video_tables, 2, errors);
+
+    result.error = errors.str();
+    return result;
+}
 } // namespace
 
 bool model2_roms::complete() const {
-    return main_cpu.size() == 0x200000 && main_data.size() == 0x2400000 &&
-           copro_data.size() == 0x800000 &&
-           polygon_data.size() == 0x2000000 &&
-           texture_data.size() == 0x1000000 &&
-           copro_tgp_tables.size() == 0x40000 &&
-           other_data.size() == 0x80000 &&
-           video_tables.size() == 0x200000 &&
-           sound_cpu.size() == 0x80000 && samples.size() == 0x800000 &&
-           communication_cpu.size() == 0x20000 &&
-           drive_cpu.size() == 0x10000;
+    return model2_rom_loader::is_complete(set, *this);
 }
 
 model2_rom_set model2_rom_loader::identify_set(const std::string& path) {
@@ -372,12 +504,16 @@ model2_rom_set model2_rom_loader::identify_set(const std::string& path) {
     if (source.contains("epr-17888c.12") &&
         source.contains("epr-17889c.13"))
         return model2_rom_set::sega_rally_revision_c;
+    if (source.contains("epr-18524.12") &&
+        source.contains("epr-18525.13"))
+        return model2_rom_set::virtua_cop_2;
     return model2_rom_set::unknown;
 }
 
 const char* model2_rom_loader::set_short_name(model2_rom_set set) {
     switch (set) {
     case model2_rom_set::sega_rally_revision_c: return "srallyc";
+    case model2_rom_set::virtua_cop_2: return "vcop2";
     case model2_rom_set::unknown: return "";
     }
     return "";
@@ -387,10 +523,71 @@ const char* model2_rom_loader::set_display_name(model2_rom_set set) {
     switch (set) {
     case model2_rom_set::sega_rally_revision_c:
         return "Sega Rally Championship (Revision C)";
+    case model2_rom_set::virtua_cop_2:
+        return "Virtua Cop 2 (Model 2A)";
     case model2_rom_set::unknown:
         return "Unsupported Sega Model 2 ROM set";
     }
     return "Unsupported Sega Model 2 ROM set";
+}
+
+bool model2_rom_loader::is_complete(model2_rom_set set,
+                                    const model2_roms& roms) {
+    // Per-set expected sizes. Anything marked optional is required only
+    // when the corresponding board is present on this cabinet; the
+    // light-gun vcop2 has none of these and the loader leaves them
+    // empty. Unknown defaults to "all common regions populated" so
+    // partial loads still report failure.
+    struct layout {
+        std::size_t main_cpu;
+        std::size_t main_data;
+        std::size_t polygon_data;
+        std::size_t texture_data;
+        std::size_t sound_cpu;
+        std::size_t samples;
+        std::size_t copro_tgp_tables;
+        std::size_t other_data;
+        std::size_t video_tables;
+        bool require_drive_cpu;
+        bool require_comm_cpu;
+    };
+    const layout* expected = nullptr;
+    switch (set) {
+    case model2_rom_set::sega_rally_revision_c: {
+        static constexpr layout srallyc{
+            0x200000, 0x2400000, 0x2000000, 0x1000000, 0x80000,
+            0x800000, 0x40000, 0x80000, 0x200000, true, true,
+        };
+        expected = &srallyc;
+        break;
+    }
+    case model2_rom_set::virtua_cop_2: {
+        static constexpr layout vcop2{
+            0x200000, 0x2400000, 0x800000, 0x400000, 0x80000,
+            0x800000, 0x40000, 0x80000, 0x200000, false, false,
+        };
+        expected = &vcop2;
+        break;
+    }
+    case model2_rom_set::unknown:
+    default:
+        return false;
+    }
+    if (roms.main_cpu.size() != expected->main_cpu) return false;
+    if (roms.main_data.size() != expected->main_data) return false;
+    if (roms.polygon_data.size() != expected->polygon_data) return false;
+    if (roms.texture_data.size() != expected->texture_data) return false;
+    if (roms.sound_cpu.size() != expected->sound_cpu) return false;
+    if (roms.samples.size() != expected->samples) return false;
+    if (roms.copro_tgp_tables.size() != expected->copro_tgp_tables)
+        return false;
+    if (roms.other_data.size() != expected->other_data) return false;
+    if (roms.video_tables.size() != expected->video_tables) return false;
+    if (expected->require_drive_cpu &&
+        roms.drive_cpu.size() != 0x10000) return false;
+    if (expected->require_comm_cpu &&
+        roms.communication_cpu.size() != 0x20000) return false;
+    return true;
 }
 
 model2_rom_load_result model2_rom_loader::load(const std::string& path) {
@@ -398,6 +595,8 @@ model2_rom_load_result model2_rom_loader::load(const std::string& path) {
     switch (identify_set(path)) {
     case model2_rom_set::sega_rally_revision_c:
         return load_sega_rally(source, fs::path(path));
+    case model2_rom_set::virtua_cop_2:
+        return load_virtua_cop_2(source);
     case model2_rom_set::unknown:
         return {model2_rom_set::unknown, {},
                 "Unsupported Sega Model 2 ROM set: " + path + "\n"};

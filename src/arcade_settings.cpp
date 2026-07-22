@@ -1,4 +1,5 @@
 #include "arcade_settings.h"
+#include "platform_paths.h"
 
 #include <algorithm>
 #include <charconv>
@@ -11,11 +12,7 @@ namespace fs = std::filesystem;
 
 namespace {
 fs::path config_root() {
-    if (const char* config_home = std::getenv("XDG_CONFIG_HOME"))
-        return fs::path(config_home);
-    if (const char* user_home = std::getenv("HOME"))
-        return fs::path(user_home) / ".config";
-    return {};
+    return whitty_platform::config_root();
 }
 
 fs::path config_path() {

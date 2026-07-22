@@ -16,6 +16,7 @@ enum class system22_mcu_input_profile : uint8_t {
     standard,
     time_crisis,
     dirt_dash,
+    aqua_jet,
 };
 
 class system22_c74_mcu {

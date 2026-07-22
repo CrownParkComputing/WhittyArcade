@@ -1,0 +1,94 @@
+name: Windows x86-64 build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Preserve Unix script line endings
+        shell: pwsh
+        run: git config --global core.autocrlf input
+
+      - name: Check out source and submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install the MSYS2 UCRT64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            zip
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-SDL2
+            mingw-w64-ucrt-x86_64-SDL2_ttf
+            mingw-w64-ucrt-x86_64-openal
+            mingw-w64-ucrt-x86_64-glew
+            mingw-w64-ucrt-x86_64-glm
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-minizip
+            mingw-w64-ucrt-x86_64-mpg123
+            mingw-w64-ucrt-x86_64-vulkan-loader
+            mingw-w64-ucrt-x86_64-vulkan-headers
+
+      - name: Configure release build
+        run: cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      # Moira's generated tables are memory-heavy under parallel GCC builds.
+      - name: Build WhittyArcade.exe
+        run: cmake --build build-windows --parallel 2
+
+      - name: Run Windows tests
+        run: ctest --test-dir build-windows --output-on-failure --parallel 2
+
+      - name: Stage portable Windows package
+        run: |
+          tools/stage_windows.sh \
+            build-windows/WhittyArcade.exe \
+            artifact-windows \
+            symbols/WhittyArcade.debug
+          WHITTYARCADE_HEADLESS=1 \
+            artifact-windows/WhittyArcade.exe --list-roms > /dev/null
+          (cd artifact-windows && zip -9 -r ../WhittyArcade-windows-x86_64.zip .)
+          sha256sum WhittyArcade-windows-x86_64.zip \
+            > WhittyArcade-windows-x86_64.zip.sha256
+
+      - name: Upload Windows x86-64 package
+        uses: actions/upload-artifact@v7
+        with:
+          name: WhittyArcade-windows-x86_64
+          path: |
+            WhittyArcade-windows-x86_64.zip
+            WhittyArcade-windows-x86_64.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload private Windows debug symbols
+        uses: actions/upload-artifact@v7
+        with:
+          name: WhittyArcade-windows-x86_64-symbols
+          path: symbols/WhittyArcade.debug
+          if-no-files-found: error
+          retention-days: 14

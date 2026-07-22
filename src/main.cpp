@@ -9,6 +9,10 @@
 #include "launcher_menu.h"
 #include "rom_library.h"
 
+#if defined(_WIN32)
+#include <SDL2/SDL_main.h>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>

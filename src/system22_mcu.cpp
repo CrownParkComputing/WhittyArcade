@@ -106,6 +106,10 @@ uint16_t system22_c74_mcu::digital_inputs() const {
         if (m_inputs.shift_up) value &= ~0x0020u;
         if (m_inputs.shift_down) value &= ~0x0040u;
         if (m_inputs.view4) value &= ~0x0080u;      // Motion stop
+    } else if (m_input_profile == system22_mcu_input_profile::aqua_jet) {
+        // Aqua Jet's only cabinet button beyond coin/service/test is the
+        // player start switch.
+        if (m_inputs.start) value &= ~0x0010u;
     } else {
         if (m_inputs.buttons[0]) value &= ~0x0010u; // Gun trigger
         if (m_inputs.buttons[1]) value &= ~0x0020u; // Foot pedal
@@ -114,15 +118,44 @@ uint16_t system22_c74_mcu::digital_inputs() const {
 }
 
 uint16_t system22_c74_mcu::analog_input(unsigned channel) const {
-    if (m_input_profile != system22_mcu_input_profile::dirt_dash)
-        return 0;
-
     const auto scale = [](uint32_t value, uint32_t input_max,
                           uint32_t output_max) {
         value = std::min(value, input_max);
         return static_cast<uint16_t>(
             (value * output_max + input_max / 2) / input_max);
     };
+
+    // Every Aqua Jet axis is wired backwards relative to the host controls,
+    // so each channel counts down from the top of its cabinet range.
+    if (m_input_profile == system22_mcu_input_profile::aqua_jet) {
+        switch (channel) {
+        case 0: {
+            // Handlebar: full left reads 0x3f8, centre 0x1fc, full right
+            // 0x000, from the same 0x280..0xd80 host wheel travel.
+            constexpr uint32_t host_low = 0x280;
+            constexpr uint32_t host_high = 0xd80;
+            const uint32_t steering = std::clamp<uint32_t>(
+                m_inputs.steering, host_low, host_high);
+            return static_cast<uint16_t>(0x3f8 -
+                ((steering - host_low) * 0x3f8u +
+                 (host_high - host_low) / 2) / (host_high - host_low));
+        }
+        case 1:
+            // Throttle lever: 0x1fc released, falling to 0x0e0 at full.
+            return static_cast<uint16_t>(
+                0x1fc - scale(m_inputs.gas, 0x610, 0x1fc - 0x0e0));
+        case 2:
+            // Fore/aft body lean: forward reads 0x3f8, back reads 0x000.
+            return static_cast<uint16_t>(
+                0x3f8 - scale(m_inputs.left_stick_y, 0xff, 0x3f8));
+        default:
+            return 0;
+        }
+    }
+
+    if (m_input_profile != system22_mcu_input_profile::dirt_dash)
+        return 0;
+
     switch (channel) {
     case 0: {
         // The common host wheel spans 0x280..0xd80; Dirt Dash's cabinet ADC

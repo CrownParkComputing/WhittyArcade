@@ -4,6 +4,10 @@ project(WhittyArcade LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(NOT WIN32)
+    set(WHITTY_MATH_LIB m)
+endif()
+
 # Find required libraries
 find_package(OpenGL REQUIRED)
 find_package(SDL2 REQUIRED)
@@ -237,9 +241,22 @@ set(SOURCES
     src/shinobi_machine_shinobi.cpp
 )
 
+if(WIN32)
+    enable_language(RC)
+    list(APPEND SOURCES
+        src/platform_file_dialog_windows.cpp
+        resources/windows/WhittyArcade.rc
+    )
+else()
+    list(APPEND SOURCES src/platform_file_dialog_unix.cpp)
+endif()
 
 # Build executable
-add_executable(WhittyArcade ${SOURCES})
+if(WIN32)
+    add_executable(WhittyArcade WIN32 ${SOURCES})
+else()
+    add_executable(WhittyArcade ${SOURCES})
+endif()
 target_include_directories(WhittyArcade PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/moira/Moira)
 
@@ -268,20 +285,25 @@ target_link_libraries(WhittyArcade
     PkgConfig::SDL2_TTF
     ZLIB::ZLIB
     Vulkan::Vulkan
-    m
+    ${WHITTY_MATH_LIB}
 )
+if(WIN32)
+    target_link_libraries(WhittyArcade PRIVATE ole32 shell32 uuid)
+    if(TARGET SDL2::SDL2main)
+        target_link_libraries(WhittyArcade PRIVATE SDL2::SDL2main)
+    endif()
+endif()
 
 # Compiler flags
 target_compile_options(WhittyArcade PRIVATE
-    -O2
-    -Wall -Wextra -Wpedantic
+    "$<$<COMPILE_LANGUAGE:CXX>:-O2;-Wall;-Wextra;-Wpedantic>"
 )
 
 enable_testing()
 add_test(NAME video_session_lifecycle_test
     COMMAND WhittyArcade --video-lifecycle-test)
 set_tests_properties(video_session_lifecycle_test PROPERTIES
-    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=")
+    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;WHITTYARCADE_HEADLESS=1")
 
 add_test(NAME arcade_session_factory_test
     COMMAND WhittyArcade --session-factory-test)
@@ -378,7 +400,8 @@ add_executable(system22_cpu_test
     src/system22_cpu.cpp
 )
 target_include_directories(system22_cpu_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(system22_cpu_test PRIVATE musashi Threads::Threads m)
+target_link_libraries(system22_cpu_test PRIVATE
+    musashi Threads::Threads ${WHITTY_MATH_LIB})
 target_compile_options(system22_cpu_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME system22_cpu_test COMMAND system22_cpu_test)
 
@@ -415,7 +438,7 @@ endforeach()
 add_executable(i960_test tests/i960_test.cpp)
 target_include_directories(i960_test PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/i960)
-target_link_libraries(i960_test PRIVATE i960 m)
+target_link_libraries(i960_test PRIVATE i960 ${WHITTY_MATH_LIB})
 target_compile_options(i960_test PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME i960_test COMMAND i960_test)
 
@@ -439,7 +462,8 @@ target_include_directories(model2_audio_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/musashi)
 target_link_libraries(model2_audio_test PRIVATE
-    musashi arcade_audio_output ${OPENAL_LIBRARY} Threads::Threads m)
+    musashi arcade_audio_output ${OPENAL_LIBRARY} Threads::Threads
+    ${WHITTY_MATH_LIB})
 target_compile_options(model2_audio_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME model2_audio_test COMMAND model2_audio_test)
@@ -488,7 +512,8 @@ target_include_directories(model2_boot_test PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/i960
 )
 target_link_libraries(model2_boot_test PRIVATE
-    i960 mb86233 system24_video PkgConfig::MINIZIP ZLIB::ZLIB m)
+    i960 mb86233 system24_video PkgConfig::MINIZIP ZLIB::ZLIB
+    ${WHITTY_MATH_LIB})
 target_compile_options(model2_boot_test PRIVATE
     -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
 
@@ -509,7 +534,8 @@ add_executable(model2_video_test
 )
 target_include_directories(model2_video_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(model2_video_test PRIVATE system24_video m)
+target_link_libraries(model2_video_test PRIVATE
+    system24_video ${WHITTY_MATH_LIB})
 target_compile_options(model2_video_test PRIVATE
     -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME model2_video_test COMMAND model2_video_test)

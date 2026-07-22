@@ -1,4 +1,5 @@
 #include "launcher_menu.h"
+#include "platform_paths.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -7,6 +8,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstdio>
+#include <filesystem>
 #include <optional>
 #include <utility>
 
@@ -162,13 +164,8 @@ struct launcher_menu::implementation {
             SDL_SetWindowInputFocus(window);
         }
 
-        constexpr std::array<const char*, 3> font_paths{
-            "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        };
-        for (const char* path : font_paths) {
-            font = TTF_OpenFont(path, 21);
+        for (const std::filesystem::path& path : whitty_platform::font_paths()) {
+            font = TTF_OpenFont(path.string().c_str(), 21);
             if (font) break;
         }
         if (!font)

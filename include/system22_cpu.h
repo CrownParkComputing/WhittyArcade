@@ -18,6 +18,7 @@ enum class system22_driving_profile : uint8_t {
     cyber_commando,
     time_crisis,
     dirt_dash,
+    aqua_jet,
 };
 
 // Byte-accurate, big-endian view of the System 22 main CPU maps.
