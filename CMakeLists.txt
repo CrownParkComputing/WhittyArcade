@@ -354,6 +354,7 @@ else()
 endif()
 target_compile_options(input_mapping_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
+target_compile_definitions(input_mapping_test PRIVATE SDL_MAIN_HANDLED)
 add_test(NAME input_mapping_test COMMAND input_mapping_test)
 
 add_executable(arcade_catalog_test
