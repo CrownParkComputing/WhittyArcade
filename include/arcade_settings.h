@@ -30,6 +30,12 @@ struct emulator_settings {
     bool show_renderer{true};
     renderer_backend renderer{renderer_backend::opengl};
     output_mode output{output_mode::single};
+    // Direct library locations selected by the user. Empty values retain the
+    // platform defaults so command-line tools and upgraded installs continue
+    // to work before the first-run wizard is completed.
+    std::string rom_directory;
+    std::string chd_directory;
+    bool library_setup_complete{false};
     // Runtime-only physical display assignment used by paired cabinet
     // processes. -1 follows the desktop/window-manager default. This is not
     // persisted because a portable install may see a different monitor order.

@@ -52,7 +52,11 @@ public:
 
     // Finds rrv1-a.chd either beside the selected ZIP or in the conventional
     // MAME software directory (rrvac/rrv1-a.chd).
-    static std::string find_disc_path(const std::string& selected_path);
+    static std::string find_disc_path(
+        const std::string& selected_path,
+        const std::string& configured_chd_directory = {});
     static system246_disc_info inspect_disc(const std::string& path);
-    static system246_rom_load_result load(const std::string& path);
+    static system246_rom_load_result load(
+        const std::string& path,
+        const std::string& configured_chd_directory = {});
 };

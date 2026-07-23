@@ -69,9 +69,9 @@ Implemented and tested:
   presentation contracts
 - Shared scaling, filtering, settings, overlays and ROM menus across OpenGL,
   Vulkan-transfer and SDL software presentation
-- Every installed game offers single screen and mirrored twin-screen output.
-  The two-machine LAN choice appears only for titles whose P2 inputs are
-  implemented. For ordinary
+- Launch choices follow the selected game's implemented cabinet inputs.
+  One-player titles show a single-screen cabinet only; supported alternating
+  and simultaneous games add mirrored twin-display choices. For ordinary
   alternating/simultaneous multiplayer games, Player 1 owns the authoritative
   emulator and sends its final picture to Player 2; Player 2 sends its local
   controls back as the arcade game's P2 inputs. Both displays therefore show
@@ -118,7 +118,8 @@ accuracy and cabinet peripherals rather than basic startup and rendering.
 The arcade selector exposes clear choices based on each working ROM's
 implemented cabinet inputs:
 
-- **Single screen** runs one normal cabinet display.
+- **Single screen** runs one normal cabinet display and is the only choice
+  shown for games without an implemented Player 2 input path.
 - **Twin Screen Fullscreen** places two bordered native-pixel viewports in
   separate fullscreen panes.
 - **Twin Screen Two Windows** creates independent Player 1 and Player 2
@@ -127,15 +128,16 @@ implemented cabinet inputs:
 - **Twin Screen Two Monitors** centres Player 1 on physical monitor 1 and
   Player 2 on physical monitor 2. Sega Rally starts CAR1 and CAR2 as two
   native linked cabinet processes for every Twin mode.
-- **Multiplayer** detects the other open app, assigns Player 1 and Player 2,
-  and lists games installed on both systems. Player 1 selects the game once
-  and Player 2 follows automatically. For ordinary games Player 1 streams the
-  picture and audio remains on Player 1, while Player 2 contributes the second
-  player's coin, start, directions and buttons. Each computer uses its normal
-  local P1 control layout. Alternating-turn networking is enabled for Galaga,
-  Galaxian, Moon Cresta, UniWar S, Phoenix, Shinobi, Ghosts'n Goblins and
-  Pac-Mania; Virtua Cop and Virtua Cop 2 use simultaneous P1/P2 input.
-  Sega Rally alone runs a native two-cabinet Model 2 link.
+- **Multiplayer > Network Two Player** lists only games with implemented
+  alternating or simultaneous P1/P2 paths. Player 1 selects once and Player 2
+  follows automatically. Player 1 streams the picture while Player 2 returns
+  its controls. Alternating-turn networking is enabled for Galaga, Galaxian,
+  Moon Cresta, UniWar S, Phoenix, Shinobi, Ghosts'n Goblins and Pac-Mania;
+  Virtua Cop and Virtua Cop 2 use simultaneous P1/P2 input.
+- **Multiplayer > Arcade System Link** is a separate list containing Sega
+  Rally only. It runs two Model 2 boards through Sega's native link protocol;
+  other games will not appear there until their original cabinet link is
+  implemented and verified.
 
 For direct launch/testing, use `--twin-screen` for a local mirrored output, or
 use the same ROM and port base on each LAN computer:
@@ -264,8 +266,10 @@ firmware archives or loose firmware files.
 
 ## ROM library and MAME archive layouts
 
-There is no ROM import step. WhittyArcade creates and reads two folders
-directly:
+There is no ROM import step. On first launch, a setup wizard asks for the
+existing ROM and CHD folders that WhittyArcade should read directly. You can
+choose any accessible locations, use one folder for both, or accept these
+recommended defaults:
 
 - Linux: `~/.local/share/WhittyArcade/roms` and
   `~/.local/share/WhittyArcade/chd` (or the equivalent below
@@ -273,10 +277,11 @@ directly:
 - Windows: `%LOCALAPPDATA%\WhittyArcade\roms` and
   `%LOCALAPPDATA%\WhittyArcade\chd`.
 
-Put supported MAME ZIPs or extracted sets in `roms`, and disc media such as
-`rrv1-a.chd` in `chd`. Files are read in place: WhittyArcade does not copy,
-extract, modify or repack them. Open **ROM Folders** in the launcher to display
-the active paths and run the installed-set audit.
+Put supported MAME ZIPs or extracted sets in the selected ROM folder, and disc
+media such as `rrv1-a.chd` in the selected CHD folder. Files are read in place:
+WhittyArcade does not copy, extract, modify or repack them. Open
+**Settings > ROM and CHD folder locations** to view or change either path.
+The installed-set audit uses the same saved locations.
 
 The command-line audit and listing tools use the same folders:
 
@@ -438,10 +443,11 @@ Aqua Jet cabinet defaults:
 Settings are saved to
 `~/.config/WhittyArcade/settings.ini` (or `$XDG_CONFIG_HOME`) on Linux and
 `%LOCALAPPDATA%\WhittyArcade\settings.ini` on Windows. Existing
-`ridge_racer_emulator` settings are imported automatically on Linux. Music
-volume controls looping C352 voices; effects/speech volume controls one-shot
-voices. Every board uses the same programme-loudness target and peak limiter;
-the master volume is applied afterwards as the global listening level.
+`ridge_racer_emulator` settings are imported automatically on Linux. The
+selected ROM and CHD folders are saved in this same settings file. Music volume
+controls looping C352 voices; effects/speech volume controls one-shot voices.
+Every board uses the same programme-loudness target and peak limiter; the
+master volume is applied afterwards as the global listening level.
 Input mappings are saved separately in
 `~/.config/WhittyArcade/input.ini` (or `$XDG_CONFIG_HOME`) on Linux and the
 same `%LOCALAPPDATA%\WhittyArcade` directory on Windows. They are reloaded for

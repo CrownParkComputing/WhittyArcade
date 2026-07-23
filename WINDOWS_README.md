@@ -12,13 +12,15 @@ graphics driver are required. Vulkan is optional at runtime unless selected in
 the renderer settings.
 
 The package is portable; no installer or administrator access is required.
-Settings, controller mappings, high scores, saves, and imported ROM archives
-are stored below `%LOCALAPPDATA%\WhittyArcade`, so upgrading the extracted
-application directory does not remove them.
+Settings, controller mappings, high scores and saves are stored below
+`%LOCALAPPDATA%\WhittyArcade`, so upgrading the extracted application
+directory does not remove them.
 
-The launcher uses the standard Windows file picker. Select **ROM Library /
-Import** to import individual MAME-compatible ZIP archives or scan a folder.
-Archives are copied unchanged; nothing is extracted or repacked.
+The first-run wizard uses the standard Windows folder picker. Select the
+folders where your MAME-compatible ZIP archives and CHD images already live,
+or accept the recommended `%LOCALAPPDATA%\WhittyArcade` folders. Files are
+read in place; nothing is imported, copied, extracted or repacked. Change the
+paths later under **Settings > ROM and CHD folder locations**.
 
 You must provide ROMs and firmware that you are legally entitled to use.
 WhittyArcade does not provide them or link to downloads.

@@ -255,7 +255,8 @@ const char* system246_rom_loader::set_display_name(system246_rom_set set) {
 }
 
 std::string system246_rom_loader::find_disc_path(
-        const std::string& selected_path) {
+        const std::string& selected_path,
+        const std::string& configured_chd_directory) {
     if (selected_path.empty()) return {};
     const fs::path selected(selected_path);
     std::error_code error;
@@ -275,11 +276,12 @@ std::string system246_rom_loader::find_disc_path(
         if (!found.empty()) return found.lexically_normal().string();
     }
 
-    // WhittyArcade reads disc images from its dedicated CHD folder. Fall back
-    // to <data>/WhittyArcade/chd/rrv1-a.chd so a disc kept there is found even
-    // when the selected set ZIP has no sibling copy.
-    const fs::path chd_candidate =
-        whitty_platform::data_root() / "WhittyArcade" / "chd" / disc_name;
+    // WhittyArcade reads disc images from its configured CHD folder. Keep the
+    // historical per-user location as the default for upgraded/CLI installs.
+    const fs::path chd_root = configured_chd_directory.empty() ?
+        whitty_platform::data_root() / "WhittyArcade" / "chd" :
+        fs::path(configured_chd_directory);
+    const fs::path chd_candidate = chd_root / disc_name;
     if (fs::is_regular_file(chd_candidate, error))
         return chd_candidate.lexically_normal().string();
     return {};
@@ -358,7 +360,8 @@ system246_disc_info system246_rom_loader::inspect_disc(
 }
 
 system246_rom_load_result system246_rom_loader::load(
-        const std::string& path) {
+        const std::string& path,
+        const std::string& configured_chd_directory) {
     system246_rom_load_result result;
     result.set = identify_set(path);
     if (result.set == system246_rom_set::unknown) {
@@ -369,7 +372,7 @@ system246_rom_load_result system246_rom_loader::load(
     result.dongle_archive = path;
     if (!read_dongle(fs::path(path), result.dongle, result.error))
         return result;
-    result.disc_path = find_disc_path(path);
+    result.disc_path = find_disc_path(path, configured_chd_directory);
     result.disc = inspect_disc(result.disc_path);
     if (!result.disc) result.error = result.disc.error;
     return result;
