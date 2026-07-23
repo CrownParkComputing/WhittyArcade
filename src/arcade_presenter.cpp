@@ -434,41 +434,55 @@ struct alternate_presenter::implementation {
         auto* destination = static_cast<uint8_t*>(mapped);
         std::memset(destination, 0,
                     destination_pitch * swapchain_extent.height);
-        int copy_width = static_cast<int>(swapchain_extent.width);
-        int copy_height = static_cast<int>(swapchain_extent.height);
-        if (settings.integer_scaling) {
-            const int scale = std::min(copy_width / width,
-                                       copy_height / height);
-            if (scale >= 1) {
-                copy_width = width * scale;
-                copy_height = height * scale;
-            }
-        } else if (copy_width * height > copy_height * width) {
-            copy_width = copy_height * width / height;
-        } else {
-            copy_height = copy_width * height / width;
-        }
-        const int x_offset = (static_cast<int>(swapchain_extent.width) -
-                              copy_width) / 2;
-        const int y_offset = (static_cast<int>(swapchain_extent.height) -
-                              copy_height) / 2;
         const bool bgra = swapchain_format == VK_FORMAT_B8G8R8A8_UNORM ||
                           swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
-        for (int y = 0; y < copy_height; ++y) {
-            const int source_y = height - 1 -
-                (y * height / std::max(copy_height, 1));
-            const uint8_t* source = pixels +
-                (static_cast<std::size_t>(source_y) * width) * 4;
-            uint8_t* row = destination +
-                (static_cast<std::size_t>(y + y_offset) *
-                 swapchain_extent.width + x_offset) * 4;
-            for (int x = 0; x < copy_width; ++x) {
-                const uint8_t* pixel = source +
-                    (x * width / std::max(copy_width, 1)) * 4;
-                row[x * 4 + 0] = bgra ? pixel[2] : pixel[0];
-                row[x * 4 + 1] = pixel[1];
-                row[x * 4 + 2] = bgra ? pixel[0] : pixel[2];
-                row[x * 4 + 3] = pixel[3];
+        const int surface_w = static_cast<int>(swapchain_extent.width);
+        const int surface_h = static_cast<int>(swapchain_extent.height);
+        // One pane, or two side-by-side panes for fullscreen dual output; each
+        // letterboxes the arcade frame within its own half of the swapchain.
+        struct present_pane { int x; int w; };
+        std::array<present_pane, 2> panes{{{0, surface_w}, {0, 0}}};
+        int pane_count = 1;
+        if (settings.output == output_mode::dual && settings.fullscreen) {
+            const int split = std::clamp(surface_w / 2, 1, surface_w - 1);
+            panes[0] = {0, split};
+            panes[1] = {split, surface_w - split};
+            pane_count = 2;
+        }
+        for (int pane = 0; pane < pane_count; ++pane) {
+            int copy_width = panes[pane].w;
+            int copy_height = surface_h;
+            if (settings.integer_scaling) {
+                const int scale = std::min(copy_width / width,
+                                           copy_height / height);
+                if (scale >= 1) {
+                    copy_width = width * scale;
+                    copy_height = height * scale;
+                }
+            } else if (copy_width * height > copy_height * width) {
+                copy_width = copy_height * width / height;
+            } else {
+                copy_height = copy_width * height / width;
+            }
+            const int x_offset =
+                panes[pane].x + (panes[pane].w - copy_width) / 2;
+            const int y_offset = (surface_h - copy_height) / 2;
+            for (int y = 0; y < copy_height; ++y) {
+                const int source_y = height - 1 -
+                    (y * height / std::max(copy_height, 1));
+                const uint8_t* source = pixels +
+                    (static_cast<std::size_t>(source_y) * width) * 4;
+                uint8_t* row = destination +
+                    (static_cast<std::size_t>(y + y_offset) *
+                     swapchain_extent.width + x_offset) * 4;
+                for (int x = 0; x < copy_width; ++x) {
+                    const uint8_t* pixel = source +
+                        (x * width / std::max(copy_width, 1)) * 4;
+                    row[x * 4 + 0] = bgra ? pixel[2] : pixel[0];
+                    row[x * 4 + 1] = pixel[1];
+                    row[x * 4 + 2] = bgra ? pixel[0] : pixel[2];
+                    row[x * 4 + 3] = pixel[3];
+                }
             }
         }
         composite_status_overlay(
@@ -690,28 +704,41 @@ bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
     int output_width = 1;
     int output_height = 1;
     drawable_size(output_width, output_height);
-    int copy_width = output_width;
-    int copy_height = output_height;
-    if (m_impl->settings.integer_scaling) {
-        const int scale = std::min(copy_width / width, copy_height / height);
-        if (scale >= 1) {
-            copy_width = width * scale;
-            copy_height = height * scale;
-        }
-    } else if (copy_width * height > copy_height * width) {
-        copy_width = copy_height * width / height;
-    } else {
-        copy_height = copy_width * height / width;
+    // One pane, or two side-by-side panes for fullscreen dual output. Each pane
+    // keeps the arcade framebuffer's aspect and letterboxes within its half
+    // instead of stretching to the (possibly ultrawide) drawable.
+    struct present_pane { int x; int w; };
+    std::array<present_pane, 2> panes{{{0, output_width}, {0, 0}}};
+    int pane_count = 1;
+    if (m_impl->settings.output == output_mode::dual &&
+        m_impl->settings.fullscreen) {
+        const int split = std::clamp(output_width / 2, 1, output_width - 1);
+        panes[0] = {0, split};
+        panes[1] = {split, output_width - split};
+        pane_count = 2;
     }
-    // Match the Vulkan and OpenGL presenters exactly: keep the arcade
-    // framebuffer's aspect/resolution policy and letterbox around it instead
-    // of stretching software output to a backend-dependent drawable size.
-    SDL_FRect destination{
-        static_cast<float>((output_width - copy_width) / 2),
-        static_cast<float>((output_height - copy_height) / 2),
-        static_cast<float>(copy_width), static_cast<float>(copy_height)};
-    SDL_RenderTexture(m_impl->software_renderer, m_impl->software_texture,
-                      nullptr, &destination);
+    for (int pane = 0; pane < pane_count; ++pane) {
+        int copy_width = panes[pane].w;
+        int copy_height = output_height;
+        if (m_impl->settings.integer_scaling) {
+            const int scale = std::min(copy_width / width, copy_height / height);
+            if (scale >= 1) {
+                copy_width = width * scale;
+                copy_height = height * scale;
+            }
+        } else if (copy_width * height > copy_height * width) {
+            copy_width = copy_height * width / height;
+        } else {
+            copy_height = copy_width * height / width;
+        }
+        const SDL_FRect destination{
+            static_cast<float>(panes[pane].x +
+                               (panes[pane].w - copy_width) / 2),
+            static_cast<float>((output_height - copy_height) / 2),
+            static_cast<float>(copy_width), static_cast<float>(copy_height)};
+        SDL_RenderTexture(m_impl->software_renderer, m_impl->software_texture,
+                          nullptr, &destination);
+    }
     if (overlay_pixels && overlay_width > 0 && overlay_height > 0) {
         if (!m_impl->software_overlay_texture ||
             overlay_width != m_impl->overlay_width ||

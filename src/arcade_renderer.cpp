@@ -2447,7 +2447,12 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     std::array<present_pane, 2> panes{{{0, 0, m_ctx->width, m_ctx->height},
                                        {0, 0, 0, 0}}};
     int pane_count = 1;
-    const bool dual_output = !m_single_screen_only &&
+    // Dual output splits the final window/drawable, so it only applies to the
+    // direct OpenGL present. With a Vulkan/software presenter this pane loop
+    // draws into the native-resolution intermediate framebuffer (which the
+    // presenter then scales to the window); splitting there would wreck the
+    // image, so keep it single and let the presenter own the final letterbox.
+    const bool dual_output = !m_single_screen_only && !m_alternate_presenter &&
         m_display_settings.output == output_mode::dual;
     // Windowed dual output gives each player an independent window (rendered
     // after the main swap below, so it can sit on its own monitor). Fullscreen
