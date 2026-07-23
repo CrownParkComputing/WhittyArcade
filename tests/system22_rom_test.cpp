@@ -1,4 +1,4 @@
-#include "system22_rom.h"
+#include "namco/system22/system22_rom.h"
 
 #include <cassert>
 #include <cstdio>

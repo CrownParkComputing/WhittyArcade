@@ -15,7 +15,7 @@
 // ports (BSD-MIT Crown Park Computing reference), which itself mirrors
 // MAME's `decrypt_opcode_table`/`shinobi` driver.
 
-#include "system16b_rom.h"
+#include "sega/system16b/system16b_rom.h"
 
 #include <algorithm>
 #include <array>

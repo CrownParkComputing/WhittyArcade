@@ -1,5 +1,5 @@
-#include "system16b_audio.h"
-#include "system16b_machine.h"
+#include "sega/system16b/system16b_audio.h"
+#include "sega/system16b/system16b_machine.h"
 
 #include <algorithm>
 #include <cstdint>

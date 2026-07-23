@@ -1,8 +1,8 @@
 // system22_dsp.h - Namco C71 master/slave DSP subsystem.
 #pragma once
 
-#include "system22_tms320c25.h"
-#include "system22_types.h"
+#include "namco/system22/system22_tms320c25.h"
+#include "namco/system22/system22_types.h"
 
 #include <array>
 #include <cstddef>

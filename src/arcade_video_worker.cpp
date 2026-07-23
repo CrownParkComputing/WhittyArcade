@@ -1,6 +1,6 @@
 #include "arcade_video_worker.h"
 
-#include "system22_config.h"
+#include "namco/system22/system22_config.h"
 #include "arcade_renderer.h"
 
 #include <algorithm>

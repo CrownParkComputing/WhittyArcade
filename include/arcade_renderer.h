@@ -2,7 +2,7 @@
 // Uses OpenGL shaders to rasterize renderer-neutral System 22 polygon records.
 #pragma once
 
-#include "system22_types.h"
+#include "namco/system22/system22_types.h"
 #include "arcade_settings.h"
 #include "model2_gpu_frame.h"
 #include "operator_menu.h"

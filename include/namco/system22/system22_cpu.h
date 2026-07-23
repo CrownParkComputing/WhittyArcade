@@ -1,7 +1,7 @@
 // system22_cpu.h - System 22 main CPU and memory bus
 #pragma once
 
-#include "system22_types.h"
+#include "namco/system22/system22_types.h"
 #include "musashi_memory.h"
 
 #include <array>

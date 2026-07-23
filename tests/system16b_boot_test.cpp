@@ -17,8 +17,8 @@
 // The 68000 (instance-based m68000_cpu / Moira core) starts running the
 // System 16-B Shinobi program image after reset(); we feed it 60 frames
 // @ 166 667 cycles each (10 MHz / 60 Hz), with no front-end interaction.
-#include "system16b_machine.h"
-#include "system16b_rom.h"
+#include "sega/system16b/system16b_machine.h"
+#include "sega/system16b/system16b_rom.h"
 #include "galaxian_machine.h"
 #include "m68000_cpu.h"
 

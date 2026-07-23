@@ -1,5 +1,5 @@
 // system22_cpu.cpp - System 22 MC68020 and main bus implementation
-#include "system22_cpu.h"
+#include "namco/system22/system22_cpu.h"
 
 #include <algorithm>
 #include <cstdio>

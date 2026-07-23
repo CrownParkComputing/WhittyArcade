@@ -1,7 +1,7 @@
 #pragma once
 
 #include "arcade_audio_output.h"
-#include "gng_rom.h"
+#include "capcom/gng/gng_rom.h"
 
 #include <array>
 #include <atomic>

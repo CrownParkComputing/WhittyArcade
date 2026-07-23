@@ -1,4 +1,4 @@
-#include "gng_rom.h"
+#include "capcom/gng/gng_rom.h"
 
 #include <algorithm>
 #include <array>

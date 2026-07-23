@@ -1,8 +1,8 @@
 // system22_mcu.cpp - standalone Namco C74 integration.
-#include "system22_mcu.h"
+#include "namco/system22/system22_mcu.h"
 
-#include "system22_audio.h"
-#include "system22_cpu.h"
+#include "namco/system22/system22_audio.h"
+#include "namco/system22/system22_cpu.h"
 
 #include <algorithm>
 

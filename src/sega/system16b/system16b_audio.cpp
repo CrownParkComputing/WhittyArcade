@@ -4,7 +4,7 @@
 // The synth combines a ymfm YM2151 (FM) and the standalone segapcm
 // chip, mixes their output, and supplies int16 stereo frames on demand.
 
-#include "system16b_audio.h"
+#include "sega/system16b/system16b_audio.h"
 #include "arcade_audio_output.h"
 
 #include "segapcm.h"

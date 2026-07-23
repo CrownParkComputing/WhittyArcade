@@ -1,4 +1,4 @@
-#include "gng_machine.h"
+#include "capcom/gng/gng_machine.h"
 #include "high_scores.h"
 
 extern "C" {

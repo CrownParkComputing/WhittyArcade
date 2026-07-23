@@ -336,12 +336,12 @@ target_compile_options(arcade_audio_output PRIVATE
 set(SOURCES
     src/main.cpp
     src/arcade_session.cpp
-    src/system22_session.cpp
+    src/namco/system22/system22_session.cpp
     src/model1_session.cpp
     src/model2_session.cpp
     src/galaxian_session.cpp
-    src/system16b_session.cpp
-    src/gng_session.cpp
+    src/sega/system16b/system16b_session.cpp
+    src/capcom/gng/gng_session.cpp
     src/namco_session.cpp
     src/arcade_renderer.cpp
     src/arcade_input.cpp
@@ -357,14 +357,14 @@ set(SOURCES
     src/high_scores.cpp
     src/arcade_presenter.cpp
     src/arcade_video_worker.cpp
-    src/system22_audio.cpp
+    src/namco/system22/system22_audio.cpp
     src/musashi_memory.cpp
-    src/system22_cpu.cpp
-    src/system22_dsp.cpp
-    src/system22_mcu.cpp
-    src/system22_sprites.cpp
-    src/system22_tms320c25.cpp
-    src/system22_rom.cpp
+    src/namco/system22/system22_cpu.cpp
+    src/namco/system22/system22_dsp.cpp
+    src/namco/system22/system22_mcu.cpp
+    src/namco/system22/system22_sprites.cpp
+    src/namco/system22/system22_tms320c25.cpp
+    src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/system246_controls.cpp
     src/xbox360_rom.cpp
@@ -388,13 +388,13 @@ set(SOURCES
     src/galaxian_machine.cpp
     src/galaxian_machine_mooncrst.cpp
     src/galaxian_machine_phoenix.cpp
-    src/system16b_rom.cpp
-    src/system16b_audio.cpp
-    src/system16b_machine.cpp
-    src/system16b_machine_shinobi.cpp
-    src/gng_rom.cpp
-    src/gng_machine.cpp
-    src/gng_audio.cpp
+    src/sega/system16b/system16b_rom.cpp
+    src/sega/system16b/system16b_audio.cpp
+    src/sega/system16b/system16b_machine.cpp
+    src/sega/system16b/system16b_machine_shinobi.cpp
+    src/capcom/gng/gng_rom.cpp
+    src/capcom/gng/gng_machine.cpp
+    src/capcom/gng/gng_audio.cpp
     src/namco_rom.cpp
     src/galaga_machine.cpp
     src/galaga_audio.cpp
@@ -564,14 +564,14 @@ add_executable(arcade_catalog_test
     tests/arcade_catalog_test.cpp
     src/arcade_catalog.cpp
     src/arcade_game_probe.cpp
-    src/system22_rom.cpp
+    src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/xbox360_rom.cpp
     src/model1_rom.cpp
     src/model2_rom.cpp
     src/galaxian_rom.cpp
-    src/system16b_rom.cpp
-    src/gng_rom.cpp
+    src/sega/system16b/system16b_rom.cpp
+    src/capcom/gng/gng_rom.cpp
     src/namco_rom.cpp
 )
 target_include_directories(arcade_catalog_test PRIVATE
@@ -587,14 +587,14 @@ add_executable(rom_library_test
     src/arcade_catalog.cpp
     src/arcade_game_probe.cpp
     src/rom_library.cpp
-    src/system22_rom.cpp
+    src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/xbox360_rom.cpp
     src/model1_rom.cpp
     src/model2_rom.cpp
     src/galaxian_rom.cpp
-    src/system16b_rom.cpp
-    src/gng_rom.cpp
+    src/sega/system16b/system16b_rom.cpp
+    src/capcom/gng/gng_rom.cpp
     src/namco_rom.cpp
 )
 target_include_directories(rom_library_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -623,8 +623,8 @@ endif()
 
 add_executable(gng_machine_test
     tests/gng_machine_test.cpp
-    src/gng_rom.cpp
-    src/gng_machine.cpp
+    src/capcom/gng/gng_rom.cpp
+    src/capcom/gng/gng_machine.cpp
     src/high_scores.cpp)
 target_include_directories(gng_machine_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -816,7 +816,7 @@ add_test(NAME high_scores_test COMMAND high_scores_test)
 add_executable(system22_cpu_test
     tests/system22_cpu_test.cpp
     src/musashi_memory.cpp
-    src/system22_cpu.cpp
+    src/namco/system22/system22_cpu.cpp
 )
 target_include_directories(system22_cpu_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(system22_cpu_test PRIVATE
@@ -826,7 +826,7 @@ add_test(NAME system22_cpu_test COMMAND system22_cpu_test)
 
 add_executable(system22_sprite_test
     tests/system22_sprite_test.cpp
-    src/system22_sprites.cpp)
+    src/namco/system22/system22_sprites.cpp)
 target_include_directories(system22_sprite_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(system22_sprite_test PRIVATE
@@ -835,7 +835,7 @@ add_test(NAME system22_sprite_test COMMAND system22_sprite_test)
 
 add_executable(system22_rom_test
     tests/system22_rom_test.cpp
-    src/system22_rom.cpp
+    src/namco/system22/system22_rom.cpp
 )
 target_include_directories(system22_rom_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -863,7 +863,7 @@ add_test(NAME i960_test COMMAND i960_test)
 
 add_executable(system22_audio_test
     tests/system22_audio_test.cpp
-    src/system22_audio.cpp
+    src/namco/system22/system22_audio.cpp
 )
 target_include_directories(system22_audio_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(system22_audio_test PRIVATE ${OPENAL_LIBRARY} Threads::Threads)
@@ -889,7 +889,7 @@ add_test(NAME model2_audio_test COMMAND model2_audio_test)
 
 add_executable(system22_tms320c25_test
     tests/system22_tms320c25_test.cpp
-    src/system22_tms320c25.cpp
+    src/namco/system22/system22_tms320c25.cpp
 )
 target_include_directories(system22_tms320c25_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(system22_tms320c25_test PRIVATE -Wall -Wextra -Wpedantic)
@@ -1238,8 +1238,8 @@ endif()
 add_executable(system16b_boot_test
     tests/system16b_boot_test.cpp
     src/high_scores.cpp
-    src/system16b_rom.cpp
-    src/system16b_machine_shinobi.cpp
+    src/sega/system16b/system16b_rom.cpp
+    src/sega/system16b/system16b_machine_shinobi.cpp
 )
 target_include_directories(system16b_boot_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -1249,7 +1249,7 @@ add_test(NAME system16b_input_test COMMAND system16b_boot_test --input-test)
 
 add_executable(system16b_audio_test
     tests/system16b_audio_test.cpp
-    src/system16b_audio.cpp
+    src/sega/system16b/system16b_audio.cpp
 )
 target_include_directories(system16b_audio_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -1260,10 +1260,10 @@ add_test(NAME system16b_audio_test COMMAND system16b_audio_test)
 add_executable(system16b_audio_integration_test
     tests/system16b_audio_integration_test.cpp
     src/high_scores.cpp
-    src/system16b_rom.cpp
-    src/system16b_audio.cpp
-    src/system16b_machine.cpp
-    src/system16b_machine_shinobi.cpp
+    src/sega/system16b/system16b_rom.cpp
+    src/sega/system16b/system16b_audio.cpp
+    src/sega/system16b/system16b_machine.cpp
+    src/sega/system16b/system16b_machine_shinobi.cpp
 )
 target_include_directories(system16b_audio_integration_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)

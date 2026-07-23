@@ -1,7 +1,7 @@
 // system22_dsp.cpp - standalone Namco C71 integration.
-#include "system22_dsp.h"
+#include "namco/system22/system22_dsp.h"
 
-#include "system22_cpu.h"
+#include "namco/system22/system22_cpu.h"
 
 #include <algorithm>
 #include <cmath>

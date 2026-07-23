@@ -1,7 +1,7 @@
 // system22_rom.h - ROM loading and management
 #pragma once
 
-#include "system22_types.h"
+#include "namco/system22/system22_types.h"
 #include <string>
 #include <vector>
 #include <cstdint>

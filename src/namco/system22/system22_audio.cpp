@@ -1,5 +1,5 @@
 // system22_audio.cpp - Standalone C352 emulation and OpenAL streaming
-#include "system22_audio.h"
+#include "namco/system22/system22_audio.h"
 #include "arcade_audio_output.h"
 
 #include <AL/al.h>

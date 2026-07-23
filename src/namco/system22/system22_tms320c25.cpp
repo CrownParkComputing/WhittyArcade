@@ -97,7 +97,7 @@ Table 3-2.  TMS320C25/26 Memory Blocks
 */
 
 
-#include "system22_tms320c25.h"
+#include "namco/system22/system22_tms320c25.h"
 
 #include <algorithm>
 #include <cstdio>

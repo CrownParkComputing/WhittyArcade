@@ -1,4 +1,4 @@
-#include "system22_tms320c25.h"
+#include "namco/system22/system22_tms320c25.h"
 
 #include <cstdint>
 #include <cstdio>

@@ -1,7 +1,7 @@
 // arcade_frontend.h - shared ROM-board and cabinet configuration dialogs.
 #pragma once
 
-#include "system22_rom.h"
+#include "namco/system22/system22_rom.h"
 #include "arcade_types.h"
 #include "operator_menu.h"
 

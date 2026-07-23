@@ -8,8 +8,8 @@ class m68000_cpu;
 
 #include "arcade_types.h"
 #include "high_scores.h"
-#include "system16b_audio.h"
-#include "system16b_rom.h"
+#include "sega/system16b/system16b_audio.h"
+#include "sega/system16b/system16b_rom.h"
 
 #include <array>
 #include <cstddef>

@@ -2,9 +2,9 @@
 
 #include "arcade_session_internal.h"
 #include "arcade_frontend.h"
-#include "system16b_audio.h"
-#include "system16b_machine.h"
-#include "system16b_rom.h"
+#include "sega/system16b/system16b_audio.h"
+#include "sega/system16b/system16b_machine.h"
+#include "sega/system16b/system16b_rom.h"
 
 #include <cstdio>
 #include <utility>

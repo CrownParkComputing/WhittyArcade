@@ -2,7 +2,7 @@
 #pragma once
 
 #include "arcade_settings.h"
-#include "system22_types.h"
+#include "namco/system22/system22_types.h"
 #include "model2_gpu_frame.h"
 #include "operator_menu.h"
 
