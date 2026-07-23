@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+class multiplayer_lobby;
+
 enum class rom_selection_action : uint8_t {
     no_change,
     selected,
@@ -18,6 +20,7 @@ enum class rom_selection_action : uint8_t {
 enum class cabinet_launch_mode : uint8_t {
     single,
     linked_pair,
+    linked_network,
     independent_pair,
 };
 
@@ -25,9 +28,15 @@ struct rom_selection_result {
     rom_selection_action action{rom_selection_action::no_change};
     std::string path;
     cabinet_launch_mode launch_mode{cabinet_launch_mode::single};
+    int cabinet_node{};
+    // -1 follows the saved display setting, 0 forces separate windows and
+    // 1 forces fullscreen panes for this launch.
+    int fullscreen_override{-1};
+    bool twin_separate_monitors{false};
 };
 
-rom_selection_result show_rom_selector(const std::string& current_path);
+rom_selection_result show_rom_selector(const std::string& current_path,
+                                       multiplayer_lobby* lobby = nullptr);
 std::vector<rom_choice> discover_rom_choices(const std::string& current_path);
 operator_menu_definition make_system22_operator_menu(
     uint16_t switches, ridge_racer_rom_set set);

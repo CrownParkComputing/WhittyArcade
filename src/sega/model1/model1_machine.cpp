@@ -25,7 +25,7 @@ fs::path model1_nvram_path(model1_rom_set set) {
     fs::path root = whitty_platform::config_root();
     if (root.empty()) root = ".";
     const char* short_name = model1_rom_loader::set_short_name(set);
-    const std::string filename = std::string(
+    const std::string filename = whitty_platform::cabinet_scoped_name(
         short_name && *short_name ? short_name : "model1-unknown") + ".nv";
     return root / "WhittyArcade" / "nvram" / filename;
 }

@@ -20,6 +20,7 @@
 struct opengl_context;
 struct SDL_Cursor;
 class alternate_presenter;
+class network_video_link;
 
 // GPU polygon renderer - processes polygons on GPU instead of CPU
 class polygon_renderer_gpu {
@@ -28,6 +29,11 @@ private:
     std::unique_ptr<opengl_context> m_ctx;
     std::unique_ptr<alternate_presenter> m_alternate_presenter;
     std::vector<uint8_t> m_present_readback;
+
+    // Settings as the alternate presenters should see them: the session's
+    // single-screen constraint overrides the user's dual-output choice.
+    emulator_settings effective_presenter_settings(
+        const emulator_settings& settings) const;
 
     // GPU buffers
     uint32_t m_vertex_buffer{0};    // VBO for vertices
@@ -42,6 +48,7 @@ private:
     uint32_t m_gamma_texture{0};
     uint32_t m_output_texture{0};  // RGBA8 scene/priority framebuffer texture
     uint32_t m_external_frame_texture{0}; // Complete RGBA frame from another board
+    uint32_t m_network_frame_texture{0}; // Authoritative P1 frame on network P2
     uint32_t m_model2_scene_texture{0};
     uint32_t m_model2_base_texture{0};
     uint32_t m_model2_foreground_texture{0};
@@ -57,6 +64,16 @@ private:
     int m_present_height{0};
     int m_external_frame_width{0};
     int m_external_frame_height{0};
+    int m_network_frame_width{0};
+    int m_network_frame_height{0};
+    int m_network_frame_display_width{0};
+    int m_network_frame_display_height{0};
+    bool m_network_frame_flip_y{false};
+    bool m_network_frame_board_color{false};
+    bool m_network_frame_valid{false};
+    std::unique_ptr<network_video_link> m_network_video;
+    uint32_t m_network_video_sequence{0};
+    uint8_t m_network_capture_divider{0};
 
     // Uniform buffer for camera/view matrix
     uint32_t m_camera_ubo{0};
@@ -82,6 +99,7 @@ private:
     TTF_Font* m_settings_font{nullptr};
     int m_fps_texture_width{0};
     int m_fps_texture_height{0};
+    std::string m_cabinet_status;
     // Player 1/2 corner labels for dual output (built once, drawn per pane).
     uint32_t m_player_label_texture[2]{0, 0};
     int m_player_label_w[2]{0, 0};
@@ -204,6 +222,7 @@ public:
     arcade_host_action process_events();
     void reset_session_ui();
     void set_single_screen_only(bool enabled);
+    void set_cabinet_status(std::string status);
     void set_rom_choices(std::vector<rom_choice> choices);
     void set_operator_menu(operator_menu_definition menu);
     bool take_rom_selection(std::string& path);

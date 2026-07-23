@@ -14,6 +14,88 @@
 #include <vector>
 
 namespace {
+struct fitted_viewport {
+    int x{};
+    int y{};
+    int w{};
+    int h{};
+};
+
+fitted_viewport fit_arcade_viewport(
+        int pane_x, int pane_width, int surface_height,
+        int aspect_width, int aspect_height,
+        int source_width, int source_height,
+        bool integer_scaling, bool fullscreen, bool framed) {
+    const int frame_margin = framed ?
+        std::clamp(std::min(pane_width, surface_height) / 32, 12, 30) : 0;
+    const int available_width = std::max(pane_width - frame_margin * 2, 1);
+    const int available_height =
+        std::max(surface_height - frame_margin * 2, 1);
+    int width = available_width;
+    int height = available_height;
+    // Twin Screen is a pixel-accurate cabinet view. Preserve the source
+    // raster (for example Galaga's 224x288) with one uniform integer scale on
+    // both axes, including fullscreen. The border absorbs all unused space.
+    if (framed) {
+        const int scale = std::min(available_width / source_width,
+                                   available_height / source_height);
+        if (scale >= 1) {
+            width = source_width * scale;
+            height = source_height * scale;
+        } else if (width * source_height > height * source_width) {
+            width = height * source_width / source_height;
+        } else {
+            height = width * source_height / source_width;
+        }
+    } else if (integer_scaling && !fullscreen) {
+        const int scale = std::min(available_width / source_width,
+                                   available_height / source_height);
+        if (scale >= 1) {
+            width = source_width * scale;
+            height = source_height * scale;
+        }
+        if (width * aspect_height > height * aspect_width)
+            width = height * aspect_width / aspect_height;
+        else
+            height = width * aspect_height / aspect_width;
+    } else {
+        if (width * aspect_height > height * aspect_width)
+            width = height * aspect_width / aspect_height;
+        else
+            height = width * aspect_height / aspect_width;
+    }
+    return {
+        pane_x + (pane_width - width) / 2,
+        (surface_height - height) / 2,
+        std::max(width, 1), std::max(height, 1),
+    };
+}
+
+void fill_host_rect(uint8_t* pixels, int surface_width, int surface_height,
+                    std::size_t pitch, fitted_viewport rect, bool bgra,
+                    uint8_t red, uint8_t green, uint8_t blue) {
+    rect.x = std::clamp(rect.x, 0, surface_width);
+    rect.y = std::clamp(rect.y, 0, surface_height);
+    rect.w = std::clamp(rect.w, 0, surface_width - rect.x);
+    rect.h = std::clamp(rect.h, 0, surface_height - rect.y);
+    for (int y = 0; y < rect.h; ++y) {
+        uint8_t* row = pixels +
+            static_cast<std::size_t>(rect.y + y) * pitch +
+            static_cast<std::size_t>(rect.x) * 4;
+        for (int x = 0; x < rect.w; ++x) {
+            row[x * 4 + 0] = bgra ? blue : red;
+            row[x * 4 + 1] = green;
+            row[x * 4 + 2] = bgra ? red : blue;
+            row[x * 4 + 3] = 255;
+        }
+    }
+}
+
+fitted_viewport expanded(fitted_viewport rect, int amount) {
+    return {rect.x - amount, rect.y - amount,
+            rect.w + amount * 2, rect.h + amount * 2};
+}
+
 std::array<int, 2> bounded_window_size(SDL_Window* window,
                                        int requested_width) {
     SDL_Rect usable{0, 0, 1920, 1080};
@@ -39,6 +121,31 @@ void set_fixed_window_size(SDL_Window* window, int requested_width) {
     SDL_SetWindowMaximumSize(window, width, height);
     SDL_SetWindowSize(window, width, height);
     SDL_RaiseWindow(window);
+}
+
+bool place_window_on_display(SDL_Window* window, int display_index,
+                             bool center) {
+    if (!window || display_index < 0) return false;
+    int count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&count);
+    if (!displays || display_index >= count) {
+        if (displays) SDL_free(displays);
+        return false;
+    }
+    SDL_Rect bounds{};
+    const bool found = SDL_GetDisplayBounds(displays[display_index], &bounds);
+    SDL_free(displays);
+    if (!found) return false;
+    int x = bounds.x;
+    int y = bounds.y;
+    if (center) {
+        int width = 0;
+        int height = 0;
+        SDL_GetWindowSize(window, &width, &height);
+        x += std::max((bounds.w - width) / 2, 0);
+        y += std::max((bounds.h - height) / 2, 0);
+    }
+    return SDL_SetWindowPosition(window, x, y);
 }
 
 template <typename T>
@@ -129,6 +236,12 @@ struct alternate_presenter::implementation {
     SDL_Renderer* software_renderer{};
     SDL_Texture* software_texture{};
     SDL_Texture* software_overlay_texture{};
+    SDL_Window* mirror_window{};
+    SDL_Renderer* mirror_renderer{};
+    SDL_Texture* mirror_texture{};
+    int mirror_texture_width{};
+    int mirror_texture_height{};
+    std::vector<uint8_t> mirror_pixels;
     int texture_width{};
     int texture_height{};
     int overlay_width{};
@@ -155,6 +268,102 @@ struct alternate_presenter::implementation {
     VkDeviceSize staging_size{};
     bool swapchain_dirty{true};
     bool first_present{true};
+
+    void destroy_mirror() {
+        if (mirror_texture) SDL_DestroyTexture(mirror_texture);
+        if (mirror_renderer) SDL_DestroyRenderer(mirror_renderer);
+        if (mirror_window) SDL_DestroyWindow(mirror_window);
+        mirror_texture = nullptr;
+        mirror_renderer = nullptr;
+        mirror_window = nullptr;
+        mirror_texture_width = mirror_texture_height = 0;
+        mirror_pixels.clear();
+        if (window) SDL_SetWindowTitle(window, "WhittyArcade");
+    }
+
+    bool ensure_mirror() {
+        if (mirror_window && mirror_renderer) return true;
+        mirror_window = SDL_CreateWindow(
+            "WhittyArcade - Player 2", settings.window_width,
+            settings.window_width * 3 / 4,
+            SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        if (!mirror_window) return false;
+        mirror_renderer = SDL_CreateRenderer(mirror_window, nullptr);
+        if (!mirror_renderer)
+            mirror_renderer = SDL_CreateRenderer(mirror_window, "software");
+        if (!mirror_renderer) {
+            destroy_mirror();
+            return false;
+        }
+        set_fixed_window_size(mirror_window, settings.window_width);
+        if (!settings.twin_separate_monitors ||
+            !place_window_on_display(mirror_window, 1, true)) {
+            int x = SDL_WINDOWPOS_CENTERED;
+            int y = SDL_WINDOWPOS_CENTERED;
+            SDL_GetWindowPosition(window, &x, &y);
+            SDL_SetWindowPosition(mirror_window, x + 48, y + 48);
+        }
+        SDL_SetWindowTitle(window, "WhittyArcade - Player 1");
+        return true;
+    }
+
+    void present_mirror(const uint8_t* pixels, int width, int height,
+                        int display_width, int display_height,
+                        bool menu_visible) {
+        const bool wanted = settings.output == output_mode::dual &&
+            !settings.fullscreen && !menu_visible;
+        if (!wanted) {
+            if (mirror_window) destroy_mirror();
+            return;
+        }
+        if (!ensure_mirror()) return;
+        if (!mirror_texture || mirror_texture_width != width ||
+            mirror_texture_height != height) {
+            if (mirror_texture) SDL_DestroyTexture(mirror_texture);
+            mirror_texture = SDL_CreateTexture(
+                mirror_renderer, SDL_PIXELFORMAT_RGBA32,
+                SDL_TEXTUREACCESS_STREAMING, width, height);
+            mirror_texture_width = width;
+            mirror_texture_height = height;
+        }
+        if (!mirror_texture) return;
+        mirror_pixels.resize(static_cast<std::size_t>(width) * height * 4);
+        const std::size_t pitch = static_cast<std::size_t>(width) * 4;
+        for (int y = 0; y < height; ++y)
+            std::memcpy(mirror_pixels.data() + y * pitch,
+                        pixels + (height - 1 - y) * pitch, pitch);
+        SDL_UpdateTexture(mirror_texture, nullptr, mirror_pixels.data(),
+                          static_cast<int>(pitch));
+        int output_width = 1;
+        int output_height = 1;
+        SDL_GetCurrentRenderOutputSize(mirror_renderer,
+                                       &output_width, &output_height);
+        const fitted_viewport fit = fit_arcade_viewport(
+            0, std::max(output_width, 1), std::max(output_height, 1),
+            display_width > 0 ? display_width : width,
+            display_height > 0 ? display_height : height,
+            width, height, settings.integer_scaling, false, true);
+        SDL_SetRenderDrawColor(mirror_renderer, 3, 7, 11, 255);
+        SDL_RenderClear(mirror_renderer);
+        SDL_SetRenderDrawColor(mirror_renderer, 13, 29, 39, 255);
+        SDL_FRect outer{static_cast<float>(fit.x - 10),
+                        static_cast<float>(fit.y - 10),
+                        static_cast<float>(fit.w + 20),
+                        static_cast<float>(fit.h + 20)};
+        SDL_RenderFillRect(mirror_renderer, &outer);
+        SDL_SetRenderDrawColor(mirror_renderer, 56, 198, 255, 255);
+        SDL_FRect accent{static_cast<float>(fit.x - 3),
+                         static_cast<float>(fit.y - 3),
+                         static_cast<float>(fit.w + 6),
+                         static_cast<float>(fit.h + 6)};
+        SDL_RenderFillRect(mirror_renderer, &accent);
+        const SDL_FRect destination{
+            static_cast<float>(fit.x), static_cast<float>(fit.y),
+            static_cast<float>(fit.w), static_cast<float>(fit.h)};
+        SDL_RenderTexture(mirror_renderer, mirror_texture, nullptr,
+                          &destination);
+        SDL_RenderPresent(mirror_renderer);
+    }
 
     uint32_t memory_type(uint32_t allowed, VkMemoryPropertyFlags properties) const {
         VkPhysicalDeviceMemoryProperties memory{};
@@ -212,6 +421,10 @@ struct alternate_presenter::implementation {
         int drawable_height = 0;
         SDL_GetWindowSizeInPixels(window, &drawable_width, &drawable_height);
         if (drawable_width <= 0 || drawable_height <= 0) return false;
+        // A compositor resize can arrive after the previous image has been
+        // submitted. Ensure no staging buffer or swapchain image is still in
+        // use before replacing the surface-sized resources below.
+        if (swapchain) vkDeviceWaitIdle(device);
 
         VkSurfaceCapabilitiesKHR capabilities{};
         if (!vk_ok(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
@@ -410,7 +623,22 @@ struct alternate_presenter::implementation {
 
     bool present_vulkan(const uint8_t* pixels, int width, int height,
                         const uint8_t* overlay, int overlay_width,
-                        int overlay_height) {
+                        int overlay_height, bool menu_visible,
+                        int display_width, int display_height) {
+        // SDL's Wayland fullscreen transition does not necessarily make the
+        // first acquire return VK_ERROR_OUT_OF_DATE_KHR. The compositor may
+        // instead scale the original window-sized swapchain, which stretches
+        // X and Y independently on an ultrawide display. Compare against the
+        // live drawable every frame and rebuild before presenting.
+        int drawable_width = 0;
+        int drawable_height = 0;
+        SDL_GetWindowSizeInPixels(window, &drawable_width, &drawable_height);
+        if (swapchain && drawable_width > 0 && drawable_height > 0 &&
+            (swapchain_extent.width !=
+                 static_cast<uint32_t>(drawable_width) ||
+             swapchain_extent.height !=
+                 static_cast<uint32_t>(drawable_height)))
+            swapchain_dirty = true;
         if (swapchain_dirty && !create_swapchain()) return true;
         vkWaitForFences(device, 1, &frame_fence, VK_TRUE, UINT64_MAX);
         uint32_t image_index = 0;
@@ -438,12 +666,17 @@ struct alternate_presenter::implementation {
                           swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
         const int surface_w = static_cast<int>(swapchain_extent.width);
         const int surface_h = static_cast<int>(swapchain_extent.height);
+        const int aspect_width =
+            display_width > 0 ? display_width : width;
+        const int aspect_height =
+            display_height > 0 ? display_height : height;
         // One pane, or two side-by-side panes for fullscreen dual output; each
         // letterboxes the arcade frame within its own half of the swapchain.
         struct present_pane { int x; int w; };
         std::array<present_pane, 2> panes{{{0, surface_w}, {0, 0}}};
         int pane_count = 1;
-        if (settings.output == output_mode::dual && settings.fullscreen) {
+        if (settings.output == output_mode::dual && settings.fullscreen &&
+            !menu_visible) {
             const int gap = std::max(surface_w / 40, 24);
             const int left_w = std::clamp((surface_w - gap) / 2, 1,
                                           surface_w - 1);
@@ -452,34 +685,31 @@ struct alternate_presenter::implementation {
             pane_count = 2;
         }
         for (int pane = 0; pane < pane_count; ++pane) {
-            int copy_width = panes[pane].w;
-            int copy_height = surface_h;
-            if (settings.integer_scaling) {
-                const int scale = std::min(copy_width / width,
-                                           copy_height / height);
-                if (scale >= 1) {
-                    copy_width = width * scale;
-                    copy_height = height * scale;
-                }
-            } else if (copy_width * height > copy_height * width) {
-                copy_width = copy_height * width / height;
-            } else {
-                copy_height = copy_width * height / width;
+            const bool framed = settings.output == output_mode::dual &&
+                !menu_visible;
+            const fitted_viewport fit = fit_arcade_viewport(
+                panes[pane].x, panes[pane].w, surface_h,
+                aspect_width, aspect_height, width, height,
+                settings.integer_scaling, settings.fullscreen, framed);
+            if (framed) {
+                fill_host_rect(destination, surface_w, surface_h,
+                               destination_pitch, expanded(fit, 10), bgra,
+                               13, 29, 39);
+                fill_host_rect(destination, surface_w, surface_h,
+                               destination_pitch, expanded(fit, 3), bgra,
+                               56, 198, 255);
             }
-            const int x_offset =
-                panes[pane].x + (panes[pane].w - copy_width) / 2;
-            const int y_offset = (surface_h - copy_height) / 2;
-            for (int y = 0; y < copy_height; ++y) {
+            for (int y = 0; y < fit.h; ++y) {
                 const int source_y = height - 1 -
-                    (y * height / std::max(copy_height, 1));
+                    (y * height / std::max(fit.h, 1));
                 const uint8_t* source = pixels +
                     (static_cast<std::size_t>(source_y) * width) * 4;
                 uint8_t* row = destination +
-                    (static_cast<std::size_t>(y + y_offset) *
-                     swapchain_extent.width + x_offset) * 4;
-                for (int x = 0; x < copy_width; ++x) {
+                    (static_cast<std::size_t>(y + fit.y) *
+                     swapchain_extent.width + fit.x) * 4;
+                for (int x = 0; x < fit.w; ++x) {
                     const uint8_t* pixel = source +
-                        (x * width / std::max(copy_width, 1)) * 4;
+                        (x * width / std::max(fit.w, 1)) * 4;
                     row[x * 4 + 0] = bgra ? pixel[2] : pixel[0];
                     row[x * 4 + 1] = pixel[1];
                     row[x * 4 + 2] = bgra ? pixel[0] : pixel[2];
@@ -579,9 +809,9 @@ bool alternate_presenter::initialize(renderer_backend backend, int width,
     // made the live drawable jump between arbitrary tile sizes.  Create an
     // initially-fullscreen output in the mapped state so SDL can publish the
     // WM state as part of the initial map.
-    const SDL_WindowFlags visibility_flags = settings.fullscreen ?
-        SDL_WINDOW_FULLSCREEN :
-        SDL_WINDOW_HIDDEN;
+    const SDL_WindowFlags visibility_flags =
+        settings.fullscreen && settings.display_index < 0 ?
+            SDL_WINDOW_FULLSCREEN : SDL_WINDOW_HIDDEN;
     const SDL_WindowFlags flags = visibility_flags | SDL_WINDOW_RESIZABLE |
         SDL_WINDOW_HIGH_PIXEL_DENSITY |
         (backend == renderer_backend::vulkan ? SDL_WINDOW_VULKAN : 0);
@@ -619,6 +849,7 @@ void alternate_presenter::shutdown() {
     if (!m_impl) return;
     if (m_impl->backend == renderer_backend::vulkan)
         m_impl->shutdown_vulkan();
+    m_impl->destroy_mirror();
     if (m_impl->software_overlay_texture)
         SDL_DestroyTexture(m_impl->software_overlay_texture);
     if (m_impl->software_texture)
@@ -634,10 +865,17 @@ void alternate_presenter::apply_settings(const emulator_settings& settings) {
     const bool vsync_changed = m_impl->settings.vsync != settings.vsync;
     const bool fullscreen_changed =
         m_impl->settings.fullscreen != settings.fullscreen;
+    const bool monitor_mode_changed =
+        m_impl->settings.twin_separate_monitors !=
+        settings.twin_separate_monitors;
     m_impl->settings = settings;
+    if (settings.output != output_mode::dual || settings.fullscreen ||
+        monitor_mode_changed)
+        m_impl->destroy_mirror();
     if (settings.fullscreen) {
         SDL_SetWindowMinimumSize(m_impl->window, 1, 1);
         SDL_SetWindowMaximumSize(m_impl->window, 16384, 16384);
+        place_window_on_display(m_impl->window, settings.display_index, false);
         SDL_ShowWindow(m_impl->window);
         if (!SDL_SetWindowFullscreen(m_impl->window, true))
             std::fprintf(stderr, "Fullscreen request failed: %s\n",
@@ -646,8 +884,14 @@ void alternate_presenter::apply_settings(const emulator_settings& settings) {
     } else {
         SDL_SetWindowFullscreen(m_impl->window, false);
         set_fixed_window_size(m_impl->window, settings.window_width);
-        SDL_SetWindowPosition(m_impl->window, SDL_WINDOWPOS_CENTERED,
-                              SDL_WINDOWPOS_CENTERED);
+        const int target_display =
+            settings.output == output_mode::dual &&
+                    settings.twin_separate_monitors
+                ? 0
+                : settings.display_index;
+        if (!place_window_on_display(m_impl->window, target_display, true))
+            SDL_SetWindowPosition(m_impl->window, SDL_WINDOWPOS_CENTERED,
+                                  SDL_WINDOWPOS_CENTERED);
     }
     if ((vsync_changed || fullscreen_changed) &&
         m_impl->backend == renderer_backend::vulkan)
@@ -678,11 +922,18 @@ bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
                                                   int width, int height,
                                                   const uint8_t* overlay_pixels,
                                                   int overlay_width,
-                                                  int overlay_height) {
+                                                  int overlay_height,
+                                                  bool menu_visible,
+                                                  int display_width,
+                                                  int display_height) {
     if (!m_impl || !pixels || width <= 0 || height <= 0) return false;
+    m_impl->present_mirror(pixels, width, height, display_width,
+                           display_height, menu_visible);
     if (m_impl->backend == renderer_backend::vulkan)
         return m_impl->present_vulkan(pixels, width, height, overlay_pixels,
-                                      overlay_width, overlay_height);
+                                      overlay_width, overlay_height,
+                                      menu_visible, display_width,
+                                      display_height);
     if (!m_impl->software_texture || width != m_impl->texture_width ||
         height != m_impl->texture_height) {
         if (m_impl->software_texture)
@@ -706,6 +957,10 @@ bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
     int output_width = 1;
     int output_height = 1;
     drawable_size(output_width, output_height);
+    const int aspect_width =
+        display_width > 0 ? display_width : width;
+    const int aspect_height =
+        display_height > 0 ? display_height : height;
     // One pane, or two side-by-side panes for fullscreen dual output. Each pane
     // keeps the arcade framebuffer's aspect and letterboxes within its half
     // instead of stretching to the (possibly ultrawide) drawable.
@@ -713,7 +968,7 @@ bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
     std::array<present_pane, 2> panes{{{0, output_width}, {0, 0}}};
     int pane_count = 1;
     if (m_impl->settings.output == output_mode::dual &&
-        m_impl->settings.fullscreen) {
+        m_impl->settings.fullscreen && !menu_visible) {
         const int gap = std::max(output_width / 40, 24);
         const int left_w = std::clamp((output_width - gap) / 2, 1,
                                       output_width - 1);
@@ -722,24 +977,31 @@ bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
         pane_count = 2;
     }
     for (int pane = 0; pane < pane_count; ++pane) {
-        int copy_width = panes[pane].w;
-        int copy_height = output_height;
-        if (m_impl->settings.integer_scaling) {
-            const int scale = std::min(copy_width / width, copy_height / height);
-            if (scale >= 1) {
-                copy_width = width * scale;
-                copy_height = height * scale;
-            }
-        } else if (copy_width * height > copy_height * width) {
-            copy_width = copy_height * width / height;
-        } else {
-            copy_height = copy_width * height / width;
+        const bool framed = m_impl->settings.output == output_mode::dual &&
+            !menu_visible;
+        const fitted_viewport fit = fit_arcade_viewport(
+            panes[pane].x, panes[pane].w, output_height,
+            aspect_width, aspect_height, width, height,
+            m_impl->settings.integer_scaling,
+            m_impl->settings.fullscreen, framed);
+        if (framed) {
+            SDL_SetRenderDrawColor(m_impl->software_renderer, 13, 29, 39, 255);
+            SDL_FRect outer{static_cast<float>(fit.x - 10),
+                            static_cast<float>(fit.y - 10),
+                            static_cast<float>(fit.w + 20),
+                            static_cast<float>(fit.h + 20)};
+            SDL_RenderFillRect(m_impl->software_renderer, &outer);
+            SDL_SetRenderDrawColor(m_impl->software_renderer,
+                                   56, 198, 255, 255);
+            SDL_FRect accent{static_cast<float>(fit.x - 3),
+                             static_cast<float>(fit.y - 3),
+                             static_cast<float>(fit.w + 6),
+                             static_cast<float>(fit.h + 6)};
+            SDL_RenderFillRect(m_impl->software_renderer, &accent);
         }
         const SDL_FRect destination{
-            static_cast<float>(panes[pane].x +
-                               (panes[pane].w - copy_width) / 2),
-            static_cast<float>((output_height - copy_height) / 2),
-            static_cast<float>(copy_width), static_cast<float>(copy_height)};
+            static_cast<float>(fit.x), static_cast<float>(fit.y),
+            static_cast<float>(fit.w), static_cast<float>(fit.h)};
         SDL_RenderTexture(m_impl->software_renderer, m_impl->software_texture,
                           nullptr, &destination);
     }

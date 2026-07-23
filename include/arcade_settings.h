@@ -34,6 +34,9 @@ struct emulator_settings {
     // processes. -1 follows the desktop/window-manager default. This is not
     // persisted because a portable install may see a different monitor order.
     int display_index{-1};
+    // Runtime-only Twin Screen placement. When true, the primary and mirror
+    // windows are explicitly centred on physical displays 0 and 1.
+    bool twin_separate_monitors{false};
 };
 
 const char* renderer_backend_name(renderer_backend backend);

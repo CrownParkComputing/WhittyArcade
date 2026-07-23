@@ -409,11 +409,15 @@ persistent_action_result import_persistent_game(const std::string& short_name,
 bool load_system22_eeprom(const std::string& short_name,
                           void* destination, std::size_t size) {
     return size == 0x2000 && read_exact(
-        nvram_root() / short_name / "eeprom", destination, size);
+        nvram_root() / whitty_platform::cabinet_scoped_name(short_name) /
+            "eeprom",
+        destination, size);
 }
 
 bool save_system22_eeprom(const std::string& short_name,
                           const void* source, std::size_t size) {
     return size == 0x2000 && write_exact(
-        nvram_root() / short_name / "eeprom", source, size);
+        nvram_root() / whitty_platform::cabinet_scoped_name(short_name) /
+            "eeprom",
+        source, size);
 }

@@ -56,12 +56,11 @@ public:
             std::fprintf(stderr, "Failed to initialize shared video output\n");
             return false;
         }
-        // RRV3 Ver.A is a single-monitor cabinet. A process-wide dual-output
-        // preference is useful for other games, but duplicating this game's
-        // picture into two half-width panes makes its 4:3 HUD appear crushed.
-        // Constrain only this live session and restore the global preference
-        // automatically when the cabinet is closed.
-        m_gpu_renderer->set_single_screen_only(true);
+        // A normal RRV cabinet remains single-screen. The launcher's explicit
+        // Twin Screen mode deliberately requests a second aspect-correct
+        // player window, so do not override that runtime choice.
+        m_gpu_renderer->set_single_screen_only(
+            settings.output == output_mode::single);
 
         m_input = std::make_unique<arcade_input>();
         if (!m_input->initialize("rrvac"))

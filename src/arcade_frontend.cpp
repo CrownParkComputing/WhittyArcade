@@ -3,6 +3,7 @@
 #include "high_scores.h"
 #include "input_mapper.h"
 #include "launcher_menu.h"
+#include "multiplayer_lobby.h"
 #include "persistent_data.h"
 #include "platform_file_dialog.h"
 #include "rom_library.h"
@@ -441,12 +442,41 @@ std::vector<rom_choice> discover_rom_choices(const std::string& current_path) {
     return discover_library_roms(current_path);
 }
 
-rom_selection_result show_rom_selector(const std::string& current_path) {
+rom_selection_result show_rom_selector(const std::string& current_path,
+                                       multiplayer_lobby* lobby) {
     launcher_menu menu;
     std::vector<rom_choice> choices = discover_rom_choices(current_path);
+    const auto linked_result = [&](std::string_view short_name, int node) {
+        for (const rom_choice& choice : choices) {
+            const auto identity = identify_arcade_game(choice.path);
+            if (identity && short_name == identity->short_name)
+                return rom_selection_result{
+                    rom_selection_action::selected, choice.path,
+                    cabinet_launch_mode::linked_network, node};
+        }
+        return rom_selection_result{};
+    };
+    const auto take_remote_launch = [&]() -> rom_selection_result {
+        if (!lobby) return {};
+        const std::optional<std::string> game = lobby->take_launch();
+        if (!game) return {};
+        rom_selection_result result = linked_result(*game, 2);
+        if (result.action == rom_selection_action::selected) return result;
+        menu.show_text(
+            "Multiplayer game unavailable",
+            "Player 1 selected " + *game +
+                ", but that ROM is not installed in this WhittyArcade "
+                "library.", "Back to Main Menu");
+        return {};
+    };
+
     for (;;) {
-        const std::vector<std::string> main_items{
+        if (lobby) lobby->set_installed_games(choices);
+        std::vector<std::string> main_items{
             "Go Arcade",
+            lobby && lobby->connected() ?
+                "Multiplayer  [CONNECTED]" :
+                "Multiplayer  [SEARCHING]",
             "ROM Folders",
             "Controllers / Keyboard",
             "EEPROM / NVRAM Manager",
@@ -457,24 +487,121 @@ rom_selection_result show_rom_selector(const std::string& current_path) {
             "place MAME ZIP archives and disc images." :
             "Choose where you want to go. Games are organised by their "
             "original arcade hardware.";
-        const int selected_page = menu.select(
-            "WhittyArcade", description, main_items, "Exit WhittyArcade");
+        const bool lobby_connected_at_draw =
+            lobby && lobby->connected();
+        const int selected_page = lobby ?
+            menu.select_interruptible(
+                "WhittyArcade", description, main_items,
+                "Exit WhittyArcade", 0,
+                [lobby, lobby_connected_at_draw] {
+                    return lobby->launch_pending() ||
+                           lobby->connected() != lobby_connected_at_draw;
+                }) :
+            menu.select("WhittyArcade", description, main_items,
+                        "Exit WhittyArcade");
+        if (selected_page == launcher_menu::interrupted) {
+            rom_selection_result remote = take_remote_launch();
+            if (remote.action == rom_selection_action::selected) return remote;
+            continue;
+        }
         if (selected_page < 0)
             return {rom_selection_action::exit_requested, {}};
         if (selected_page == 1) {
+            if (!lobby) {
+                menu.show_text(
+                    "Multiplayer",
+                    "Automatic multiplayer discovery is available when "
+                    "WhittyArcade is opened without a ROM on the command "
+                    "line.");
+                continue;
+            }
+            for (;;) {
+                if (lobby->launch_pending()) {
+                    rom_selection_result remote = take_remote_launch();
+                    if (remote.action == rom_selection_action::selected)
+                        return remote;
+                }
+                if (!lobby->connected()) {
+                    const int waiting = menu.select_interruptible(
+                        "Multiplayer - Finding Player 2",
+                        "Open WhittyArcade on the second screen or computer. "
+                        "The apps detect each other automatically; no cabinet "
+                        "role or IP address is required.",
+                        {"Searching for another WhittyArcade..."},
+                        "Back to Main Menu", 0, [lobby] {
+                            return lobby->connected() ||
+                                   lobby->launch_pending();
+                        });
+                    if (waiting == -1) break;
+                    continue;
+                }
+                if (lobby->node() == 2) {
+                    const int waiting = menu.select_interruptible(
+                        "Multiplayer - Player 2 Connected",
+                        "Player 1 is choosing the game. This screen will "
+                        "launch automatically.",
+                        {"Waiting for Player 1..."},
+                        "Back to Main Menu", 0,
+                        [lobby] {
+                            return lobby->launch_pending() ||
+                                   !lobby->connected();
+                        });
+                    if (waiting == -1) break;
+                    continue;
+                }
+
+                std::vector<std::size_t> linked_indices;
+                std::vector<std::string> linked_labels;
+                for (std::size_t index = 0; index < choices.size(); ++index) {
+                    const auto identity =
+                        identify_arcade_game(choices[index].path);
+                    const rom_set_manifest* manifest = identity ?
+                        find_supported_rom_set(identity->short_name) : nullptr;
+                    if (!identity || !manifest || !manifest->working ||
+                        manifest->multiplayer ==
+                            arcade_multiplayer_mode::none ||
+                        !lobby->peer_has_game(identity->short_name))
+                        continue;
+                    linked_indices.push_back(index);
+                    linked_labels.push_back(choices[index].label);
+                }
+                const int selected = menu.select_interruptible(
+                    "Multiplayer - Player 2 Connected",
+                    linked_labels.empty() ?
+                        "No supported multiplayer ROM is installed on both "
+                        "systems." :
+                        "Choose once here. Player 2 will launch the same game "
+                        "automatically.",
+                    linked_labels, "Back to Main Menu", 0,
+                    [lobby] { return !lobby->connected(); });
+                if (selected == launcher_menu::interrupted) continue;
+                if (selected < 0) break;
+                if (selected >= static_cast<int>(linked_indices.size()))
+                    continue;
+                const rom_choice& choice = choices[
+                    linked_indices[static_cast<std::size_t>(selected)]];
+                const auto identity = identify_arcade_game(choice.path);
+                if (!identity) continue;
+                lobby->launch_game(identity->short_name);
+                return {rom_selection_action::selected, choice.path,
+                        cabinet_launch_mode::linked_network, 1};
+            }
+            continue;
+        }
+        if (selected_page == 2) {
             show_rom_library_manager(menu);
             choices = discover_rom_choices(current_path);
             continue;
         }
-        if (selected_page == 2) {
+        if (selected_page == 3) {
             show_input_mapper(menu, choices);
             continue;
         }
-        if (selected_page == 3) {
+        if (selected_page == 4) {
             show_eeprom_manager(menu);
             continue;
         }
-        if (selected_page == 4) {
+        if (selected_page == 5) {
             show_high_score_viewer(menu);
             continue;
         }
@@ -536,22 +663,39 @@ rom_selection_result show_rom_selector(const std::string& current_path) {
             }
             const bool linked_model2 =
                 identity && std::string_view(identity->short_name) == "srallyc";
-            const std::vector<std::string> launch_items{
-                "Single Cabinet",
-                linked_model2 ?
-                    "Linked Twin Cabinets (two screens)" :
-                    "Two Independent Cabinets (Player 1 / Player 2)",
+            const arcade_multiplayer_mode multiplayer = manifest ?
+                manifest->multiplayer : arcade_multiplayer_mode::none;
+            std::vector<std::string> launch_items{
+                "Single Screen  |  one arcade display",
+                "Twin Screen Fullscreen  |  two bordered panes",
+                "Twin Screen Two Windows  |  same desktop",
+                "Twin Screen Two Monitors  |  one window per monitor",
             };
+            const char* multiplayer_description =
+                multiplayer == arcade_multiplayer_mode::alternating ?
+                    "This is an original two-player alternating-turn game. " :
+                multiplayer == arcade_multiplayer_mode::simultaneous ?
+                    "This game has simultaneous P1 and P2 controls. " :
+                multiplayer == arcade_multiplayer_mode::native_link ?
+                    "This game uses native linked arcade cabinets. " :
+                    "This title has no supported Player 2 input path. ";
             const int launch = menu.select(
                 "Start " + choice.label,
                 linked_model2 ?
-                    "Linked Twin starts two complete Sega Rally machines. "
-                    "Each screen has its own view and controls; their Model 2 "
-                    "communication boards race together." :
-                    "This game's original board has one video output. Two "
-                    "Cabinets starts a second independent copy on screen 2, "
-                    "using Player 2's controller. It is not a second camera "
-                    "inside the first cabinet.",
+                    "Single Screen runs one Sega cabinet. Twin Screen starts "
+                    "two locally linked Sega cabinets, fitted independently "
+                    "at the board's native pixel resolution. Choose fullscreen "
+                    "panes, two windows or one window on each monitor. "
+                    "Use Multiplayer on the "
+                    "Main Menu to link two WhittyArcade apps." :
+                    std::string(multiplayer_description) +
+                    "Single Screen uses one correctly fitted arcade viewport. "
+                    "Twin Screen mirrors the same session into two bordered "
+                    "native-raster viewports with one integer scale on both "
+                    "axes. Choose fullscreen panes, two windows on one desktop "
+                    "or one window on each monitor. "
+                    "Use Multiplayer on "
+                    "the Main Menu for two-app play.",
                 launch_items, "Back to Games");
             if (launch < 0) continue;
             return {
@@ -560,6 +704,9 @@ rom_selection_result show_rom_selector(const std::string& current_path) {
                 launch == 0 ? cabinet_launch_mode::single :
                     (linked_model2 ? cabinet_launch_mode::linked_pair :
                                      cabinet_launch_mode::independent_pair),
+                0,
+                launch == 0 ? -1 : (launch == 1 ? 1 : 0),
+                launch == 3,
             };
         }
     }

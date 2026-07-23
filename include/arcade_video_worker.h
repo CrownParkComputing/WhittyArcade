@@ -48,6 +48,7 @@ public:
     // Some cabinets expose exactly one video output. Keep the user's global
     // dual-screen preference intact while constraining only that session.
     void set_single_screen_only(bool enabled);
+    void set_cabinet_status(std::string status);
 
     void set_rom_choices(std::vector<rom_choice> choices);
     void set_operator_menu(operator_menu_definition menu);

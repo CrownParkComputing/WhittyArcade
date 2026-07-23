@@ -347,7 +347,8 @@ struct launcher_menu::implementation {
 
     int select(const std::string& title, const std::string& description,
                const std::vector<std::string>& items,
-               const std::string& back_label, int initial_selection) {
+               const std::string& back_label, int initial_selection,
+               const std::function<bool()>& interrupt = {}) {
         std::vector<std::string> rows = items;
         rows.push_back(back_label);
         const int total = static_cast<int>(rows.size());
@@ -374,8 +375,11 @@ struct launcher_menu::implementation {
                 redraw = false;
             }
 
+            if (interrupt && interrupt())
+                return launcher_menu::interrupted;
             SDL_Event event{};
-            if (!SDL_WaitEvent(&event)) continue;
+            if (!SDL_WaitEventTimeout(&event, interrupt ? 100 : -1))
+                continue;
             if (event.type == SDL_EVENT_QUIT) return -1;
             if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
                 open_controller(event.gdevice.which);
@@ -671,6 +675,19 @@ int launcher_menu::select(const std::string& title,
     SDL_RaiseWindow(m_impl->window);
     return m_impl->select(title, description, items, back_label,
                           initial_selection);
+}
+
+int launcher_menu::select_interruptible(
+        const std::string& title, const std::string& description,
+        const std::vector<std::string>& items, const std::string& back_label,
+        int initial_selection, std::function<bool()> interrupt) {
+    if (!m_impl->ready())
+        return fallback_select(title, description, items, back_label,
+                               initial_selection);
+    SDL_SetWindowTitle(m_impl->window, title.c_str());
+    SDL_RaiseWindow(m_impl->window);
+    return m_impl->select(title, description, items, back_label,
+                          initial_selection, interrupt);
 }
 
 void launcher_menu::show_text(const std::string& title,

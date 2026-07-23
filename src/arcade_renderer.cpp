@@ -4,6 +4,7 @@
 #include "namco/system22/system22_config.h"
 #include "arcade_presenter.h"
 #include "arcade_sdl_guard.h"
+#include "network_video_link.h"
 #include "platform_paths.h"
 
 #include <GL/glew.h>
@@ -50,6 +51,31 @@ void set_fixed_window_size(SDL_Window* window, int requested_width) {
     SDL_SetWindowMaximumSize(window, width, height);
     SDL_SetWindowSize(window, width, height);
     SDL_RaiseWindow(window);
+}
+
+bool place_window_on_display(SDL_Window* window, int display_index,
+                             bool center) {
+    if (!window || display_index < 0) return false;
+    int count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&count);
+    if (!displays || display_index >= count) {
+        if (displays) SDL_free(displays);
+        return false;
+    }
+    SDL_Rect bounds{};
+    const bool found = SDL_GetDisplayBounds(displays[display_index], &bounds);
+    SDL_free(displays);
+    if (!found) return false;
+    int x = bounds.x;
+    int y = bounds.y;
+    if (center) {
+        int width = 0;
+        int height = 0;
+        SDL_GetWindowSize(window, &width, &height);
+        x += std::max((bounds.w - width) / 2, 0);
+        y += std::max((bounds.h - height) / 2, 0);
+    }
+    return SDL_SetWindowPosition(window, x, y);
 }
 
 constexpr float normalized_byte(uint8_t value) {
@@ -935,7 +961,8 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     const bool alternate_output = settings.renderer != renderer_backend::opengl;
     const SDL_WindowFlags output_visibility = alternate_output ?
         SDL_WINDOW_HIDDEN :
-        (settings.fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
+        (settings.fullscreen && settings.display_index < 0 ?
+             SDL_WINDOW_FULLSCREEN : 0);
     SDL_Window* window = SDL_CreateWindow(
         alternate_output ? "WhittyArcade Render Worker" : "WhittyArcade",
         initial_width, initial_height,
@@ -1171,6 +1198,7 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    m_network_video = std::make_unique<network_video_link>();
     apply_display_settings(settings);
     printf("GPU renderer initialized\n");
     m_initialized = true;
@@ -1178,6 +1206,8 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
 }
 
 void polygon_renderer_gpu::shutdown() {
+    // Stop the transport before deleting the GL texture it feeds.
+    m_network_video.reset();
     if (!m_headless && m_ctx) {
         m_ctx->make_current();
         SDL_SetCursor(SDL_GetDefaultCursor());
@@ -1201,6 +1231,8 @@ void polygon_renderer_gpu::shutdown() {
         if (m_output_texture) glDeleteTextures(1, &m_output_texture);
         if (m_external_frame_texture)
             glDeleteTextures(1, &m_external_frame_texture);
+        if (m_network_frame_texture)
+            glDeleteTextures(1, &m_network_frame_texture);
         if (m_model2_scene_texture)
             glDeleteTextures(1, &m_model2_scene_texture);
         if (m_model2_base_texture)
@@ -1236,6 +1268,7 @@ void polygon_renderer_gpu::shutdown() {
     m_tilemap_texture = m_tileattr_texture = m_palette_texture = 0;
     m_character_texture = m_textmap_texture = 0;
     m_gamma_texture = m_output_texture = m_external_frame_texture = 0;
+    m_network_frame_texture = 0;
     m_model2_scene_texture = m_model2_base_texture = 0;
     m_model2_foreground_texture = m_model2_sheet_texture = 0;
     m_model2_luma_texture = m_model2_color_texture = 0;
@@ -1244,6 +1277,12 @@ void polygon_renderer_gpu::shutdown() {
     m_present_texture = m_present_framebuffer = 0;
     m_present_width = m_present_height = 0;
     m_external_frame_width = m_external_frame_height = 0;
+    m_network_frame_width = m_network_frame_height = 0;
+    m_network_frame_display_width = m_network_frame_display_height = 0;
+    m_network_frame_flip_y = m_network_frame_board_color = false;
+    m_network_frame_valid = false;
+    m_network_video_sequence = 0;
+    m_network_capture_divider = 0;
     m_camera_ubo = 0;
     m_vertex_array = m_graphics_program = 0;
     m_model2_vertex_buffer = m_model2_vertex_array = m_model2_program = 0;
@@ -1606,7 +1645,36 @@ void polygon_renderer_gpu::set_single_screen_only(bool enabled) {
     if (m_single_screen_only == enabled) return;
     m_single_screen_only = enabled;
     m_settings_texture_dirty = true;
+    // The Vulkan/software presenters split their panes from the settings
+    // they were last given, so the single-screen constraint has to reach
+    // them as an output-mode change, not just a renderer-side flag.
+    if (m_alternate_presenter)
+        m_alternate_presenter->apply_settings(
+            effective_presenter_settings(m_display_settings));
     refresh_output();
+}
+
+emulator_settings polygon_renderer_gpu::effective_presenter_settings(
+        const emulator_settings& settings) const {
+    emulator_settings effective = settings;
+    if (m_single_screen_only) effective.output = output_mode::single;
+    return effective;
+}
+
+void polygon_renderer_gpu::set_cabinet_status(std::string status) {
+    if (m_cabinet_status == status) return;
+    m_cabinet_status = std::move(status);
+    update_fps_texture(m_last_fps);
+    if (m_ctx) {
+        SDL_Window* window = m_alternate_presenter ?
+            static_cast<SDL_Window*>(m_alternate_presenter->window()) :
+            static_cast<SDL_Window*>(m_ctx->window);
+        if (window) {
+            const std::string title = m_cabinet_status.empty() ?
+                "WhittyArcade" : "WhittyArcade - " + m_cabinet_status;
+            SDL_SetWindowTitle(window, title.c_str());
+        }
+    }
 }
 
 void polygon_renderer_gpu::set_operator_menu(operator_menu_definition menu) {
@@ -1757,11 +1825,13 @@ void polygon_renderer_gpu::apply_display_settings(
     m_ctx->make_current();
     SDL_Window* window = static_cast<SDL_Window*>(m_ctx->window);
     if (m_alternate_presenter) {
-        m_alternate_presenter->apply_settings(settings);
+        m_alternate_presenter->apply_settings(
+            effective_presenter_settings(settings));
         m_alternate_presenter->drawable_size(m_ctx->width, m_ctx->height);
     } else if (settings.fullscreen) {
         SDL_SetWindowMinimumSize(window, 1, 1);
         SDL_SetWindowMaximumSize(window, 16384, 16384);
+        place_window_on_display(window, settings.display_index, false);
         SDL_SetWindowFullscreen(window, true);
     } else {
         SDL_SetWindowFullscreen(window, false);
@@ -1769,8 +1839,24 @@ void polygon_renderer_gpu::apply_display_settings(
         applied.window_width = size[0];
         m_display_settings.window_width = size[0];
         set_fixed_window_size(window, size[0]);
-        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
-                              SDL_WINDOWPOS_CENTERED);
+        const int target_display =
+            settings.output == output_mode::dual &&
+                    settings.twin_separate_monitors
+                ? 0
+                : settings.display_index;
+        if (!place_window_on_display(window, target_display, true))
+            SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
+                                  SDL_WINDOWPOS_CENTERED);
+        if (SDL_Window* window2 =
+                static_cast<SDL_Window*>(m_ctx->window2)) {
+            if (!settings.twin_separate_monitors ||
+                !place_window_on_display(window2, 1, true)) {
+                int x = SDL_WINDOWPOS_CENTERED;
+                int y = SDL_WINDOWPOS_CENTERED;
+                SDL_GetWindowPosition(window, &x, &y);
+                SDL_SetWindowPosition(window2, x + 48, y + 48);
+            }
+        }
     }
     if (!m_alternate_presenter)
         SDL_GetWindowSizeInPixels(window, &m_ctx->width, &m_ctx->height);
@@ -2373,6 +2459,74 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
 
     if (display_width <= 0) display_width = source_width;
     if (display_height <= 0) display_height = source_height;
+
+    // For ordinary two-machine play Player 1 owns the emulated game. Capture
+    // its final board texture at 30 Hz; Player 2 uploads and presents that
+    // picture while its controls continue travelling back over the input
+    // link. Native linked cabinets (such as Sega Rally) never enable this.
+    if (m_network_video && !m_settings_visible) {
+        if (m_network_video->sender()) {
+            if ((++m_network_capture_divider & 1U) == 0) {
+                network_video_frame frame;
+                frame.width = source_width;
+                frame.height = source_height;
+                frame.display_width = display_width;
+                frame.display_height = display_height;
+                frame.flip_y = flip_y;
+                frame.apply_board_color = apply_board_color;
+                frame.sequence = ++m_network_video_sequence;
+                frame.rgba.resize(static_cast<std::size_t>(source_width) *
+                                  source_height * 4);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA,
+                              GL_UNSIGNED_BYTE, frame.rgba.data());
+                m_network_video->submit(std::move(frame));
+            }
+        } else if (m_network_video->receiver()) {
+            network_video_frame frame;
+            if (m_network_video->take_received(frame)) {
+                if (!m_network_frame_texture)
+                    glGenTextures(1, &m_network_frame_texture);
+                glBindTexture(GL_TEXTURE_2D, m_network_frame_texture);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                                GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                                GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
+                                GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
+                                GL_CLAMP_TO_EDGE);
+                if (frame.width != m_network_frame_width ||
+                    frame.height != m_network_frame_height) {
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, frame.width,
+                                 frame.height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                 frame.rgba.data());
+                    m_network_frame_width = frame.width;
+                    m_network_frame_height = frame.height;
+                } else {
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width,
+                                    frame.height, GL_RGBA, GL_UNSIGNED_BYTE,
+                                    frame.rgba.data());
+                }
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                m_network_frame_display_width = frame.display_width;
+                m_network_frame_display_height = frame.display_height;
+                m_network_frame_flip_y = frame.flip_y;
+                m_network_frame_board_color = frame.apply_board_color;
+                m_network_frame_valid = true;
+            }
+            if (m_network_frame_valid) {
+                texture = m_network_frame_texture;
+                source_width = m_network_frame_width;
+                source_height = m_network_frame_height;
+                display_width = m_network_frame_display_width;
+                display_height = m_network_frame_display_height;
+                flip_y = m_network_frame_flip_y;
+                apply_board_color = m_network_frame_board_color;
+            }
+        }
+    }
     m_last_present_texture = texture;
     m_last_present_width = source_width;
     m_last_present_height = source_height;
@@ -2389,8 +2543,8 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     // OpenGL merely so Vulkan/software can scale it again is both redundant
     // and exceptionally expensive on split-GPU systems.
     if (m_alternate_presenter) {
-        int presentation_width = display_width;
-        int presentation_height = display_height;
+        int presentation_width = source_width;
+        int presentation_height = source_height;
         if (m_settings_visible) {
             // Settings and ROM selection are host UI, not arcade pixels.
             // Render those overlays at the visible drawable resolution so
@@ -2452,7 +2606,11 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     // draws into the native-resolution intermediate framebuffer (which the
     // presenter then scales to the window); splitting there would wreck the
     // image, so keep it single and let the presenter own the final letterbox.
+    // The pause/settings/ROM menu is host UI, not a game frame: show it single
+    // and full so it stays crisp and readable instead of being shrunk into a
+    // dual-output half.
     const bool dual_output = !m_single_screen_only && !m_alternate_presenter &&
+        !m_settings_visible &&
         m_display_settings.output == output_mode::dual;
     // Windowed dual output gives each player an independent window (rendered
     // after the main swap below, so it can sit on its own monitor). Fullscreen
@@ -2472,24 +2630,82 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
         pane_count = 2;
     }
 
-    // Letterbox the game inside a pane, honouring integer scaling / aspect.
+    // Fullscreen uses all available space while preserving the original
+    // monitor aspect. Integer scaling remains available for windowed play.
+    const bool pane_integer =
+        m_display_settings.integer_scaling && !m_display_settings.fullscreen;
+    // Alternate presenters receive the monitor aspect separately. Keep their
+    // OpenGL readback texture at the board's native pixel geometry and avoid
+    // baking letterbox bars into it before Vulkan/software scales it.
+    const int fit_display_width =
+        m_alternate_presenter ? m_ctx->width : display_width;
+    const int fit_display_height =
+        m_alternate_presenter ? m_ctx->height : display_height;
     const auto fit_pane = [&](const present_pane& pane) {
-        int ow = pane.w;
-        int oh = pane.h;
-        if (m_display_settings.integer_scaling) {
-            const int scale = std::min(pane.w / display_width,
-                                       pane.h / display_height);
+        const int frame_margin = dual_output ?
+            std::clamp(std::min(pane.w, pane.h) / 32, 12, 30) : 0;
+        const present_pane content{
+            pane.x + frame_margin, pane.y + frame_margin,
+            std::max(pane.w - frame_margin * 2, 1),
+            std::max(pane.h - frame_margin * 2, 1),
+        };
+        int ow = content.w;
+        int oh = content.h;
+        if (dual_output) {
+            // Twin Screen preserves the board's native raster with a single
+            // integer scale on X and Y. Galaga is therefore exactly 224x288
+            // times N, never stretched to the nominal 3:4 monitor shape.
+            const int scale = std::min(content.w / source_width,
+                                       content.h / source_height);
             if (scale >= 1) {
-                ow = display_width * scale;
-                oh = display_height * scale;
+                ow = source_width * scale;
+                oh = source_height * scale;
+            } else if (ow * source_height > oh * source_width) {
+                ow = oh * source_width / source_height;
+            } else {
+                oh = ow * source_height / source_width;
             }
-        } else if (ow * display_height > oh * display_width) {
-            ow = oh * display_width / display_height;
+        } else if (pane_integer) {
+            const int scale = std::min(content.w / source_width,
+                                       content.h / source_height);
+            if (scale >= 1) {
+                ow = source_width * scale;
+                oh = source_height * scale;
+            }
+            if (ow * fit_display_height > oh * fit_display_width)
+                ow = oh * fit_display_width / fit_display_height;
+            else
+                oh = ow * fit_display_height / fit_display_width;
         } else {
-            oh = ow * display_height / display_width;
+            if (ow * fit_display_height > oh * fit_display_width)
+                ow = oh * fit_display_width / fit_display_height;
+            else
+                oh = ow * fit_display_height / fit_display_width;
         }
-        return present_pane{pane.x + (pane.w - ow) / 2,
-                            pane.y + (pane.h - oh) / 2, ow, oh};
+        return present_pane{content.x + (content.w - ow) / 2,
+                            content.y + (content.h - oh) / 2, ow, oh};
+    };
+    const auto draw_cabinet_frame = [&](const present_pane& fit,
+                                        int surface_width,
+                                        int surface_height) {
+        if (!dual_output) return;
+        const auto clear_rect = [&](int amount, float red, float green,
+                                    float blue) {
+            const int x = std::max(fit.x - amount, 0);
+            const int y = std::max(fit.y - amount, 0);
+            const int right =
+                std::min(fit.x + fit.w + amount, surface_width);
+            const int top =
+                std::min(fit.y + fit.h + amount, surface_height);
+            if (right <= x || top <= y) return;
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(x, y, right - x, top - y);
+            glClearColor(red, green, blue, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glDisable(GL_SCISSOR_TEST);
+        };
+        clear_rect(10, 0.05f, 0.11f, 0.15f);
+        clear_rect(3, 0.22f, 0.78f, 1.0f);
     };
 
     // Shared post-process state, set once for all panes.
@@ -2523,6 +2739,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     glBindVertexArray(m_post_vertex_array);
     for (int pane = 0; pane < pane_count; ++pane) {
         const present_pane fit = fit_pane(panes[pane]);
+        draw_cabinet_frame(fit, m_ctx->width, m_ctx->height);
         glViewport(fit.x, fit.y, fit.w, fit.h);
         glUniform2i(output_size_loc, fit.w, fit.h);
         glUniform2i(output_origin_loc, fit.x, fit.y);
@@ -2551,7 +2768,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
         glDisable(GL_BLEND);
     }
 
-    const bool status_overlay_visible =
+    const bool status_overlay_visible = !m_cabinet_status.empty() ||
         m_display_settings.show_fps || m_display_settings.show_renderer;
     if (status_overlay_visible) {
         ++m_fps_frame_count;
@@ -2586,14 +2803,17 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
             m_present_readback.data(), m_ctx->width, m_ctx->height,
             separate_status_overlay ? m_fps_pixels.data() : nullptr,
             separate_status_overlay ? m_fps_texture_width : 0,
-            separate_status_overlay ? m_fps_texture_height : 0);
+            separate_status_overlay ? m_fps_texture_height : 0,
+            m_settings_visible,
+            m_settings_visible ? m_ctx->width : display_width,
+            m_settings_visible ? m_ctx->height : display_height);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     } else {
         SDL_GL_SwapWindow(static_cast<SDL_Window*>(m_ctx->window));
         // Windowed dual output: mirror the same frame into an independent
-        // Player 2 window on its own monitor, created on demand and torn down
-        // when the mode is left. The window shares this GL context, so the game
-        // texture and post-process program are reused as-is.
+        // Player 2 window, either beside Player 1 on the same desktop or
+        // centred on the second physical display. The window shares this GL
+        // context, so the game texture and post-process program are reused.
         if (second_window) {
             SDL_Window* w1 = static_cast<SDL_Window*>(m_ctx->window);
             SDL_GLContext ctx = static_cast<SDL_GLContext>(m_ctx->gl_context);
@@ -2601,14 +2821,12 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
                 if (SDL_Window* w2 = SDL_CreateWindow(
                         "WhittyArcade - Player 2", m_ctx->width, m_ctx->height,
                         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE)) {
-                    int display_count = 0;
-                    if (SDL_DisplayID* d = SDL_GetDisplays(&display_count)) {
-                        SDL_Rect bounds{};
-                        if (display_count >= 2 &&
-                            SDL_GetDisplayBounds(d[1], &bounds))
-                            SDL_SetWindowPosition(w2, bounds.x + 48,
-                                                  bounds.y + 48);
-                        SDL_free(d);
+                    if (!m_display_settings.twin_separate_monitors ||
+                        !place_window_on_display(w2, 1, true)) {
+                        int x = SDL_WINDOWPOS_CENTERED;
+                        int y = SDL_WINDOWPOS_CENTERED;
+                        SDL_GetWindowPosition(w1, &x, &y);
+                        SDL_SetWindowPosition(w2, x + 48, y + 48);
                     }
                     m_ctx->window2 = w2;
                     SDL_SetWindowTitle(w1, "WhittyArcade - Player 1");
@@ -2626,6 +2844,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
                 glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT);
                 const present_pane p2 = fit_pane({0, 0, w2w, w2h});
+                draw_cabinet_frame(p2, w2w, w2h);
                 glUseProgram(m_post_program);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, texture);
@@ -2878,7 +3097,7 @@ void polygon_renderer_gpu::present_model2_frame(model2_gpu_frame frame) {
     glDisable(GL_BLEND);
 
     present_texture(m_model2_scene_texture, model2_gpu_frame::width,
-                    model2_gpu_frame::height, false, false);
+                    model2_gpu_frame::height, false, false, 4, 3);
 }
 
 void polygon_renderer_gpu::read_framebuffer(uint32_t* output) {
@@ -3422,13 +3641,15 @@ void polygon_renderer_gpu::update_settings_texture() {
 
 void polygon_renderer_gpu::update_fps_texture(double fps) {
     if (!m_settings_font || !m_fps_texture) return;
-    std::string label;
+    std::string label = m_cabinet_status;
     if (m_display_settings.show_renderer) {
-        label = renderer_backend_name(m_active_backend);
-        std::transform(label.begin(), label.end(), label.begin(),
+        std::string renderer = renderer_backend_name(m_active_backend);
+        std::transform(renderer.begin(), renderer.end(), renderer.begin(),
                        [](unsigned char c) {
                            return static_cast<char>(std::toupper(c));
                        });
+        if (!label.empty()) label += "  |  ";
+        label += renderer;
     }
     if (m_display_settings.show_fps) {
         char fps_label[24]{};

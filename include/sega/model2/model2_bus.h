@@ -45,6 +45,11 @@ public:
     void vblank();
     void set_inputs(const input_state& state);
     bool irq_asserted(unsigned line) const;
+    bool communication_peer_mode() const { return m_comm_peer_mode; }
+    bool communication_linked() const { return m_comm_link_alive; }
+    uint8_t communication_node_id() const { return m_comm_node_id; }
+    uint8_t srally_link_type() const;
+    bool set_srally_link_type(uint8_t type);
 
     // MB86234 geometry coprocessor buses and host FIFO handshake.
     uint32_t tgp_program_read(uint16_t address) const;
@@ -118,6 +123,10 @@ public:
 private:
     void load_nvram();
     bool save_nvram();
+    void initialize_comm_board();
+    bool open_comm_peer();
+    void close_comm_peer();
+    void tick_comm_peer();
 
     static bool in_range(uint32_t address, uint32_t base,
                          std::size_t size);
@@ -181,8 +190,16 @@ private:
     uint8_t m_comm_fg{};
     uint8_t m_comm_zfg{};
     bool m_comm_loopback{};
+    bool m_comm_peer_mode{};
+    bool m_comm_network{};
+    bool m_comm_peer_seen{};
     bool m_comm_link_alive{};
     uint16_t m_comm_link_timer{};
+    uint8_t m_comm_node_id{};
+    uint16_t m_comm_local_port{};
+    uint16_t m_comm_peer_port{};
+    std::intptr_t m_comm_socket{-1};
+    uint32_t m_comm_sequence{};
     std::array<uint8_t, 0x0e00> m_comm_loopback_frame{};
     bool m_comm_loopback_frame_valid{};
     input_state m_inputs{};
@@ -223,6 +240,7 @@ private:
     uint16_t m_eeprom_output_shift{};
     uint16_t m_eeprom_write_shift{};
     std::array<uint16_t, 64> m_eeprom_words{};
+    int8_t m_forced_srally_link_type{-1};
     uint8_t m_gear{1};
     bool m_shift_down_previous{};
     bool m_shift_up_previous{};

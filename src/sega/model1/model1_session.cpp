@@ -74,7 +74,7 @@ public:
         if (!pixels.empty())
             m_gpu_renderer->present_rgba_frame(
                 pixels.data(), model1_machine::native_width(),
-                model1_machine::native_height());
+                model1_machine::native_height(), 4, 3);
         ++m_frame_number;
         if (m_frame_number % 60 == 0 && session_trace_enabled()) {
             const auto now = std::chrono::steady_clock::now();

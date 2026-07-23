@@ -345,6 +345,8 @@ set(SOURCES
     src/namco/namco_session.cpp
     src/arcade_renderer.cpp
     src/arcade_input.cpp
+    src/network_video_link.cpp
+    src/multiplayer_lobby.cpp
     src/input_mapping.cpp
     src/input_mapper.cpp
     src/arcade_frontend.cpp
@@ -484,7 +486,7 @@ if(WHITTY_ENABLE_SYSTEM246)
         system246_video_geometry chdr-static)
 endif()
 if(WIN32)
-    target_link_libraries(WhittyArcade PRIVATE ole32 shell32 uuid)
+    target_link_libraries(WhittyArcade PRIVATE ole32 shell32 uuid ws2_32)
 endif()
 
 # Compiler flags
@@ -956,6 +958,9 @@ target_include_directories(model2_boot_test PRIVATE
 target_link_libraries(model2_boot_test PRIVATE
     i960 mb86233 system24_video model1_io PkgConfig::MINIZIP ZLIB::ZLIB
     ${WHITTY_MATH_LIB})
+if(WIN32)
+    target_link_libraries(model2_boot_test PRIVATE ws2_32)
+endif()
 target_compile_options(model2_boot_test PRIVATE
     -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
 
@@ -988,6 +993,9 @@ add_executable(model2_io_test
 )
 target_include_directories(model2_io_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(model2_io_test PRIVATE model1_io)
+if(WIN32)
+    target_link_libraries(model2_io_test PRIVATE ws2_32)
+endif()
 target_compile_options(model2_io_test PRIVATE
     -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME model2_io_test COMMAND model2_io_test)

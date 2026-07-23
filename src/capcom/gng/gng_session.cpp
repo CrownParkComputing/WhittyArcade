@@ -65,7 +65,7 @@ public:
         m_gpu_renderer->present_rgba_frame(
             reinterpret_cast<const uint8_t*>(
                 m_machine->framebuffer().data()),
-            gng::machine::width, gng::machine::height);
+            gng::machine::width, gng::machine::height, 4, 3);
         if (++m_frames % 600 == 0 && session_trace_enabled()) {
             std::printf("GnG frame %llu pc=%04x audio=%d\n",
                         static_cast<unsigned long long>(m_frames),

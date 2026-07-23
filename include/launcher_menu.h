@@ -4,6 +4,7 @@
 #include "input_mapping.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,6 +18,7 @@ struct launcher_controller_info {
 
 class launcher_menu {
 public:
+    static constexpr int interrupted = -2;
     // Compact utility mode is used for menus shown over a running game.
     explicit launcher_menu(bool compact_utility_window = false);
     ~launcher_menu();
@@ -29,6 +31,15 @@ public:
                const std::vector<std::string>& items,
                const std::string& back_label = "Back",
                int initial_selection = 0);
+
+    // As select(), but returns interrupted when the background condition
+    // becomes true. Used by the multiplayer lobby so Player 2 launches
+    // without touching the second app again.
+    int select_interruptible(
+        const std::string& title, const std::string& description,
+        const std::vector<std::string>& items,
+        const std::string& back_label, int initial_selection,
+        std::function<bool()> interrupt);
 
     // Displays scrollable text using the same launcher presentation.
     void show_text(const std::string& title, const std::string& text,
