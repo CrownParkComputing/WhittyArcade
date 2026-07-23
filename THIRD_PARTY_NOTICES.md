@@ -153,6 +153,14 @@ freely, subject to the following restrictions:
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 
+## m6809f
+
+The instance-based MC6809 interpreter in `third_party/m6809f` was imported
+from the Ghosts'n Goblins Amiga prototype and adapted for WhittyArcade's
+per-machine I/O context. Copyright © 2026 Crown Park Computing Ltd. It is
+distributed under the MIT Licence; the complete text is retained in
+`third_party/m6809f/LICENSE`.
+
 ## Runtime libraries
 
 The Linux executable dynamically links to system-provided libraries including

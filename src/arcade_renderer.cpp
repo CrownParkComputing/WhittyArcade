@@ -7,8 +7,8 @@
 #include "platform_paths.h"
 
 #include <GL/glew.h>
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
+#include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,9 +25,12 @@ namespace {
 std::array<int, 2> bounded_window_size(SDL_Window* window,
                                        int requested_width) {
     SDL_Rect usable{0, 0, 1920, 1080};
-    int display = window ? SDL_GetWindowDisplayIndex(window) : 0;
-    if (display < 0 || SDL_GetDisplayUsableBounds(display, &usable) != 0)
-        SDL_GetDisplayBounds(0, &usable);
+    SDL_DisplayID display = window ? SDL_GetDisplayForWindow(window) :
+                                     SDL_GetPrimaryDisplay();
+    if (!display || !SDL_GetDisplayUsableBounds(display, &usable)) {
+        display = SDL_GetPrimaryDisplay();
+        if (display) SDL_GetDisplayBounds(display, &usable);
+    }
     int border_top = 0, border_left = 0, border_bottom = 0, border_right = 0;
     if (window)
         SDL_GetWindowBordersSize(window, &border_top, &border_left,
@@ -673,6 +676,7 @@ uniform uvec3 screen_fade;
 uniform bool super_system22;
 uniform bool apply_board_color;
 uniform bool flip_y;
+uniform bool linear_filtering;
 uniform ivec2 output_size;
 uniform ivec2 output_origin;
 out vec4 output_color;
@@ -687,13 +691,24 @@ uint apply_fade(uint component, uint factor) {
 
 void main() {
     ivec2 source_size = textureSize(scene_color, 0);
-    ivec2 coordinate = ivec2((gl_FragCoord.xy - vec2(output_origin)) *
-                             vec2(source_size) /
-                             vec2(output_size));
-    coordinate = clamp(coordinate, ivec2(0), source_size - ivec2(1));
-    if (flip_y) coordinate.y = source_size.y - 1 - coordinate.y;
+    vec2 output_coordinate = gl_FragCoord.xy - vec2(output_origin);
+    vec3 sampled;
+    if (linear_filtering) {
+        // Sample at destination pixel centres.  The previous integer-only
+        // texelFetch path made non-integer PS2 scaling repeat rows unevenly,
+        // visibly squeezing fine HUD text even when LINEAR was selected.
+        vec2 uv = output_coordinate / vec2(output_size);
+        if (flip_y) uv.y = 1.0 - uv.y;
+        sampled = texture(scene_color, uv).rgb;
+    } else {
+        ivec2 coordinate = ivec2(output_coordinate * vec2(source_size) /
+                                 vec2(output_size));
+        coordinate = clamp(coordinate, ivec2(0), source_size - ivec2(1));
+        if (flip_y) coordinate.y = source_size.y - 1 - coordinate.y;
+        sampled = texelFetch(scene_color, coordinate, 0).rgb;
+    }
     uvec3 pixel = uvec3(round(clamp(
-        texelFetch(scene_color, coordinate, 0).rgb, 0.0, 1.0) * 255.0));
+        sampled, 0.0, 1.0) * 255.0));
     if (!apply_board_color) {
         output_color = vec4(vec3(pixel) / 255.0, 1.0);
         return;
@@ -742,7 +757,9 @@ constexpr int settings_width = 560;
 constexpr int settings_height = 510;
 constexpr int settings_row_top = 58;
 constexpr int settings_row_height = 29;
-constexpr int settings_row_count = 14;
+constexpr int settings_row_count = 15;
+constexpr int pause_menu_row_count = 6;
+constexpr int menu_axis_threshold = 16000;
 
 uint32_t compile_shader(GLenum type, const char* source) {
     const uint32_t shader = glCreateShader(type);
@@ -897,7 +914,7 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
         return true;
     }
 
-    if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         std::fprintf(stderr, "SDL initialization failed: %s\n", SDL_GetError());
         return false;
     }
@@ -916,12 +933,14 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     const int initial_width = initial_size[0];
     const int initial_height = initial_size[1];
     const bool alternate_output = settings.renderer != renderer_backend::opengl;
+    const SDL_WindowFlags output_visibility = alternate_output ?
+        SDL_WINDOW_HIDDEN :
+        (settings.fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
     SDL_Window* window = SDL_CreateWindow(
         alternate_output ? "WhittyArcade Render Worker" : "WhittyArcade",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         initial_width, initial_height,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
-            (alternate_output ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
+            output_visibility);
 
     if (!window) {
         std::fprintf(stderr, "Window creation failed: %s\n", SDL_GetError());
@@ -938,15 +957,38 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     }
 
     m_ctx = std::make_unique<opengl_context>(
-        opengl_context{window, gl_ctx, initial_width, initial_height});
-    SDL_GL_GetDrawableSize(window, &m_ctx->width, &m_ctx->height);
+        opengl_context{window, nullptr, gl_ctx, initial_width, initial_height});
+    SDL_GetWindowSizeInPixels(window, &m_ctx->width, &m_ctx->height);
 
-    glewExperimental = GL_TRUE;
-    if (glewInit() != GLEW_OK) {
-        std::fprintf(stderr, "GLEW initialization failed\n");
+    if (!m_ctx->make_current()) {
+        std::fprintf(stderr, "Could not activate OpenGL context: %s\n",
+                     SDL_GetError());
         shutdown();
         return false;
     }
+    glewExperimental = GL_TRUE;
+    const GLenum glew_result = glewInit();
+    // On native Wayland GLEW can finish loading the core OpenGL entry points
+    // and then report that no GLX display exists. GLX is not used by SDL's
+    // Wayland context, so accept that specific result after checking the
+    // required OpenGL version below.
+    if (glew_result != GLEW_OK &&
+        glew_result != GLEW_ERROR_NO_GLX_DISPLAY) {
+        std::fprintf(stderr, "GLEW initialization failed (%u): %s\n",
+                     static_cast<unsigned>(glew_result),
+                     reinterpret_cast<const char*>(
+                         glewGetErrorString(glew_result)));
+        shutdown();
+        return false;
+    }
+    if (!GLEW_VERSION_4_3) {
+        std::fprintf(stderr,
+                     "OpenGL 4.3 is unavailable after GLEW initialization\n");
+        shutdown();
+        return false;
+    }
+    // glewInit can leave GL_INVALID_ENUM set when probing a core context.
+    while (glGetError() != GL_NO_ERROR) {}
 
     if (!configure_output_backend(settings.renderer, settings)) {
         std::fprintf(stderr, "Requested %s output could not be initialized\n",
@@ -1140,7 +1182,7 @@ void polygon_renderer_gpu::shutdown() {
         m_ctx->make_current();
         SDL_SetCursor(SDL_GetDefaultCursor());
         for (SDL_Cursor*& cursor : m_lightgun_cursors) {
-            if (cursor) SDL_FreeCursor(cursor);
+            if (cursor) SDL_DestroyCursor(cursor);
             cursor = nullptr;
         }
         destroy_graphics_pipeline();
@@ -1222,7 +1264,7 @@ void polygon_renderer_gpu::update_lightgun_cursor() {
             m_lightgun_cursors[m_lightgun_cursor_player] :
             SDL_GetDefaultCursor();
     if (desired) SDL_SetCursor(desired);
-    SDL_ShowCursor(SDL_ENABLE);
+    SDL_ShowCursor();
 }
 
 void polygon_renderer_gpu::set_lightgun_cursor(bool enabled, uint8_t player) {
@@ -1231,27 +1273,29 @@ void polygon_renderer_gpu::set_lightgun_cursor(bool enabled, uint8_t player) {
     if (enabled && !m_lightgun_cursors[player]) {
         constexpr int size = 44;
         constexpr int centre = size / 2;
-        SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(
-            0, size, size, 32, SDL_PIXELFORMAT_RGBA32);
+        SDL_Surface* surface = SDL_CreateSurface(
+            size, size, SDL_PIXELFORMAT_RGBA32);
         if (surface) {
+            const SDL_PixelFormatDetails* fmt =
+                SDL_GetPixelFormatDetails(surface->format);
             const uint32_t transparent = SDL_MapRGBA(
-                surface->format, 0, 0, 0, 0);
+                fmt, nullptr, 0, 0, 0, 0);
             const uint32_t outline = SDL_MapRGBA(
-                surface->format, 0, 0, 0, 255);
+                fmt, nullptr, 0, 0, 0, 255);
             constexpr std::array<std::array<uint8_t, 3>, 2> player_colours{{
                 {{32, 224, 255}},
                 {{255, 48, 112}},
             }};
             const auto& colour = player_colours[player];
             const uint32_t sight = SDL_MapRGBA(
-                surface->format, colour[0], colour[1], colour[2], 255);
-            SDL_FillRect(surface, nullptr, transparent);
+                fmt, nullptr, colour[0], colour[1], colour[2], 255);
+            SDL_FillSurfaceRect(surface, nullptr, transparent);
 
             // WhittyArcade's light-gun sight is generated here rather than
             // borrowed from a game or another emulator. Dark edging keeps
             // both vivid player colours readable against bright muzzle
             // flashes and dark scenery.
-            if (SDL_LockSurface(surface) == 0) {
+            if (SDL_LockSurface(surface)) {
                 auto* pixels = static_cast<uint32_t*>(surface->pixels);
                 const int stride = surface->pitch /
                                    static_cast<int>(sizeof(uint32_t));
@@ -1277,16 +1321,16 @@ void polygon_renderer_gpu::set_lightgun_cursor(bool enabled, uint8_t player) {
                 {centre - 1, 2, 3, 7}, {centre - 1, 36, 3, 6},
             }};
             for (const SDL_Rect& rectangle : outline_segments)
-                SDL_FillRect(surface, &rectangle, outline);
+                SDL_FillSurfaceRect(surface, &rectangle, outline);
             for (const SDL_Rect& rectangle : sight_segments)
-                SDL_FillRect(surface, &rectangle, sight);
+                SDL_FillSurfaceRect(surface, &rectangle, sight);
             SDL_Rect centre_outline{centre - 2, centre - 2, 5, 5};
             SDL_Rect centre_point{centre - 1, centre - 1, 3, 3};
-            SDL_FillRect(surface, &centre_outline, outline);
-            SDL_FillRect(surface, &centre_point, sight);
+            SDL_FillSurfaceRect(surface, &centre_outline, outline);
+            SDL_FillSurfaceRect(surface, &centre_point, sight);
             m_lightgun_cursors[player] = SDL_CreateColorCursor(
                 surface, centre, centre);
-            SDL_FreeSurface(surface);
+            SDL_DestroySurface(surface);
         }
     }
     if (enabled) m_lightgun_cursor_player = player;
@@ -1300,57 +1344,57 @@ arcade_host_action polygon_renderer_gpu::process_events() {
     std::lock_guard<std::mutex> sdl_lock(arcade_sdl_mutex());
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        const bool key_down = event.type == SDL_KEYDOWN;
+        const bool key_down = event.type == SDL_EVENT_KEY_DOWN;
         const arcade_host_action host_action = classify_arcade_host_event(
-            event.type == SDL_QUIT,
-            key_down && event.key.keysym.sym == SDLK_ESCAPE,
+            event.type == SDL_EVENT_QUIT,
+            key_down && event.key.key == SDLK_ESCAPE,
             key_down && event.key.repeat != 0);
         if (host_action != arcade_host_action::continue_running)
             return host_action;
-        if (!m_alternate_presenter && event.type == SDL_WINDOWEVENT &&
-            (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
-             event.window.event == SDL_WINDOWEVENT_RESIZED) && m_ctx) {
-            SDL_GL_GetDrawableSize(static_cast<SDL_Window*>(m_ctx->window),
+        if (!m_alternate_presenter &&
+            (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+             event.type == SDL_EVENT_WINDOW_RESIZED) && m_ctx) {
+            SDL_GetWindowSizeInPixels(static_cast<SDL_Window*>(m_ctx->window),
                                    &m_ctx->width, &m_ctx->height);
             m_ctx->width = std::max(m_ctx->width, 1);
             m_ctx->height = std::max(m_ctx->height, 1);
         }
-        if (event.type == SDL_KEYDOWN) {
-            const SDL_Keycode key = event.key.keysym.sym;
-            if (!event.key.repeat && key == SDLK_F2 && m_f2_opens_dip) {
-                m_dip_requested = true;
-                continue;
-            }
-            if (!event.key.repeat && key == SDLK_c) {
-                m_settings_visible = false;
-                m_rom_menu_visible = false;
-                m_controls_requested = true;
-                m_settings_texture_dirty = true;
-                continue;
-            }
-            if (!event.key.repeat && key == SDLK_s) {
-                if (m_settings_visible && !m_rom_menu_visible) {
-                    m_settings_visible = false;
-                } else {
-                    m_settings_visible = true;
-                    m_rom_menu_visible = false;
-                }
-                m_settings_texture_dirty = true;
-                continue;
-            }
-            if (!event.key.repeat && key == SDLK_r) {
-                if (m_settings_visible && m_rom_menu_visible) {
-                    m_settings_visible = false;
-                    m_rom_menu_visible = false;
-                } else {
-                    m_settings_visible = true;
-                    m_rom_menu_visible = true;
-                }
-                m_settings_texture_dirty = true;
+        if (event.type == SDL_EVENT_KEY_DOWN) {
+            const SDL_Keycode key = event.key.key;
+            if (!event.key.repeat && key == SDLK_P) {
+                if (m_paused) resume_game();
+                else show_pause_menu();
                 continue;
             }
             if (m_settings_visible) {
-                if (m_rom_menu_visible) {
+                if (key == SDLK_BACKSPACE) {
+                    show_pause_menu();
+                    continue;
+                }
+                if (m_pause_menu_visible) {
+                    if (key == SDLK_UP)
+                        select_pause_menu_row(-1);
+                    else if (key == SDLK_DOWN)
+                        select_pause_menu_row(1);
+                    else if ((key == SDLK_RETURN || key == SDLK_SPACE) &&
+                             activate_pause_menu())
+                        return arcade_host_action::return_to_menu;
+                    m_settings_texture_dirty = true;
+                    continue;
+                } else if (m_operator_menu_visible) {
+                    if (key == SDLK_UP)
+                        select_operator_row(-1);
+                    else if (key == SDLK_DOWN)
+                        select_operator_row(1);
+                    else if (key == SDLK_LEFT)
+                        adjust_operator_setting(-1, false);
+                    else if (key == SDLK_RIGHT)
+                        adjust_operator_setting(1, false);
+                    else if (key == SDLK_RETURN || key == SDLK_SPACE)
+                        adjust_operator_setting(1, true);
+                    m_settings_texture_dirty = true;
+                    continue;
+                } else if (m_rom_menu_visible) {
                     const int count = static_cast<int>(m_rom_choices.size());
                     if (count > 0 && key == SDLK_UP)
                         select_rom_within_board(-1);
@@ -1388,14 +1432,14 @@ arcade_host_action polygon_renderer_gpu::process_events() {
             }
             const SDL_Keymod modifiers = SDL_GetModState();
             if (!event.key.repeat && key == SDLK_RETURN &&
-                (modifiers & KMOD_ALT) != 0) {
+                (modifiers & SDL_KMOD_ALT) != 0) {
                 m_display_settings.fullscreen =
                     !m_display_settings.fullscreen;
                 apply_display_settings(m_display_settings);
                 m_settings_changed = true;
                 continue;
             }
-            if (!event.key.repeat && (modifiers & KMOD_CTRL) != 0 &&
+            if (!event.key.repeat && (modifiers & SDL_KMOD_CTRL) != 0 &&
                 (key == SDLK_EQUALS || key == SDLK_PLUS ||
                  key == SDLK_KP_PLUS || key == SDLK_MINUS ||
                  key == SDLK_KP_MINUS)) {
@@ -1406,51 +1450,130 @@ arcade_host_action polygon_renderer_gpu::process_events() {
                 m_settings_changed = true;
                 continue;
             }
-            if (event.key.keysym.sym == SDLK_F8 && !event.key.repeat)
-                m_dip_requested = true;
         }
-        if (m_settings_visible && event.type == SDL_CONTROLLERBUTTONDOWN) {
-            if (m_rom_menu_visible) {
+        if (m_settings_visible && event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+            if (m_pause_menu_visible) {
+                switch (event.gbutton.button) {
+                case SDL_GAMEPAD_BUTTON_DPAD_UP:
+                    select_pause_menu_row(-1);
+                    break;
+                case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
+                    select_pause_menu_row(1);
+                    break;
+                case SDL_GAMEPAD_BUTTON_SOUTH:
+                    if (activate_pause_menu())
+                        return arcade_host_action::return_to_menu;
+                    break;
+                case SDL_GAMEPAD_BUTTON_EAST:
+                    resume_game();
+                    break;
+                default: break;
+                }
+                m_settings_texture_dirty = true;
+                continue;
+            } else if (m_operator_menu_visible) {
+                switch (event.gbutton.button) {
+                case SDL_GAMEPAD_BUTTON_DPAD_UP:
+                    select_operator_row(-1);
+                    break;
+                case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
+                    select_operator_row(1);
+                    break;
+                case SDL_GAMEPAD_BUTTON_DPAD_LEFT:
+                    adjust_operator_setting(-1, false);
+                    break;
+                case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:
+                    adjust_operator_setting(1, false);
+                    break;
+                case SDL_GAMEPAD_BUTTON_SOUTH:
+                    adjust_operator_setting(1, true);
+                    break;
+                case SDL_GAMEPAD_BUTTON_EAST:
+                    show_pause_menu();
+                    break;
+                default: break;
+                }
+                m_settings_texture_dirty = true;
+                continue;
+            } else if (m_rom_menu_visible) {
                 const int count = static_cast<int>(m_rom_choices.size());
-                if (count > 0 && event.cbutton.button ==
-                                     SDL_CONTROLLER_BUTTON_DPAD_UP)
+                if (count > 0 && event.gbutton.button ==
+                                     SDL_GAMEPAD_BUTTON_DPAD_UP)
                     select_rom_within_board(-1);
-                else if (count > 0 && event.cbutton.button ==
-                                          SDL_CONTROLLER_BUTTON_DPAD_DOWN)
+                else if (count > 0 && event.gbutton.button ==
+                                          SDL_GAMEPAD_BUTTON_DPAD_DOWN)
                     select_rom_within_board(1);
-                else if (count > 0 && event.cbutton.button ==
-                                          SDL_CONTROLLER_BUTTON_DPAD_LEFT)
+                else if (count > 0 && event.gbutton.button ==
+                                          SDL_GAMEPAD_BUTTON_DPAD_LEFT)
                     cycle_rom_board(-1);
-                else if (count > 0 && event.cbutton.button ==
-                                          SDL_CONTROLLER_BUTTON_DPAD_RIGHT)
+                else if (count > 0 && event.gbutton.button ==
+                                          SDL_GAMEPAD_BUTTON_DPAD_RIGHT)
                     cycle_rom_board(1);
-                else if (count > 0 && event.cbutton.button ==
-                                          SDL_CONTROLLER_BUTTON_A) {
+                else if (count > 0 && event.gbutton.button ==
+                                          SDL_GAMEPAD_BUTTON_SOUTH) {
                     m_selected_rom = m_rom_choices[m_rom_selection].path;
                     m_rom_selection_pending = true;
                     m_settings_visible = false;
                     m_rom_menu_visible = false;
-                } else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_B) {
-                    m_rom_menu_visible = false;
+                } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
+                    show_pause_menu();
                 }
                 m_settings_texture_dirty = true;
                 continue;
             }
-            switch (event.cbutton.button) {
-            case SDL_CONTROLLER_BUTTON_DPAD_UP:
+            switch (event.gbutton.button) {
+            case SDL_GAMEPAD_BUTTON_DPAD_UP:
                 m_settings_selection =
                     (m_settings_selection + settings_row_count - 1) %
                     settings_row_count;
                 break;
-            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+            case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
                 m_settings_selection =
                     (m_settings_selection + 1) % settings_row_count;
                 break;
-            case SDL_CONTROLLER_BUTTON_DPAD_LEFT: adjust_setting(-1); break;
-            case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: adjust_setting(1); break;
-            case SDL_CONTROLLER_BUTTON_A: adjust_setting(0); break;
-            case SDL_CONTROLLER_BUTTON_B: m_settings_visible = false; break;
+            case SDL_GAMEPAD_BUTTON_DPAD_LEFT: adjust_setting(-1); break;
+            case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: adjust_setting(1); break;
+            case SDL_GAMEPAD_BUTTON_SOUTH: adjust_setting(0); break;
+            case SDL_GAMEPAD_BUTTON_EAST: show_pause_menu(); break;
             default: break;
+            }
+            m_settings_texture_dirty = true;
+        }
+        if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+            (event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX ||
+             event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY)) {
+            int direction = event.gaxis.value < -menu_axis_threshold ? -1 :
+                            event.gaxis.value > menu_axis_threshold ? 1 : 0;
+            int& latch = event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX ?
+                m_menu_axis_x : m_menu_axis_y;
+            if (!m_settings_visible) {
+                latch = 0;
+                continue;
+            }
+            if (direction == 0) {
+                latch = 0;
+                continue;
+            }
+            if (direction == latch) continue;
+            latch = direction;
+            if (event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY) {
+                if (m_pause_menu_visible)
+                    select_pause_menu_row(direction);
+                else if (m_operator_menu_visible)
+                    select_operator_row(direction);
+                else if (m_rom_menu_visible)
+                    select_rom_within_board(direction);
+                else
+                    m_settings_selection =
+                        (m_settings_selection +
+                         (direction < 0 ? settings_row_count - 1 : 1)) %
+                        settings_row_count;
+            } else if (m_operator_menu_visible) {
+                adjust_operator_setting(direction, false);
+            } else if (m_rom_menu_visible) {
+                cycle_rom_board(direction);
+            } else if (!m_pause_menu_visible) {
+                adjust_setting(direction);
             }
             m_settings_texture_dirty = true;
         }
@@ -1470,6 +1593,68 @@ void polygon_renderer_gpu::set_rom_choices(
         }
     }
     m_settings_texture_dirty = true;
+}
+
+void polygon_renderer_gpu::reset_session_ui() {
+    resume_game();
+    m_operator_actions.clear();
+    m_controls_requested = false;
+    m_rom_selection_pending = false;
+}
+
+void polygon_renderer_gpu::set_single_screen_only(bool enabled) {
+    if (m_single_screen_only == enabled) return;
+    m_single_screen_only = enabled;
+    m_settings_texture_dirty = true;
+    refresh_output();
+}
+
+void polygon_renderer_gpu::set_operator_menu(operator_menu_definition menu) {
+    const int selected_id = m_operator_menu.rows.empty() ? -1 :
+        m_operator_menu.rows[static_cast<std::size_t>(std::clamp(
+            m_operator_selection, 0,
+            static_cast<int>(m_operator_menu.rows.size()) - 1))].id;
+    m_operator_menu = std::move(menu);
+    m_operator_selection = 0;
+    for (std::size_t index = 0; index < m_operator_menu.rows.size(); ++index) {
+        if (m_operator_menu.rows[index].id == selected_id) {
+            m_operator_selection = static_cast<int>(index);
+            break;
+        }
+    }
+    if (!m_operator_menu.rows.empty() &&
+        !m_operator_menu.rows[static_cast<std::size_t>(m_operator_selection)].enabled)
+        select_operator_row(1);
+    m_settings_texture_dirty = true;
+}
+
+void polygon_renderer_gpu::select_operator_row(int direction) {
+    const int count = static_cast<int>(m_operator_menu.rows.size());
+    if (count <= 0) return;
+    for (int attempt = 0; attempt < count; ++attempt) {
+        m_operator_selection = (m_operator_selection +
+            (direction < 0 ? count - 1 : 1)) % count;
+        if (m_operator_menu.rows[static_cast<std::size_t>(
+                m_operator_selection)].enabled)
+            return;
+    }
+}
+
+void polygon_renderer_gpu::adjust_operator_setting(int direction,
+                                                    bool activate) {
+    if (m_operator_menu.rows.empty()) return;
+    operator_menu_row& row = m_operator_menu.rows[static_cast<std::size_t>(
+        std::clamp(m_operator_selection, 0,
+                   static_cast<int>(m_operator_menu.rows.size()) - 1))];
+    if (!row.enabled) return;
+    if (row.action) {
+        if (activate) m_operator_actions.push_back({row.id, row.selected});
+        return;
+    }
+    const int count = static_cast<int>(row.values.size());
+    if (count <= 0) return;
+    row.selected = (row.selected + (direction < 0 ? count - 1 : 1)) % count;
+    m_operator_actions.push_back({row.id, row.selected});
 }
 
 arcade_board_type polygon_renderer_gpu::active_rom_board() const {
@@ -1533,10 +1718,11 @@ bool polygon_renderer_gpu::take_rom_selection(std::string& path) {
     return true;
 }
 
-bool polygon_renderer_gpu::take_dip_request() {
-    const bool requested = m_dip_requested;
-    m_dip_requested = false;
-    return requested;
+bool polygon_renderer_gpu::take_operator_action(operator_menu_action& action) {
+    if (m_operator_actions.empty()) return false;
+    action = m_operator_actions.front();
+    m_operator_actions.erase(m_operator_actions.begin());
+    return true;
 }
 
 bool polygon_renderer_gpu::take_controls_request() {
@@ -1576,9 +1762,9 @@ void polygon_renderer_gpu::apply_display_settings(
     } else if (settings.fullscreen) {
         SDL_SetWindowMinimumSize(window, 1, 1);
         SDL_SetWindowMaximumSize(window, 16384, 16384);
-        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        SDL_SetWindowFullscreen(window, true);
     } else {
-        SDL_SetWindowFullscreen(window, 0);
+        SDL_SetWindowFullscreen(window, false);
         const auto size = bounded_window_size(window, settings.window_width);
         applied.window_width = size[0];
         m_display_settings.window_width = size[0];
@@ -1587,7 +1773,7 @@ void polygon_renderer_gpu::apply_display_settings(
                               SDL_WINDOWPOS_CENTERED);
     }
     if (!m_alternate_presenter)
-        SDL_GL_GetDrawableSize(window, &m_ctx->width, &m_ctx->height);
+        SDL_GetWindowSizeInPixels(window, &m_ctx->width, &m_ctx->height);
     SDL_GL_SetSwapInterval(m_alternate_presenter ? 0 : (settings.vsync ? 1 : 0));
     glBindTexture(GL_TEXTURE_2D, m_output_texture);
     const GLint filter = settings.linear_filtering ? GL_LINEAR : GL_NEAREST;
@@ -1608,7 +1794,7 @@ bool polygon_renderer_gpu::configure_output_backend(
         if (m_alternate_presenter) {
             m_alternate_presenter->shutdown();
             m_alternate_presenter.reset();
-            SDL_FlushEvent(SDL_QUIT);
+            SDL_FlushEvent(SDL_EVENT_QUIT);
         }
         SDL_SetWindowTitle(gl_window, "WhittyArcade - OpenGL");
         SDL_ShowWindow(gl_window);
@@ -1631,12 +1817,69 @@ bool polygon_renderer_gpu::configure_output_backend(
         return false;
     if (m_alternate_presenter) m_alternate_presenter->shutdown();
     m_alternate_presenter = std::move(replacement);
-    SDL_FlushEvent(SDL_QUIT);
+    SDL_FlushEvent(SDL_EVENT_QUIT);
     SDL_HideWindow(gl_window);
     m_ctx->make_current();
     m_active_backend = backend;
     update_fps_texture(m_last_fps);
     return true;
+}
+
+void polygon_renderer_gpu::show_pause_menu() {
+    m_paused = true;
+    m_settings_visible = true;
+    m_pause_menu_visible = true;
+    m_rom_menu_visible = false;
+    m_operator_menu_visible = false;
+    m_menu_axis_x = 0;
+    m_menu_axis_y = 0;
+    m_settings_texture_dirty = true;
+}
+
+void polygon_renderer_gpu::resume_game() {
+    m_paused = false;
+    m_settings_visible = false;
+    m_pause_menu_visible = false;
+    m_rom_menu_visible = false;
+    m_operator_menu_visible = false;
+    m_menu_axis_x = 0;
+    m_menu_axis_y = 0;
+    m_settings_texture_dirty = true;
+}
+
+void polygon_renderer_gpu::select_pause_menu_row(int direction) {
+    m_pause_menu_selection =
+        (m_pause_menu_selection +
+         (direction < 0 ? pause_menu_row_count - 1 : 1)) %
+        pause_menu_row_count;
+}
+
+bool polygon_renderer_gpu::activate_pause_menu() {
+    m_pause_menu_visible = false;
+    switch (m_pause_menu_selection) {
+    case 0:
+        resume_game();
+        break;
+    case 1:
+        m_operator_menu_visible = true;
+        break;
+    case 2:
+        break;
+    case 3:
+        m_pause_menu_visible = true;
+        m_controls_requested = true;
+        break;
+    case 4:
+        m_rom_menu_visible = true;
+        break;
+    case 5:
+        return true;
+    default:
+        m_pause_menu_visible = true;
+        break;
+    }
+    m_settings_texture_dirty = true;
+    return false;
 }
 
 void polygon_renderer_gpu::adjust_setting(int direction) {
@@ -1705,14 +1948,24 @@ void polygon_renderer_gpu::adjust_setting(int direction) {
         update_fps_texture(m_last_fps);
         break;
     case 11:
-        m_paused = !m_paused;
+        if (m_single_screen_only) return;
+        m_display_settings.output =
+            m_display_settings.output == output_mode::single ?
+                output_mode::dual : output_mode::single;
         break;
     case 12:
+        resume_game();
+        return;
+    case 13:
+        m_pause_menu_visible = false;
         m_rom_menu_visible = true;
         m_settings_texture_dirty = true;
         return;
-    case 13:
-        m_settings_visible = false;
+    case 14:
+        m_pause_menu_visible = false;
+        m_rom_menu_visible = false;
+        m_operator_menu_visible = true;
+        m_settings_texture_dirty = true;
         return;
     default:
         return;
@@ -2111,14 +2364,20 @@ void polygon_renderer_gpu::render_scene(const view_matrix& view, const rgba_colo
 void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
                                             int source_height,
                                             bool apply_board_color,
-                                            bool flip_y) {
+                                            bool flip_y,
+                                            int display_width,
+                                            int display_height) {
     if (m_headless || !m_ctx || texture == 0 ||
         source_width <= 0 || source_height <= 0)
         return;
 
+    if (display_width <= 0) display_width = source_width;
+    if (display_height <= 0) display_height = source_height;
     m_last_present_texture = texture;
     m_last_present_width = source_width;
     m_last_present_height = source_height;
+    m_last_present_display_width = display_width;
+    m_last_present_display_height = display_height;
     m_last_present_board_color = apply_board_color;
     m_last_present_flip_y = flip_y;
 
@@ -2130,8 +2389,8 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     // OpenGL merely so Vulkan/software can scale it again is both redundant
     // and exceptionally expensive on split-GPU systems.
     if (m_alternate_presenter) {
-        int presentation_width = source_width;
-        int presentation_height = source_height;
+        int presentation_width = display_width;
+        int presentation_height = display_height;
         if (m_settings_visible) {
             // Settings and ROM selection are host UI, not arcade pixels.
             // Render those overlays at the visible drawable resolution so
@@ -2168,7 +2427,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         // Query every frame: compositors can change the drawable scale without
         // a matching logical-size event while moving or resizing.
-        SDL_GL_GetDrawableSize(static_cast<SDL_Window*>(m_ctx->window),
+        SDL_GetWindowSizeInPixels(static_cast<SDL_Window*>(m_ctx->window),
                                &m_ctx->width, &m_ctx->height);
     }
     m_ctx->width = std::max(m_ctx->width, 1);
@@ -2179,27 +2438,61 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     glViewport(0, 0, m_ctx->width, m_ctx->height);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    int output_width = m_ctx->width;
-    int output_height = m_ctx->height;
-    if (m_display_settings.integer_scaling) {
-        const int scale = std::min(m_ctx->width / source_width,
-                                   m_ctx->height / source_height);
-        if (scale >= 1) {
-            output_width = source_width * scale;
-            output_height = source_height * scale;
-        }
-    } else if (output_width * source_height > output_height * source_width) {
-        output_width = output_height * source_width / source_height;
-    } else {
-        output_height = output_width * source_height / source_width;
+    // Split the drawable into one pane (normal) or two side-by-side panes
+    // (dual output). Both panes present the identical game image so a second
+    // player can watch their own screen area on an ultrawide, or on two
+    // monitors joined as one spanned desktop. Each pane letterboxes the game
+    // independently within its half.
+    struct present_pane { int x, y, w, h; };
+    std::array<present_pane, 2> panes{{{0, 0, m_ctx->width, m_ctx->height},
+                                       {0, 0, 0, 0}}};
+    int pane_count = 1;
+    const bool dual_output = !m_single_screen_only &&
+        m_display_settings.output == output_mode::dual;
+    // Windowed dual output gives each player an independent window (rendered
+    // after the main swap below, so it can sit on its own monitor). Fullscreen
+    // instead divides the one fullscreen surface down the middle, so a spanned
+    // two-monitor desktop shows one player per screen. Each half letterboxes
+    // the board independently at its true aspect.
+    const bool second_window = dual_output && !m_display_settings.fullscreen;
+    if (dual_output && m_display_settings.fullscreen) {
+        const int split = std::clamp(m_ctx->width / 2, 1, m_ctx->width - 1);
+        panes[0] = {0, 0, split, m_ctx->height};
+        panes[1] = {split, 0, m_ctx->width - split, m_ctx->height};
+        pane_count = 2;
     }
-    const int output_x = (m_ctx->width - output_width) / 2;
-    const int output_y = (m_ctx->height - output_height) / 2;
-    glViewport(output_x, output_y, output_width, output_height);
+
+    // Letterbox the game inside a pane, honouring integer scaling / aspect.
+    const auto fit_pane = [&](const present_pane& pane) {
+        int ow = pane.w;
+        int oh = pane.h;
+        if (m_display_settings.integer_scaling) {
+            const int scale = std::min(pane.w / display_width,
+                                       pane.h / display_height);
+            if (scale >= 1) {
+                ow = display_width * scale;
+                oh = display_height * scale;
+            }
+        } else if (ow * display_height > oh * display_width) {
+            ow = oh * display_width / display_height;
+        } else {
+            oh = ow * display_height / display_width;
+        }
+        return present_pane{pane.x + (pane.w - ow) / 2,
+                            pane.y + (pane.h - oh) / 2, ow, oh};
+    };
+
+    // Shared post-process state, set once for all panes.
     glDisable(GL_BLEND);
     glUseProgram(m_post_program);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
+    const GLint presentation_filter = m_display_settings.linear_filtering ?
+        GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    presentation_filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                    presentation_filter);
     glUniform1i(glGetUniformLocation(m_post_program, "scene_color"), 0);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D_ARRAY, m_gamma_texture);
@@ -2211,12 +2504,20 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     glUniform1i(glGetUniformLocation(m_post_program, "apply_board_color"),
                 apply_board_color ? 1 : 0);
     glUniform1i(glGetUniformLocation(m_post_program, "flip_y"), flip_y ? 1 : 0);
-    glUniform2i(glGetUniformLocation(m_post_program, "output_size"),
-                output_width, output_height);
-    glUniform2i(glGetUniformLocation(m_post_program, "output_origin"),
-                output_x, output_y);
+    glUniform1i(glGetUniformLocation(m_post_program, "linear_filtering"),
+                m_display_settings.linear_filtering ? 1 : 0);
+    const GLint output_size_loc =
+        glGetUniformLocation(m_post_program, "output_size");
+    const GLint output_origin_loc =
+        glGetUniformLocation(m_post_program, "output_origin");
     glBindVertexArray(m_post_vertex_array);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    for (int pane = 0; pane < pane_count; ++pane) {
+        const present_pane fit = fit_pane(panes[pane]);
+        glViewport(fit.x, fit.y, fit.w, fit.h);
+        glUniform2i(output_size_loc, fit.w, fit.h);
+        glUniform2i(output_origin_loc, fit.x, fit.y);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
 
     const bool status_overlay_visible =
         m_display_settings.show_fps || m_display_settings.show_renderer;
@@ -2257,6 +2558,60 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     } else {
         SDL_GL_SwapWindow(static_cast<SDL_Window*>(m_ctx->window));
+        // Windowed dual output: mirror the same frame into an independent
+        // Player 2 window on its own monitor, created on demand and torn down
+        // when the mode is left. The window shares this GL context, so the game
+        // texture and post-process program are reused as-is.
+        if (second_window) {
+            SDL_Window* w1 = static_cast<SDL_Window*>(m_ctx->window);
+            SDL_GLContext ctx = static_cast<SDL_GLContext>(m_ctx->gl_context);
+            if (!m_ctx->window2) {
+                if (SDL_Window* w2 = SDL_CreateWindow(
+                        "WhittyArcade - Player 2", m_ctx->width, m_ctx->height,
+                        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE)) {
+                    int display_count = 0;
+                    if (SDL_DisplayID* d = SDL_GetDisplays(&display_count)) {
+                        SDL_Rect bounds{};
+                        if (display_count >= 2 &&
+                            SDL_GetDisplayBounds(d[1], &bounds))
+                            SDL_SetWindowPosition(w2, bounds.x + 48,
+                                                  bounds.y + 48);
+                        SDL_free(d);
+                    }
+                    m_ctx->window2 = w2;
+                    SDL_SetWindowTitle(w1, "WhittyArcade - Player 1");
+                }
+            }
+            if (SDL_Window* w2 = static_cast<SDL_Window*>(m_ctx->window2)) {
+                SDL_GL_MakeCurrent(w2, ctx);
+                int w2w = 1;
+                int w2h = 1;
+                SDL_GetWindowSizeInPixels(w2, &w2w, &w2h);
+                w2w = std::max(w2w, 1);
+                w2h = std::max(w2h, 1);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glDisable(GL_BLEND);
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+                const present_pane p2 = fit_pane({0, 0, w2w, w2h});
+                glUseProgram(m_post_program);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                glViewport(p2.x, p2.y, p2.w, p2.h);
+                glUniform2i(output_size_loc, p2.w, p2.h);
+                glUniform2i(output_origin_loc, p2.x, p2.y);
+                glBindVertexArray(m_post_vertex_array);
+                glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                SDL_GL_SwapWindow(w2);
+                SDL_GL_MakeCurrent(w1, ctx);
+            }
+        } else if (m_ctx->window2) {
+            // Left windowed dual output - tear the second window down.
+            SDL_DestroyWindow(static_cast<SDL_Window*>(m_ctx->window2));
+            m_ctx->window2 = nullptr;
+            SDL_SetWindowTitle(static_cast<SDL_Window*>(m_ctx->window),
+                               "WhittyArcade");
+        }
     }
 }
 
@@ -2265,11 +2620,14 @@ void polygon_renderer_gpu::refresh_output() {
     m_ctx->make_current();
     present_texture(m_last_present_texture, m_last_present_width,
                     m_last_present_height, m_last_present_board_color,
-                    m_last_present_flip_y);
+                    m_last_present_flip_y, m_last_present_display_width,
+                    m_last_present_display_height);
 }
 
 void polygon_renderer_gpu::present_rgba_frame(const uint8_t* pixels,
-                                              int width, int height) {
+                                              int width, int height,
+                                              int display_width,
+                                              int display_height) {
     if (!pixels || width <= 0 || height <= 0 || m_headless || !m_ctx) return;
     m_ctx->make_current();
 
@@ -2277,13 +2635,13 @@ void polygon_renderer_gpu::present_rgba_frame(const uint8_t* pixels,
         glGenTextures(1, &m_external_frame_texture);
     glBindTexture(GL_TEXTURE_2D, m_external_frame_texture);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    const GLint filter = m_display_settings.linear_filtering ?
+        GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
     if (width != m_external_frame_width || height != m_external_frame_height) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-        const GLint filter = m_display_settings.linear_filtering ?
-            GL_LINEAR : GL_NEAREST;
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         m_external_frame_width = width;
@@ -2293,7 +2651,8 @@ void polygon_renderer_gpu::present_rgba_frame(const uint8_t* pixels,
                         GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    present_texture(m_external_frame_texture, width, height, false, true);
+    present_texture(m_external_frame_texture, width, height, false, true,
+                    display_width, display_height);
 }
 
 void polygon_renderer_gpu::present_model2_frame(model2_gpu_frame frame) {
@@ -2757,8 +3116,8 @@ bool polygon_renderer_gpu::create_settings_overlay() {
         return false;
     }
 
-    if (TTF_Init() != 0) {
-        std::fprintf(stderr, "SDL_ttf initialization failed: %s\n", TTF_GetError());
+    if (!TTF_Init()) {
+        std::fprintf(stderr, "SDL_ttf initialization failed: %s\n", SDL_GetError());
         destroy_settings_overlay();
         return false;
     }
@@ -2768,7 +3127,7 @@ bool polygon_renderer_gpu::create_settings_overlay() {
         if (m_settings_font) break;
     }
     if (!m_settings_font) {
-        std::fprintf(stderr, "Could not open a settings font: %s\n", TTF_GetError());
+        std::fprintf(stderr, "Could not open a settings font: %s\n", SDL_GetError());
         destroy_settings_overlay();
         return false;
     }
@@ -2793,35 +3152,105 @@ bool polygon_renderer_gpu::create_settings_overlay() {
 
 void polygon_renderer_gpu::update_settings_texture() {
     if (!m_settings_font || !m_settings_texture) return;
-    SDL_Surface* panel = SDL_CreateRGBSurfaceWithFormat(
-        0, settings_width, settings_height, 32, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface* panel = SDL_CreateSurface(
+        settings_width, settings_height, SDL_PIXELFORMAT_RGBA32);
     if (!panel) return;
 
-    const auto color = [panel](uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-        return SDL_MapRGBA(panel->format, r, g, b, a);
+    const SDL_PixelFormatDetails* panel_fmt =
+        SDL_GetPixelFormatDetails(panel->format);
+    const auto color = [panel_fmt](uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+        return SDL_MapRGBA(panel_fmt, nullptr, r, g, b, a);
     };
-    SDL_FillRect(panel, nullptr, color(8, 13, 20, 238));
+    SDL_FillSurfaceRect(panel, nullptr, color(8, 13, 20, 238));
     const SDL_Rect top_border{0, 0, settings_width, 4};
     const SDL_Rect bottom_border{0, settings_height - 4, settings_width, 4};
-    SDL_FillRect(panel, &top_border, color(56, 198, 255, 255));
-    SDL_FillRect(panel, &bottom_border, color(56, 198, 255, 255));
+    SDL_FillSurfaceRect(panel, &top_border, color(56, 198, 255, 255));
+    SDL_FillSurfaceRect(panel, &bottom_border, color(56, 198, 255, 255));
 
     const auto draw_text = [this, panel](int x, int y, const std::string& text,
                                          SDL_Color text_color) {
         SDL_Surface* rendered =
-            TTF_RenderUTF8_Blended(m_settings_font, text.c_str(), text_color);
+            TTF_RenderText_Blended(m_settings_font, text.c_str(), text.size(),
+                                   text_color);
         if (!rendered) return;
         SDL_Rect destination{x, y, rendered->w, rendered->h};
         SDL_BlitSurface(rendered, nullptr, panel, &destination);
-        SDL_FreeSurface(rendered);
+        SDL_DestroySurface(rendered);
     };
 
     const SDL_Color white{238, 245, 250, 255};
     const SDL_Color muted{159, 177, 190, 255};
     const SDL_Color accent{70, 208, 255, 255};
-    if (m_rom_menu_visible) {
+    if (m_pause_menu_visible) {
+        draw_text(24, 16, "PAUSED", accent);
+        draw_text(24, 50,
+                  "Choose an option with the keyboard, D-pad or left stick.",
+                  muted);
+        const std::array<std::string, pause_menu_row_count> labels{{
+            "Play / Resume game",
+            "Operator / DIP settings",
+            "Emulator settings",
+            "Controllers / Keyboard",
+            "Change game / ROM selector",
+            "Return to arcade selector",
+        }};
+        constexpr int row_top = 96;
+        constexpr int row_height = 48;
+        for (int row = 0; row < pause_menu_row_count; ++row) {
+            const int y = row_top + row * row_height;
+            if (row == m_pause_menu_selection) {
+                const SDL_Rect highlight{16, y - 6, settings_width - 32,
+                                         row_height - 4};
+                SDL_FillSurfaceRect(panel, &highlight, color(19, 75, 101, 245));
+                draw_text(25, y, ">", accent);
+            }
+            draw_text(45, y, labels[static_cast<std::size_t>(row)], white);
+        }
+        draw_text(24, 472,
+                  "STICK / D-PAD: SELECT  A: OPEN  B OR P: PLAY",
+                  muted);
+    } else if (m_operator_menu_visible) {
+        draw_text(24, 16, m_operator_menu.title, accent);
+        std::string description = m_operator_menu.description;
+        if (description.size() > 68)
+            description = description.substr(0, 65) + "...";
+        draw_text(24, 50, description, muted);
+
+        constexpr int row_height = 32;
+        constexpr int content_top = 88;
+        constexpr int visible_rows = 11;
+        const int row_count = static_cast<int>(m_operator_menu.rows.size());
+        const int first_row = std::clamp(
+            m_operator_selection - visible_rows + 1, 0,
+            std::max(0, row_count - visible_rows));
+        const int last_row = std::min(row_count, first_row + visible_rows);
+        for (int index = first_row; index < last_row; ++index) {
+            const operator_menu_row& row = m_operator_menu.rows[
+                static_cast<std::size_t>(index)];
+            const int y = content_top + (index - first_row) * row_height;
+            if (index == m_operator_selection && row.enabled) {
+                const SDL_Rect highlight{16, y - 3, settings_width - 32,
+                                         row_height - 2};
+                SDL_FillSurfaceRect(panel, &highlight, color(19, 75, 101, 245));
+                draw_text(25, y, ">", accent);
+            }
+            draw_text(45, y, row.label, row.enabled ? white : muted);
+            if (!row.values.empty()) {
+                const int selected = std::clamp(
+                    row.selected, 0, static_cast<int>(row.values.size()) - 1);
+                std::string value = row.values[static_cast<std::size_t>(selected)];
+                if (value.size() > 24) value = value.substr(0, 21) + "...";
+                draw_text(330, y, value, row.enabled ? accent : muted);
+            } else if (row.action && row.enabled) {
+                draw_text(486, y, "ENTER", accent);
+            }
+        }
+        draw_text(24, 448, "B / BACKSPACE: PAUSE MENU", muted);
+        draw_text(24, 476,
+                  "STICK / D-PAD: CHANGE  A: APPLY", muted);
+    } else if (m_rom_menu_visible) {
         draw_text(24, 16, "GO ARCADE / GAMES", accent);
-        draw_text(295, 18, "R: CLOSE   S: SETTINGS   C: CONTROLS", muted);
+        draw_text(330, 18, "B / BACKSPACE: BACK", muted);
         if (m_rom_choices.empty()) {
             draw_text(32, 76, "No supported arcade ROM sets found.", muted);
         } else {
@@ -2837,7 +3266,7 @@ void polygon_renderer_gpu::update_settings_texture() {
                     });
             };
             const SDL_Rect board_tab{16, 48, settings_width - 32, 34};
-            SDL_FillRect(panel, &board_tab, color(19, 75, 101, 245));
+            SDL_FillSurfaceRect(panel, &board_tab, color(19, 75, 101, 245));
             draw_text(26, 54,
                       "<  " + std::string(arcade_board(active_board).menu_name) +
                           "  (" +
@@ -2870,7 +3299,7 @@ void polygon_renderer_gpu::update_settings_texture() {
                 if (static_cast<int>(index) == m_rom_selection) {
                     const SDL_Rect highlight{16, y - 3, settings_width - 32,
                                              row_height - 2};
-                    SDL_FillRect(panel, &highlight, color(19, 75, 101, 245));
+                    SDL_FillSurfaceRect(panel, &highlight, color(19, 75, 101, 245));
                     draw_text(25, y, ">", accent);
                 }
                 std::string label = choice.label;
@@ -2879,23 +3308,24 @@ void polygon_renderer_gpu::update_settings_texture() {
             }
         }
         draw_text(24, 472,
-                  "LEFT/RIGHT: BOARD  UP/DOWN: ROM  ENTER: LOAD", muted);
+                  "STICK / D-PAD: BOARD / GAME  A: LOAD", muted);
     } else {
         draw_text(24, 16, "EMULATOR SETTINGS", accent);
-        draw_text(306, 18, "S: CLOSE   C: CONTROLS   ESC: QUIT", muted);
+        draw_text(330, 18, "B / BACKSPACE: BACK", muted);
 
         const std::array<std::string, settings_row_count> labels{
             "Master volume", "Music", "Effects / speech", "Fullscreen",
             "Window size", "VSync", "Integer scaling",
             "Filtering", "Output backend", "Show renderer", "Show FPS",
-            "Pause emulation", "Go Arcade / Games", "Close settings",
+            "Screen output",
+            "Play / Resume game", "Go Arcade / Games", "Operator / DIP settings",
         };
         for (int row = 0; row < settings_row_count; ++row) {
             const int y = settings_row_top + row * settings_row_height;
             if (row == m_settings_selection) {
                 const SDL_Rect highlight{16, y - 3, settings_width - 32,
                                          settings_row_height - 1};
-                SDL_FillRect(panel, &highlight, color(19, 75, 101, 245));
+                SDL_FillSurfaceRect(panel, &highlight, color(19, 75, 101, 245));
                 draw_text(25, y, ">", accent);
             }
             draw_text(45, y, labels[row], white);
@@ -2907,8 +3337,8 @@ void polygon_renderer_gpu::update_settings_texture() {
                 const int maximum = row == 0 ? 200 : 100;
                 const SDL_Rect meter{300, y + 7, 145, 10};
                 const SDL_Rect fill{300, y + 7, 145 * value / maximum, 10};
-                SDL_FillRect(panel, &meter, color(46, 57, 65, 255));
-                SDL_FillRect(panel, &fill, color(56, 198, 255, 255));
+                SDL_FillSurfaceRect(panel, &meter, color(46, 57, 65, 255));
+                SDL_FillSurfaceRect(panel, &fill, color(56, 198, 255, 255));
                 draw_text(462, y, std::to_string(value) + "%", white);
                 continue;
             }
@@ -2934,20 +3364,27 @@ void polygon_renderer_gpu::update_settings_texture() {
             }
             case 9: value = m_display_settings.show_renderer ? "ON" : "OFF"; break;
             case 10: value = m_display_settings.show_fps ? "ON" : "OFF"; break;
-            case 11: value = m_paused ? "PAUSED" : "RUNNING"; break;
+            case 11:
+                value = m_single_screen_only ? "SINGLE (GAME)" :
+                        m_display_settings.output == output_mode::dual ?
+                            "DUAL SCREEN" : "SINGLE";
+                break;
+            case 12: value = m_paused ? "PAUSED" : "RUNNING"; break;
             default: break;
             }
             if (!value.empty())
                 draw_text(300, y, value, white);
         }
-        draw_text(24, 472, "ARROWS: SELECT / CHANGE     ENTER: APPLY", muted);
+        draw_text(24, 472,
+                  "STICK / D-PAD: CHANGE  A: APPLY",
+                  muted);
     }
 
     glBindTexture(GL_TEXTURE_2D, m_settings_texture);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, settings_width, settings_height,
                  0, GL_RGBA, GL_UNSIGNED_BYTE, panel->pixels);
-    SDL_FreeSurface(panel);
+    SDL_DestroySurface(panel);
     m_settings_texture_dirty = false;
 }
 
@@ -2969,21 +3406,23 @@ void polygon_renderer_gpu::update_fps_texture(double fps) {
     }
     if (label.empty()) label = " ";
     const SDL_Color color{238, 245, 250, 255};
-    SDL_Surface* text = TTF_RenderUTF8_Blended(
-        m_settings_font, label.c_str(), color);
+    SDL_Surface* text = TTF_RenderText_Blended(
+        m_settings_font, label.c_str(), label.size(), color);
     if (!text) return;
     constexpr int padding = 8;
-    SDL_Surface* panel = SDL_CreateRGBSurfaceWithFormat(
-        0, text->w + padding * 2, text->h + padding, 32,
-        SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface* panel = SDL_CreateSurface(
+        text->w + padding * 2, text->h + padding, SDL_PIXELFORMAT_RGBA32);
     if (!panel) {
-        SDL_FreeSurface(text);
+        SDL_DestroySurface(text);
         return;
     }
-    SDL_FillRect(panel, nullptr, SDL_MapRGBA(panel->format, 8, 13, 20, 220));
+    const SDL_PixelFormatDetails* panel_fmt =
+        SDL_GetPixelFormatDetails(panel->format);
+    SDL_FillSurfaceRect(panel, nullptr,
+                        SDL_MapRGBA(panel_fmt, nullptr, 8, 13, 20, 220));
     SDL_Rect destination{padding, padding / 2, text->w, text->h};
     SDL_BlitSurface(text, nullptr, panel, &destination);
-    SDL_FreeSurface(text);
+    SDL_DestroySurface(text);
     m_fps_texture_width = panel->w;
     m_fps_texture_height = panel->h;
     m_fps_pixels.resize(static_cast<std::size_t>(panel->w) * panel->h * 4);
@@ -2998,7 +3437,7 @@ void polygon_renderer_gpu::update_fps_texture(double fps) {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, panel->w, panel->h, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, panel->pixels);
-    SDL_FreeSurface(panel);
+    SDL_DestroySurface(panel);
 }
 
 void polygon_renderer_gpu::draw_fps_overlay() {
@@ -3109,14 +3548,16 @@ bool opengl_context::create(void* window, int w, int h) {
 }
 
 void opengl_context::destroy() {
-    if (gl_context) SDL_GL_DeleteContext(static_cast<SDL_GLContext>(gl_context));
+    if (window2) SDL_DestroyWindow(static_cast<SDL_Window*>(window2));
+    if (gl_context) SDL_GL_DestroyContext(static_cast<SDL_GLContext>(gl_context));
     if (window) SDL_DestroyWindow(static_cast<SDL_Window*>(window));
+    window2 = nullptr;
     gl_context = nullptr;
     window = nullptr;
 }
 
-void opengl_context::make_current() {
-    if (window && gl_context)
-        SDL_GL_MakeCurrent(static_cast<SDL_Window*>(window),
-                           static_cast<SDL_GLContext>(gl_context));
+bool opengl_context::make_current() {
+    return window && gl_context &&
+           SDL_GL_MakeCurrent(static_cast<SDL_Window*>(window),
+                              static_cast<SDL_GLContext>(gl_context));
 }

@@ -1,10 +1,14 @@
 #include "arcade_catalog.h"
 #include "test_platform.h"
 #include "galaxian_rom.h"
+#include "gng_rom.h"
 #include "model1_rom.h"
 #include "model2_rom.h"
-#include "shinobi_rom.h"
+#include "namco_rom.h"
+#include "system16b_rom.h"
 #include "system22_rom.h"
+#include "system246_rom.h"
+#include "xbox360_rom.h"
 
 #include <cassert>
 #include <cstring>
@@ -73,6 +77,12 @@ int main() {
              ridge_racer_rom_set::aqua_jet})
         assert_registered(rom_loader::set_short_name(set),
                           arcade_board_type::system22);
+    assert_registered(system246_rom_loader::set_short_name(
+                          system246_rom_set::ridge_racer_v_arcade_battle),
+                      arcade_board_type::system246);
+    assert_registered(xbox360_rom_loader::set_short_name(
+                          xbox360_rom_set::robotron_2084),
+                      arcade_board_type::xbox360);
     for (model1_rom_set set : {
              model1_rom_set::virtua_formula,
              model1_rom_set::virtua_fighter,
@@ -80,24 +90,36 @@ int main() {
              model1_rom_set::wing_war})
         assert_registered(model1_rom_loader::set_short_name(set),
                           arcade_board_type::model1);
-    assert_registered(model2_rom_loader::set_short_name(
-                          model2_rom_set::sega_rally_revision_c),
-                      arcade_board_type::model2);
+    for (model2_rom_set set : {
+             model2_rom_set::sega_rally_revision_c,
+             model2_rom_set::virtua_cop_2,
+             model2_rom_set::virtua_cop})
+        assert_registered(model2_rom_loader::set_short_name(set),
+                          arcade_board_type::model2);
     assert_registered(galaxian_rom_loader::set_short_name(
                           galaxian_rom_set::phoenix),
                       arcade_board_type::phoenix);
     assert_registered(galaxian_rom_loader::set_short_name(
                           galaxian_rom_set::galaxian),
-                      arcade_board_type::mooncrst);
+                      arcade_board_type::galaxian);
     assert_registered(galaxian_rom_loader::set_short_name(
                           galaxian_rom_set::mooncrst),
-                      arcade_board_type::mooncrst);
+                      arcade_board_type::galaxian);
     assert_registered(galaxian_rom_loader::set_short_name(
                           galaxian_rom_set::uniwars),
-                      arcade_board_type::mooncrst);
-    assert_registered(shinobi::shinobi_rom_loader::set_short_name(
-                          shinobi::shinobi_rom_set::shinobi_us),
-                      arcade_board_type::shinobi);
+                      arcade_board_type::galaxian);
+    assert_registered(system16b::system16b_rom_loader::set_short_name(
+                          system16b::system16b_rom_set::shinobi_us),
+                      arcade_board_type::system16b);
+    assert_registered(gng::rom_loader::set_short_name(
+                          gng::rom_set::world_set_1),
+                      arcade_board_type::capcom_gng);
+    assert_registered(namco::rom_loader::set_short_name(
+                          namco::rom_set::galaga),
+                      arcade_board_type::namco_galaga);
+    assert_registered(namco::rom_loader::set_short_name(
+                          namco::rom_set::pacmania),
+                      arcade_board_type::namco_system1);
 
     // Exercise the central probe using minimal directory fixtures. This
     // checks routing only; individual loaders have separate full-ROM tests.
@@ -130,15 +152,19 @@ int main() {
           arcade_board_type::model1, "vformula");
     probe("model2", {"epr-17888c.12", "epr-17889c.13"},
           arcade_board_type::model2, "srallyc");
+    probe("vcop2", {"epr-18524.12", "epr-18525.13"},
+          arcade_board_type::model2, "vcop2");
+    probe("vcop", {"epr-17166b.12", "epr-17167b.13"},
+          arcade_board_type::model2, "vcop");
     probe("phoenix", {"ic45", "h5-ic49.5a"},
           arcade_board_type::phoenix, "phoenix");
     probe("galaxian", {"galmidw.u", "1h.bin"},
-          arcade_board_type::mooncrst, "galaxian");
+          arcade_board_type::galaxian, "galaxian");
     probe("mooncrst", {"mc1", "mcs_b"},
-          arcade_board_type::mooncrst, "mooncrst");
+          arcade_board_type::galaxian, "mooncrst");
     probe("uniwars", {"f07_1a.bin", "egg10"},
-          arcade_board_type::mooncrst, "uniwars");
-    probe("shinobi", {"epr-11360.a7"}, arcade_board_type::shinobi,
+          arcade_board_type::galaxian, "uniwars");
+    probe("shinobi", {"epr-11360.a7"}, arcade_board_type::system16b,
           "shinobi4");
 
     // A missing path must never silently fall through to System 22. This is

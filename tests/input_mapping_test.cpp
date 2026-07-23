@@ -1,7 +1,7 @@
 #include "input_mapping.h"
 #include "test_platform.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <filesystem>
 #include <fstream>
@@ -30,8 +30,57 @@ int main() {
         start.type != input_binding_type::keyboard ||
         start.code != SDL_SCANCODE_1 ||
         config.keyboard[input_action_index(input_action::p1_action3)].code !=
-            SDL_SCANCODE_V)
+            SDL_SCANCODE_C)
         return 3;
+    if (config.keyboard[input_action_index(input_action::p1_left)].code !=
+            SDL_SCANCODE_A ||
+        config.keyboard[input_action_index(input_action::p1_right)].code !=
+            SDL_SCANCODE_D ||
+        config.keyboard[input_action_index(input_action::p1_up)].code !=
+            SDL_SCANCODE_W ||
+        config.keyboard[input_action_index(input_action::p1_down)].code !=
+            SDL_SCANCODE_S)
+        return 34;
+    for (const input_binding& binding : config.keyboard) {
+        if (binding.type == input_binding_type::keyboard &&
+            !reserved_host_key_purpose(binding.code).empty())
+            return 35;
+    }
+    if (reserved_host_key_purpose(SDL_SCANCODE_P).empty() ||
+        reserved_host_key_purpose(SDL_SCANCODE_ESCAPE).empty() ||
+        !reserved_host_key_purpose(SDL_SCANCODE_D).empty() ||
+        !reserved_host_key_purpose(SDL_SCANCODE_S).empty() ||
+        !reserved_host_key_purpose(SDL_SCANCODE_R).empty() ||
+        !reserved_host_key_purpose(SDL_SCANCODE_C).empty() ||
+        !reserved_host_key_purpose(SDL_SCANCODE_F2).empty())
+        return 36;
+
+    const input_binding_table controller_defaults =
+        default_controller_bindings();
+    const auto default_alias = [&](input_action action) {
+        return default_controller_alias(
+            action, controller_defaults[input_action_index(action)]);
+    };
+    if (default_alias(input_action::steer_left) !=
+            input_binding{input_binding_type::controller_button,
+                          SDL_GAMEPAD_BUTTON_DPAD_LEFT, 0} ||
+        default_alias(input_action::steer_right) !=
+            input_binding{input_binding_type::controller_button,
+                          SDL_GAMEPAD_BUTTON_DPAD_RIGHT, 0} ||
+        default_alias(input_action::p1_up) !=
+            input_binding{input_binding_type::controller_button,
+                          SDL_GAMEPAD_BUTTON_DPAD_UP, 0} ||
+        default_alias(input_action::p1_down) !=
+            input_binding{input_binding_type::controller_button,
+                          SDL_GAMEPAD_BUTTON_DPAD_DOWN, 0} ||
+        default_alias(input_action::right_left).type !=
+            input_binding_type::none ||
+        default_controller_alias(
+            input_action::p1_left,
+            {input_binding_type::controller_button,
+             SDL_GAMEPAD_BUTTON_DPAD_LEFT, 0}).type !=
+            input_binding_type::none)
+        return 33;
 
     input_mapping_config time_crisis_config = config;
     if (keyboard_bindings_for(time_crisis_config, "timecris")
@@ -51,7 +100,7 @@ int main() {
         ensure_controller_mapping(config, "00112233445566778899aabbccddeeff");
     controller.bindings[input_action_index(input_action::coin1)] = {
         input_binding_type::controller_button,
-        SDL_CONTROLLER_BUTTON_GUIDE, 0};
+        SDL_GAMEPAD_BUTTON_GUIDE, 0};
     config.keyboard[input_action_index(input_action::p1_action1)] = {
         input_binding_type::keyboard, SDL_SCANCODE_SPACE, 0};
 
@@ -64,7 +113,7 @@ int main() {
         ensure_game_controller_mapping(
             rave, "00112233445566778899aabbccddeeff");
     rave_controller.bindings[input_action_index(input_action::start1)] = {
-        input_binding_type::controller_button, SDL_CONTROLLER_BUTTON_B, 0};
+        input_binding_type::controller_button, SDL_GAMEPAD_BUTTON_EAST, 0};
 
     input_binding_table resolved_keyboard =
         keyboard_bindings_for(config, "raverace");
@@ -174,6 +223,8 @@ int main() {
         output << "keyboard.coin1=button:2\n"
                << "keyboard.start1=key:99999\n"
                << "keyboard.gas=key:" << SDL_SCANCODE_G << "\n"
+               << "keyboard.p1_right=key:" << SDL_SCANCODE_D << "\n"
+               << "keyboard.p1_down=key:" << SDL_SCANCODE_S << "\n"
                << "keyboard.p1_action3=key:" << SDL_SCANCODE_C << "\n"
                << "controller.aabb.coin1=key:3\n"
                << "controller.aabb.start1=axis:999:1\n"
@@ -183,7 +234,7 @@ int main() {
                << SDL_SCANCODE_G << "\n"
                << "game.raverace.keyboard.gas=none\n"
                << "game.raverace.controller.aabb.start1=button:"
-               << SDL_CONTROLLER_BUTTON_Y << "\n"
+               << SDL_GAMEPAD_BUTTON_NORTH << "\n"
                << "game.raverace.controller.aabb.gas=key:3\n"
                << "game.BadName.keyboard.coin1=key:3\n"
                << "unknown.value=key:1\n";
@@ -196,8 +247,12 @@ int main() {
             SDL_SCANCODE_1 ||
         repaired.keyboard[input_action_index(input_action::gas)].code !=
             SDL_SCANCODE_G ||
+        repaired.keyboard[input_action_index(input_action::p1_right)].code !=
+            SDL_SCANCODE_D ||
+        repaired.keyboard[input_action_index(input_action::p1_down)].code !=
+            SDL_SCANCODE_S ||
         repaired.keyboard[input_action_index(input_action::p1_action3)].code !=
-            SDL_SCANCODE_V)
+            SDL_SCANCODE_C)
         return 14;
     const input_binding_table repaired_controller =
         controller_bindings_for(repaired, "aabb");
@@ -221,7 +276,7 @@ int main() {
         controller_bindings_for(repaired, "aabb", "raverace");
     if (repaired_game_controller[input_action_index(input_action::start1)] !=
             input_binding{input_binding_type::controller_button,
-                          SDL_CONTROLLER_BUTTON_Y, 0} ||
+                          SDL_GAMEPAD_BUTTON_NORTH, 0} ||
         repaired_game_controller[input_action_index(input_action::gas)] !=
             repaired_controller[input_action_index(input_action::gas)])
         return 17;
@@ -235,7 +290,7 @@ int main() {
         output << "keyboard.coin1=key:" << SDL_SCANCODE_F8 << "\n"
                << "keyboard.p1_action3=key:" << SDL_SCANCODE_C << "\n"
                << "controller.cafe.start1=button:"
-               << SDL_CONTROLLER_BUTTON_A << "\n";
+               << SDL_GAMEPAD_BUTTON_SOUTH << "\n";
     }
     const input_mapping_config migrated = load_input_mappings(legacy.string());
     if (!migrated.games.empty() ||
@@ -245,18 +300,18 @@ int main() {
         controller_bindings_for(migrated, "cafe", "raverace")
                 [input_action_index(input_action::start1)] !=
             input_binding{input_binding_type::controller_button,
-                          SDL_CONTROLLER_BUTTON_A, 0} ||
+                          SDL_GAMEPAD_BUTTON_SOUTH, 0} ||
         migrated.keyboard[input_action_index(input_action::p1_action3)].code !=
-            SDL_SCANCODE_V)
+            SDL_SCANCODE_C)
         return 19;
 
     if (input_binding_name(input_binding{}).empty() ||
         input_binding_name({input_binding_type::keyboard,
                             SDL_SCANCODE_RETURN, 0}).empty() ||
         input_binding_name({input_binding_type::controller_button,
-                            SDL_CONTROLLER_BUTTON_A, 0}).empty() ||
+                            SDL_GAMEPAD_BUTTON_SOUTH, 0}).empty() ||
         input_binding_name({input_binding_type::controller_axis,
-                            SDL_CONTROLLER_AXIS_LEFTX, -1}).empty() ||
+                            SDL_GAMEPAD_AXIS_LEFTX, -1}).empty() ||
         input_binding_name({input_binding_type::inherit, -1, 0}).empty())
         return 20;
 

@@ -88,7 +88,6 @@ public:
                     const emulator_settings& settings) override;
     void run_frame() override;
     void render_frame();
-    void open_operator_settings() override;
     void reload_input_mappings() override {
         if (m_input) m_input->reload_mappings();
     }
@@ -97,6 +96,16 @@ public:
     }
 
 protected:
+    operator_menu_definition operator_menu() const override {
+        return make_system22_operator_menu(
+            m_cabinet->system22_dip_switches, m_game_set);
+    }
+    void apply_operator_action(const operator_menu_action& action) override {
+        apply_system22_operator_action(
+            m_cabinet->system22_dip_switches, action);
+        if (m_bus)
+            m_bus->set_dip_switches(m_cabinet->system22_dip_switches);
+    }
     void apply_audio_settings(const emulator_settings& settings) override {
         if (m_audio)
             m_audio->set_mix_levels(settings.master_volume,
@@ -308,14 +317,6 @@ bool system22_emulator::initialize(const std::string& rom_path,
     printf("%s initialized successfully\n",
            rom_loader::set_display_name(game_set));
     return true;
-}
-
-void system22_emulator::open_operator_settings() {
-    if (m_game_set == ridge_racer_rom_set::unknown) return;
-    show_modal([this] {
-        show_dip_switches(m_cabinet->system22_dip_switches, m_game_set);
-    });
-    m_bus->set_dip_switches(m_cabinet->system22_dip_switches);
 }
 
 void system22_emulator::run_frame() {

@@ -5,7 +5,8 @@
 #include "system22_types.h"
 #include "arcade_settings.h"
 #include "model2_gpu_frame.h"
-#include <SDL2/SDL_ttf.h>
+#include "operator_menu.h"
+#include <SDL3_ttf/SDL_ttf.h>
 #include <array>
 #include <memory>
 #include <atomic>
@@ -122,22 +123,29 @@ private:
     std::atomic<int> m_pending_polygons{0};
     bool m_headless{false};
     bool m_initialized{false};
-    bool m_dip_requested{false};
     bool m_controls_requested{false};
-    bool m_f2_opens_dip{false};
     bool m_settings_visible{false};
     bool m_settings_changed{false};
     bool m_paused{false};
+    bool m_pause_menu_visible{false};
     bool m_settings_texture_dirty{true};
     bool m_ttf_initialized{false};
     int m_settings_selection{0};
+    int m_pause_menu_selection{0};
+    int m_menu_axis_x{0};
+    int m_menu_axis_y{0};
     bool m_rom_menu_visible{false};
+    bool m_operator_menu_visible{false};
+    int m_operator_selection{0};
+    operator_menu_definition m_operator_menu;
+    std::vector<operator_menu_action> m_operator_actions;
     int m_rom_selection{0};
     std::vector<rom_choice> m_rom_choices;
     std::string m_selected_rom;
     bool m_rom_selection_pending{false};
     emulator_settings m_display_settings{};
     renderer_backend m_active_backend{renderer_backend::opengl};
+    bool m_single_screen_only{false};
 
     bool create_graphics_pipeline();
     bool create_model2_pipeline();
@@ -152,6 +160,12 @@ private:
     void destroy_post_pipeline();
     void destroy_settings_overlay();
     void adjust_setting(int direction);
+    bool activate_pause_menu();
+    void select_pause_menu_row(int direction);
+    void show_pause_menu();
+    void resume_game();
+    void adjust_operator_setting(int direction, bool activate);
+    void select_operator_row(int direction);
     arcade_board_type active_rom_board() const;
     void select_rom_within_board(int direction);
     void select_rom_board(arcade_board_type board);
@@ -163,10 +177,13 @@ private:
     void update_lightgun_cursor();
     void present_texture(uint32_t texture, int source_width,
                          int source_height, bool apply_board_color,
-                         bool flip_y);
+                         bool flip_y, int display_width = 0,
+                         int display_height = 0);
     uint32_t m_last_present_texture{0};
     int m_last_present_width{0};
     int m_last_present_height{0};
+    int m_last_present_display_width{0};
+    int m_last_present_display_height{0};
     bool m_last_present_board_color{false};
     bool m_last_present_flip_y{false};
 
@@ -179,12 +196,14 @@ public:
 
     // Pump window events. Esc leaves the cabinet; closing the window exits.
     arcade_host_action process_events();
+    void reset_session_ui();
+    void set_single_screen_only(bool enabled);
     void set_rom_choices(std::vector<rom_choice> choices);
+    void set_operator_menu(operator_menu_definition menu);
     bool take_rom_selection(std::string& path);
-    bool take_dip_request();
+    bool take_operator_action(operator_menu_action& action);
     bool take_controls_request();
     bool take_settings_change(emulator_settings& settings);
-    void set_f2_opens_dip(bool enabled) { m_f2_opens_dip = enabled; }
     void set_lightgun_cursor(bool enabled, uint8_t player = 0);
     bool lightgun_cursor_enabled() const {
         return m_lightgun_cursor_enabled;
@@ -205,7 +224,9 @@ public:
 
     // Present a complete board-native RGBA8 frame through the same scaling,
     // filtering, settings overlay and host-window path as System 22 output.
-    void present_rgba_frame(const uint8_t* pixels, int width, int height);
+    void present_rgba_frame(const uint8_t* pixels, int width, int height,
+                            int display_width = 0,
+                            int display_height = 0);
     void present_model2_frame(model2_gpu_frame frame);
 
     // Get rendered frame
@@ -233,11 +254,12 @@ public:
 // OpenGL context wrapper
 struct opengl_context {
     void* window{nullptr};       // Platform window handle
+    void* window2{nullptr};      // Optional 2nd window for dual-player output
     void* gl_context{nullptr};   // GL context
     int width{0};
     int height{0};
 
     bool create(void* window, int w, int h);
     void destroy();
-    void make_current();
+    bool make_current();
 };

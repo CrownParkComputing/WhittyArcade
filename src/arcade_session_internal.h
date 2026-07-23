@@ -39,16 +39,26 @@ public:
 
     arcade_board_type board_type() const noexcept final { return m_board; }
     arcade_host_action process_events() final {
-        return m_gpu_renderer->process_events();
+        const arcade_host_action result = m_gpu_renderer->process_events();
+        operator_menu_action action;
+        bool changed = false;
+        while (m_gpu_renderer->take_operator_action(action)) {
+            apply_operator_action(action);
+            changed = true;
+        }
+        if (changed)
+            m_gpu_renderer->set_operator_menu(operator_menu());
+        return result;
     }
     void set_rom_choices(const std::vector<rom_choice>& choices) final {
         m_gpu_renderer->set_rom_choices(choices);
+        m_gpu_renderer->set_operator_menu(operator_menu());
     }
     bool take_rom_selection(std::string& path) final {
         return m_gpu_renderer->take_rom_selection(path);
     }
     bool take_operator_settings_request() final {
-        return m_gpu_renderer->take_dip_request();
+        return false;
     }
     bool take_controls_request() final {
         return m_gpu_renderer->take_controls_request();
@@ -66,10 +76,18 @@ public:
 protected:
     virtual void apply_audio_settings(const emulator_settings&) {}
     virtual void set_audio_paused(bool) {}
+    virtual operator_menu_definition operator_menu() const {
+        operator_menu_definition menu;
+        menu.description =
+            "This game has no verified host-side DIP editor.";
+        menu.rows.push_back({0, "Use the original cabinet TEST menu (F2)",
+                             {}, 0, false, false});
+        return menu;
+    }
+    virtual void apply_operator_action(const operator_menu_action&) {}
     void show_modal(std::function<void()> action) {
         m_gpu_renderer->run_modal(std::move(action));
     }
-
     std::shared_ptr<arcade_video_worker> m_gpu_renderer;
     std::shared_ptr<arcade_cabinet_state> m_cabinet;
 
@@ -78,6 +96,12 @@ private:
 };
 
 std::unique_ptr<emulator_session> make_system22_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);
+std::unique_ptr<emulator_session> make_system246_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);
+std::unique_ptr<emulator_session> make_xbox360_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);
 std::unique_ptr<emulator_session> make_model1_session(
@@ -90,6 +114,15 @@ std::unique_ptr<emulator_session> make_galaxian_session(
     arcade_board_type board,
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);
-std::unique_ptr<emulator_session> make_shinobi_session(
+std::unique_ptr<emulator_session> make_system16b_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);
+std::unique_ptr<emulator_session> make_gng_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);
+std::unique_ptr<emulator_session> make_namco_galaga_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);
+std::unique_ptr<emulator_session> make_namco_system1_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);

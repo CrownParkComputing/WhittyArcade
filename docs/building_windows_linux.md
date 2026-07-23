@@ -16,8 +16,8 @@ pacman -Syu --needed \
   mingw-w64-ucrt-x86_64-cmake \
   mingw-w64-ucrt-x86_64-ninja \
   mingw-w64-ucrt-x86_64-pkgconf \
-  mingw-w64-ucrt-x86_64-SDL2 \
-  mingw-w64-ucrt-x86_64-SDL2_ttf \
+  mingw-w64-ucrt-x86_64-sdl3 \
+  mingw-w64-ucrt-x86_64-sdl3-ttf \
   mingw-w64-ucrt-x86_64-openal \
   mingw-w64-ucrt-x86_64-glew \
   mingw-w64-ucrt-x86_64-glm \

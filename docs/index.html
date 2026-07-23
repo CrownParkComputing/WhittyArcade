@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhittyArcade — modular arcade emulator</title>
+<meta name="description" content="A standalone, board-based emulator for Sega, Namco and Capcom arcade hardware. How its architecture differs from MAME, its features, and the per-board logic.">
+<meta property="og:title" content="WhittyArcade — modular arcade emulator">
+<meta property="og:description" content="Each board is a self-contained module; each game is data. How it differs from MAME, its features, and per-board logic.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕹️</text></svg>">
+</head>
+<body>
+<style>
+  :root {
+    --bg: #f3f5f6;
+    --surface: #ffffff;
+    --surface-2: #e9edef;
+    --ink: #13171c;
+    --ink-soft: #3d454e;
+    --muted: #66707a;
+    --line: #d6dce0;
+    --line-strong: #c2cacf;
+    --accent: #0c8b8f;
+    --accent-ink: #086c6f;
+    --amber: #a9640f;
+    --grid: rgba(19,23,28,.045);
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --maxw: 72rem;
+    --prose: 44rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0e13;
+      --surface: #11151c;
+      --surface-2: #161c25;
+      --ink: #e6ecf1;
+      --ink-soft: #b4bfca;
+      --muted: #7d8996;
+      --line: #212934;
+      --line-strong: #2c3644;
+      --accent: #37cfd3;
+      --accent-ink: #6fe0e3;
+      --amber: #e6a848;
+      --grid: rgba(255,255,255,.038);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f3f5f6; --surface: #ffffff; --surface-2: #e9edef;
+    --ink: #13171c; --ink-soft: #3d454e; --muted: #66707a;
+    --line: #d6dce0; --line-strong: #c2cacf;
+    --accent: #0c8b8f; --accent-ink: #086c6f; --amber: #a9640f;
+    --grid: rgba(19,23,28,.045);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0e13; --surface: #11151c; --surface-2: #161c25;
+    --ink: #e6ecf1; --ink-soft: #b4bfca; --muted: #7d8996;
+    --line: #212934; --line-strong: #2c3644;
+    --accent: #37cfd3; --accent-ink: #6fe0e3; --amber: #e6a848;
+    --grid: rgba(255,255,255,.038);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent-ink); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 1.5rem; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    margin: 0 0 1rem;
+  }
+  h2 { font-size: clamp(1.5rem, 1rem + 2vw, 2.1rem); line-height: 1.12; letter-spacing: -.02em; text-wrap: balance; margin: 0 0 .6rem; }
+  h3 { font-size: 1.05rem; letter-spacing: -.01em; margin: 0; }
+  p { color: var(--ink-soft); }
+  .prose { max-width: var(--prose); }
+  .prose p { margin: 0 0 1rem; }
+
+  /* ---------- header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; height: 56px; }
+  .brand { display: flex; align-items: center; gap: .6rem; font-family: var(--mono); font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  nav.links { display: flex; gap: 1.1rem; font-family: var(--mono); font-size: .78rem; letter-spacing: .02em; }
+  nav.links a { color: var(--muted); }
+  nav.links a:hover { color: var(--ink); text-decoration: none; }
+  @media (max-width: 720px) { nav.links { display: none; } }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
+  .hero::before {
+    content: ""; position: absolute; inset: 0;
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 2.2rem,
+      radial-gradient(120% 80% at 82% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%);
+    pointer-events: none;
+  }
+  .hero-inner { position: relative; padding: 4.5rem 0 3.5rem; }
+  h1 { font-size: clamp(2.6rem, 1.4rem + 5vw, 4.6rem); line-height: .98; letter-spacing: -.035em; margin: 0 0 1.1rem; font-weight: 800; }
+  h1 .tail { color: var(--accent); }
+  .lede { font-size: clamp(1.05rem, .95rem + .5vw, 1.28rem); color: var(--ink-soft); max-width: 40rem; margin: 0 0 2rem; }
+  .specstrip { display: flex; flex-wrap: wrap; gap: 0 1.4rem; font-family: var(--mono); font-size: .8rem; border-top: 1px solid var(--line); padding-top: 1.1rem; }
+  .specstrip span { display: inline-flex; align-items: baseline; gap: .45rem; padding: .2rem 0; color: var(--muted); }
+  .specstrip b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* ---------- section rhythm ---------- */
+  section { padding: 3.75rem 0; border-bottom: 1px solid var(--line); }
+  section.alt { background: var(--surface); }
+  .shead { margin-bottom: 2rem; }
+
+  /* ---------- vs MAME ---------- */
+  .contrast { display: grid; gap: .75rem; }
+  .row {
+    display: grid; grid-template-columns: 12rem 1fr 1fr; gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  }
+  .row > div { background: var(--surface); padding: 1rem 1.15rem; }
+  .row .k { background: var(--surface-2); font-family: var(--mono); font-size: .74rem; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; }
+  .row .mame b, .row .wa b { display: block; font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; margin-bottom: .35rem; }
+  .row .mame b { color: var(--muted); }
+  .row .wa b { color: var(--accent-ink); }
+  .row .mame p, .row .wa p { margin: 0; font-size: .93rem; color: var(--ink-soft); }
+  .row .wa { box-shadow: inset 3px 0 0 var(--accent); }
+  @media (max-width: 760px) {
+    .row { grid-template-columns: 1fr; }
+    .row .k { padding: .7rem 1.15rem; }
+  }
+  .note { margin-top: 1.5rem; max-width: var(--prose); font-size: .95rem; color: var(--ink-soft); border-left: 2px solid var(--accent); padding-left: 1rem; }
+
+  /* ---------- architecture layers ---------- */
+  .arch { display: grid; grid-template-columns: minmax(0, 20rem) 1fr; gap: 2.5rem; align-items: start; }
+  @media (max-width: 820px) { .arch { grid-template-columns: 1fr; gap: 1.75rem; } }
+  .stack { display: flex; flex-direction: column; gap: 6px; }
+  .layer {
+    border: 1px solid var(--line-strong); border-radius: 8px; padding: .7rem .85rem; background: var(--surface);
+    display: flex; align-items: center; gap: .7rem;
+  }
+  .layer .n { font-family: var(--mono); font-size: .72rem; color: var(--accent-ink); width: 1.4rem; flex: none; }
+  .layer .t { font-size: .86rem; font-weight: 600; }
+  .layer .s { font-family: var(--mono); font-size: .68rem; color: var(--muted); margin-left: auto; }
+  .layer.host { border-style: dashed; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+  .arch-notes h3 { margin-bottom: .3rem; }
+  .arch-notes .blk + .blk { margin-top: 1.4rem; }
+  .arch-notes p { margin: .35rem 0 0; font-size: .95rem; }
+
+  /* ---------- features ---------- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr)); gap: .9rem; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 1.15rem 1.2rem; }
+  .card .t { font-family: var(--mono); font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; color: var(--accent-ink); margin-bottom: .5rem; }
+  .card h3 { font-size: .98rem; margin-bottom: .35rem; }
+  .card p { margin: 0; font-size: .9rem; }
+
+  .mono-inline { font-family: var(--mono); font-size: .84em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: .05em .35em; color: var(--ink); }
+  .feature-panel { margin-top: 1.5rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+  .fp-head { padding: 1.25rem 1.4rem .25rem; }
+  .fp-head .eyebrow { margin-bottom: .4rem; }
+  .fp-head h3 { font-size: 1.15rem; letter-spacing: -.01em; }
+  .fp-grid { display: grid; grid-template-columns: minmax(0, 22rem) 1fr; gap: 1.6rem; padding: 1rem 1.4rem 1.5rem; align-items: center; }
+  @media (max-width: 780px) { .fp-grid { grid-template-columns: 1fr; } }
+  .fp-screens { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+  .scr { position: relative; aspect-ratio: 4 / 3; border: 1px solid var(--line-strong); border-radius: 7px; background:
+      repeating-linear-gradient(var(--grid) 0 1px, transparent 1px 6px),
+      radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--accent) 20%, var(--surface-2)), var(--surface-2));
+      overflow: hidden; }
+  .scr .img { position: absolute; inset: 0; }
+  .scr .tag { position: absolute; left: 6px; bottom: 6px; z-index: 1; font-family: var(--mono); font-size: .58rem; letter-spacing: .06em; text-transform: uppercase; color: var(--ink); background: color-mix(in srgb, var(--bg) 78%, transparent); border: 1px solid var(--line-strong); border-radius: 4px; padding: .12rem .4rem; }
+  .fp-text p { margin: 0 0 .85rem; font-size: .92rem; }
+  .fp-text p:last-child { margin-bottom: 0; }
+  .fp-text b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- boards ---------- */
+  .boards { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: 1rem; }
+  .board { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+  .board .top { padding: 1.1rem 1.2rem .9rem; border-top: 3px solid var(--accent); }
+  .board .mfr { font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .board .top h3 { margin: .2rem 0 0; font-size: 1.12rem; letter-spacing: -.01em; }
+  .board .spec { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface-2); padding: .5rem 1.2rem; }
+  .board .spec dl { display: grid; grid-template-columns: 4.2rem 1fr; gap: .1rem .8rem; margin: 0; font-family: var(--mono); font-size: .76rem; }
+  .board .spec dt { color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-size: .66rem; padding-top: .28rem; }
+  .board .spec dd { margin: 0; color: var(--ink-soft); padding: .25rem 0; }
+  .board .body { padding: .95rem 1.2rem 1.2rem; display: flex; flex-direction: column; gap: .8rem; flex: 1; }
+  .board .logic { font-size: .88rem; color: var(--ink-soft); margin: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: auto; }
+  .chip { font-family: var(--mono); font-size: .7rem; padding: .18rem .5rem; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--ink-soft); background: var(--bg); }
+  .chip.off { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--line-strong)); }
+
+  /* ---------- code / rom ---------- */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 760px) { .split { grid-template-columns: 1fr; } }
+  pre { margin: 0; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.15rem; overflow-x: auto; }
+  code { font-family: var(--mono); font-size: .82rem; color: var(--ink); }
+  .steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .8rem; }
+  .steps li { counter-increment: s; position: relative; padding-left: 2.1rem; font-size: .93rem; color: var(--ink-soft); }
+  .steps li::before { content: counter(s, decimal-leading-zero); position: absolute; left: 0; top: .05rem; font-family: var(--mono); font-size: .72rem; color: var(--accent-ink); border: 1px solid var(--line-strong); border-radius: 5px; padding: .05rem .3rem; }
+  .steps b { color: var(--ink); font-weight: 600; }
+
+  footer { padding: 2.5rem 0 3rem; }
+  footer .fbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; align-items: center; }
+  footer .mono { font-family: var(--mono); font-size: .76rem; color: var(--muted); }
+
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  html { scroll-behavior: smooth; }
+</style>
+
+<header>
+  <div class="wrap bar">
+    <div class="brand"><span class="dot"></span>WhittyArcade</div>
+    <nav class="links" aria-label="Sections">
+      <a href="#overview">Overview</a>
+      <a href="#vsmame">vs&nbsp;MAME</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#features">Features</a>
+      <a href="#boards">Boards</a>
+      <a href="#roms">ROMs</a>
+      <a href="#build">Build</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap hero-inner">
+    <p class="eyebrow">Modular arcade emulator</p>
+    <h1>WhittyArcade<span class="tail">.</span></h1>
+    <p class="lede">A standalone emulator for Sega, Namco and Capcom arcade hardware &mdash; built on one idea: each <em>board</em> is a self-contained module, and each <em>game</em> is data.</p>
+    <div class="specstrip">
+      <span><b>11</b> boards</span>
+      <span><b>27</b> games</span>
+      <span><b>12+</b> CPU / DSP cores</span>
+      <span><b>SDL3</b> host layer</span>
+      <span>OpenGL&nbsp;/&nbsp;Vulkan&nbsp;/&nbsp;Software</span>
+      <span>Linux&nbsp;+&nbsp;Windows</span>
+    </div>
+  </div>
+</div>
+
+<section id="overview">
+  <div class="wrap">
+    <div class="prose">
+      <p class="eyebrow">What it is</p>
+      <h2>A curated shelf of arcade boards, run well.</h2>
+      <p>WhittyArcade emulates a hand-picked set of arcade platforms &mdash; the Sega Model&nbsp;1 and Model&nbsp;2 3D boards, Namco&nbsp;System&nbsp;22 and the Ridge&nbsp;Racer family, and a bench of classic Z80/6809 games &mdash; with real CPU and DSP cores, not recompilation.</p>
+      <p>It draws a hard line between three things: the <b>emulated hardware</b>, the <b>application</b> that wires a board to input, audio and settings, and the <b>host output</b> layer that owns the window. That separation is what lets the codebase stay small while every board keeps its own identity. MAME is the reference throughout &mdash; WhittyArcade keeps MAME&rsquo;s short-names as durable keys and uses it as the accuracy oracle when a board is brought up.</p>
+    </div>
+  </div>
+</section>
+
+<section id="vsmame" class="alt">
+  <div class="wrap">
+    <div class="shead">
+      <p class="eyebrow">Different question, different shape</p>
+      <h2>How it differs from MAME</h2>
+      <p class="prose">MAME preserves everything; WhittyArcade runs a shelf. That single difference in goal is why the two are built so differently.</p>
+    </div>
+    <div class="contrast">
+      <div class="row">
+        <div class="k">Goal</div>
+        <div class="mame"><b>MAME</b><p>Preserve every arcade machine ever made &mdash; tens of thousands of drivers, documentation-grade accuracy.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>Run one curated set of boards really well, with a clean, teachable architecture and a player / operator front-end.</p></div>
+      </div>
+      <div class="row">
+        <div class="k">Unit of code</div>
+        <div class="mame"><b>MAME</b><p>One <em>driver</em> per machine. A game is C++: a <code>GAME()</code> entry, a machine config and address maps.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>One module per <em>board</em>, holding hardware only. A game is <em>data</em> &mdash; a per-game profile the ROM loader fills and the hardware reads.</p></div>
+      </div>
+      <div class="row">
+        <div class="k">Adding a game</div>
+        <div class="mame"><b>MAME</b><p>Write or extend a driver in the shared machine framework.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>Add a catalog row, and &mdash; if the hardware already exists &mdash; a profile. No new board switch anywhere.</p></div>
+      </div>
+      <div class="row">
+        <div class="k">Binary shape</div>
+        <div class="mame"><b>MAME</b><p>One monolithic binary over a universal device tree.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>Each board is its own static library, linking only the CPU / chip cores and sub-boards it actually uses. The app links the boards.</p></div>
+      </div>
+      <div class="row">
+        <div class="k">Shared hardware</div>
+        <div class="mame"><b>MAME</b><p>Devices shared through the global machine framework.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>Sub-boards are first-class and board-neutral: Model&nbsp;1&rsquo;s sound &amp; I/O boards are reused by Model&nbsp;2, the System&nbsp;24 tile layer is shared, and no board references another board&rsquo;s games.</p></div>
+      </div>
+      <div class="row">
+        <div class="k">Switching game</div>
+        <div class="mame"><b>MAME</b><p>Tears down and rebuilds the whole machine &mdash; often the window with it.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>Only the emulated cabinet is destroyed and rebuilt, in a deterministic order. The host window and video worker survive.</p></div>
+      </div>
+      <div class="row">
+        <div class="k">ROM handling</div>
+        <div class="mame"><b>MAME</b><p>Strict per-set / CRC audit against a fixed rompath.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>An app-owned library that imports and cherry-picks from merged, split or non-merged sets &mdash; while keeping MAME short-names as durable keys.</p></div>
+      </div>
+    </div>
+    <p class="note">These aren&rsquo;t competitors. MAME answers &ldquo;can this machine be preserved and documented?&rdquo; WhittyArcade answers &ldquo;can this shelf of boards share one clean, composable codebase and a good front-end?&rdquo; &mdash; and it leans on MAME to get each board right.</p>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <div class="shead">
+      <p class="eyebrow">How it is put together</p>
+      <h2>Architecture</h2>
+    </div>
+    <div class="arch">
+      <div class="stack" aria-label="Runtime layers, application at top, hardware at bottom">
+        <div class="layer"><span class="n">L1</span><span class="t">Tools &amp; restart loop</span><span class="s">main.cpp</span></div>
+        <div class="layer"><span class="n">L2</span><span class="t">Session contract</span><span class="s">arcade_session</span></div>
+        <div class="layer"><span class="n">L3</span><span class="t">Per-family session wiring</span><span class="s">*_session.cpp</span></div>
+        <div class="layer"><span class="n">L4</span><span class="t">Board hardware modules</span><span class="s">machine / cpu / audio</span></div>
+        <div class="layer host"><span class="n">H</span><span class="t">Host video worker</span><span class="s">SDL3 + presenter</span></div>
+      </div>
+      <div class="arch-notes">
+        <div class="blk">
+          <h3>Routing lives in data, not switches</h3>
+          <p>A lightweight catalog is the single source of truth for board names, menu order, ROM-library directories and supported games &mdash; and it links no ROM loader. A separate probe asks each board loader to identify an archive and hand back a stable short-name. There is exactly one board-to-session factory switch in the whole program.</p>
+        </div>
+        <div class="blk">
+          <h3>The host survives a ROM change</h3>
+          <p>On a game switch the outgoing session stops board-owned producers first, fences and clears queued video work, drops its input watch, flushes durable operator data, and only then releases CPUs and RAM. The next board is built from fresh objects. The shared window and presenter never tear down &mdash; so nothing leaks between games, and the GPU driver is never re-initialised mid-session.</p>
+        </div>
+        <div class="blk">
+          <h3>Threads follow the hardware</h3>
+          <p>Each board defines its own hardware-safe hand-off boundaries: System&nbsp;22 advances its 68020, both C71 DSPs and the C74 in bounded slices; Model&nbsp;2 owns i960, TGP and geometry on one worker while its sound board runs on another. A CPU is never placed on an unconstrained host thread when it shares timing-sensitive RAM or interrupts.</p>
+        </div>
+        <div class="blk">
+          <h3>Invariants, enforced by tests</h3>
+          <p>MAME short-names are durable keys for imports, NVRAM and scores; every board type has exactly one descriptor and at least one game; unknown archives never fall through to a default board. A factory test repeatedly builds and destroys every catalogued board against one shared video worker.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features" class="alt">
+  <div class="wrap">
+    <div class="shead">
+      <p class="eyebrow">What you get</p>
+      <h2>Features</h2>
+    </div>
+    <div class="grid">
+      <div class="card"><div class="t">Emulation</div><h3>Real CPU &amp; DSP cores</h3><p>i960, NEC&nbsp;V60, MC68020, 68000, 6809, Z80, M37710 and the Model&nbsp;1/2 TGP geometry processors &mdash; interpreted and cycle-scheduled, not recompiled.</p></div>
+      <div class="card"><div class="t">Output</div><h3>Three presenters</h3><p>OpenGL, Vulkan or a software renderer, all sharing one aspect-correct, letterboxed present path so the board&rsquo;s image is never stretched.</p></div>
+      <div class="card"><div class="t">Displays</div><h3>Dual-screen output</h3><p>A selectable Single / Dual output mode that gives each player their own screen &mdash; each kept at the board&rsquo;s true aspect, with a small Player&nbsp;1 / Player&nbsp;2 identifier per screen.</p></div>
+      <div class="card"><div class="t">Light guns</div><h3>On-screen crosshairs</h3><p>Per-player coloured gun sights for Virtua&nbsp;Cop and Time&nbsp;Crisis, mapped through the real board&rsquo;s gun ADC &mdash; both players read and drawn every frame.</p></div>
+      <div class="card"><div class="t">Input</div><h3>Remappable controls</h3><p>SDL3 gamepad, keyboard and mouse with instance-ID hotplug, plus an in-app capture UI to rebind any control per game.</p></div>
+      <div class="card"><div class="t">Operator</div><h3>DIP &amp; NVRAM</h3><p>An operator settings menu with DIP layouts, plus per-set EEPROM / NVRAM persistence generated from catalog metadata.</p></div>
+      <div class="card"><div class="t">Scores</div><h3>High-score capture</h3><p>High-score tables are captured and persisted per set, keyed on the same durable MAME short-name as everything else.</p></div>
+      <div class="card"><div class="t">Library</div><h3>Import &amp; audit</h3><p>An app-owned ROM library that imports from merged / split / non-merged sets, audits each against its loader, and discovers ROMs across several roots.</p></div>
+      <div class="card"><div class="t">Lifecycle</div><h3>Clean game switching</h3><p>Deterministic teardown, a persistent host worker, pause / resume and frame pacing &mdash; switch games without restarting the process.</p></div>
+    </div>
+
+    <div class="feature-panel">
+      <div class="fp-head">
+        <p class="eyebrow">Two players, two screens</p>
+        <h3>Dual-screen output, in detail</h3>
+      </div>
+      <div class="fp-grid">
+        <div class="fp-screens" aria-hidden="true">
+          <div class="scr"><span class="tag">Player 1</span><span class="img"></span></div>
+          <div class="scr"><span class="tag">Player 2</span><span class="img"></span></div>
+        </div>
+        <div class="fp-text">
+          <p><b>Selectable, not hidden.</b> Output mode is a normal setting &mdash; <span class="mono-inline">Single</span> or <span class="mono-inline">Dual</span> &mdash; in the operator menu, not a launch flag.</p>
+          <p><b>Proper resolution on every screen.</b> Whether the game shows on one screen or two, each screen keeps the board&rsquo;s true aspect and is pillarboxed to fit &mdash; never stretched across a bezel or an ultrawide span.</p>
+          <p><b>Who&rsquo;s who.</b> Each screen carries a small <span class="mono-inline">Player&nbsp;1</span> / <span class="mono-inline">Player&nbsp;2</span> identifier in the corner, so the pair know which screen is theirs.</p>
+          <p><b>Controls follow the game.</b> In take-turns games the active player&rsquo;s controls route to their screen &mdash; a simple switch. In simultaneous games like Virtua&nbsp;Cop, both players&rsquo; inputs are read every frame and both players&rsquo; state &mdash; both gun sights &mdash; is drawn on both screens.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="boards">
+  <div class="wrap">
+    <div class="shead">
+      <p class="eyebrow">Per-board logic</p>
+      <h2>The boards</h2>
+      <p class="prose">Eleven board modules, each holding hardware only. Where a family spans variants &mdash; original vs&nbsp;A-CRX, standard vs&nbsp;Super &mdash; the difference is expressed as profile data or a board variant, never a fork.</p>
+    </div>
+    <div class="boards">
+
+      <div class="board">
+        <div class="top"><div class="mfr">Namco</div><h3>System 22 / Super 22</h3></div>
+        <div class="spec"><dl>
+          <dt>Main</dt><dd>MC68020</dd>
+          <dt>Geom</dt><dd>2&times; C71 DSP</dd>
+          <dt>Sound</dt><dd>C74 (M37710)</dd>
+          <dt>PCM</dt><dd>C352, 32-voice</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">Driving, gun and sprite behaviour come from per-game profiles; Super&nbsp;System&nbsp;22 (Time&nbsp;Crisis, Dirt&nbsp;Dash, Aqua&nbsp;Jet) adds a sprite layer as a board variant. Needs the <code>namcoc71</code>/<code>namcoc74</code> device firmware.</p>
+          <div class="chips">
+            <span class="chip">ridgerac</span><span class="chip">ridgera2</span><span class="chip">raverace</span><span class="chip">acedrive</span><span class="chip">victlap</span><span class="chip">cybrcomm</span><span class="chip">timecris</span><span class="chip">dirtdash</span><span class="chip">aquajet</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Namco</div><h3>System 246</h3></div>
+        <div class="spec"><dl>
+          <dt>Class</dt><dd>PlayStation&nbsp;2</dd>
+          <dt>CPU</dt><dd>Emotion Engine</dd>
+          <dt>Music</dt><dd>disc ADPCM</dd>
+          <dt>Media</dt><dd>rrv1-a.chd</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">A PS2-class board with disc-streamed music decoded from the game&rsquo;s CHD image &mdash; a different world from the older Namco boards, kept as its own module.</p>
+          <div class="chips"><span class="chip">rrvac &mdash; Ridge Racer V</span></div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Sega</div><h3>Model 1</h3></div>
+        <div class="spec"><dl>
+          <dt>Main</dt><dd>NEC V60</dd>
+          <dt>Geom</dt><dd>TGP coprocessor</dd>
+          <dt>Sound</dt><dd>68000 + YM3438 + MultiPCM</dd>
+          <dt>I/O</dt><dd>Z80 board</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">Deterministic V60 / TGP scheduling with a bounded graphics worker for display-list rasterisation; per-game input maps live in profiles, and an optional MPEG sound board is supported.</p>
+          <div class="chips"><span class="chip">vformula</span><span class="chip">vf</span><span class="chip">swa</span><span class="chip">wingwar</span></div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Sega</div><h3>Model 2 / 2A-CRX</h3></div>
+        <div class="spec"><dl>
+          <dt>Main</dt><dd>Intel i960</dd>
+          <dt>Geom</dt><dd>MB86234 TGP</dd>
+          <dt>Sound</dt><dd>SCSP <em>or</em> Model&nbsp;1 board</dd>
+          <dt>I/O</dt><dd>model1io2 (Z80)</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">A <code>model2_game_profile</code> chosen once at the session root selects the sound board (SCSP vs the Model&nbsp;1 68000 board), the I/O kind (wheel / gun / dual-port RAM), the light-gun and the NVRAM leaf. Virtua&nbsp;Cop reuses Model&nbsp;1&rsquo;s sound and I/O sub-boards outright.</p>
+          <div class="chips"><span class="chip">srallyc</span><span class="chip">vcop2</span><span class="chip">vcop</span></div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Sega</div><h3>System 16B</h3></div>
+        <div class="spec"><dl>
+          <dt>Main</dt><dd>68000</dd>
+          <dt>Sound</dt><dd>Z80 + YM</dd>
+          <dt>Tiles</dt><dd>System 24 layer</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">The classic Sega 16-bit tile / sprite board, sharing the same System&nbsp;24 tile layer the Model boards use for their text planes.</p>
+          <div class="chips"><span class="chip">shinobi &mdash; Shinobi</span></div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Capcom</div><h3>Ghosts&rsquo;n Goblins</h3></div>
+        <div class="spec"><dl>
+          <dt>Main</dt><dd>MC6809</dd>
+          <dt>Sound</dt><dd>Z80</dd>
+          <dt>FM</dt><dd>2&times; YM2203</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">Capcom&rsquo;s mid-80s 6809 platform with a dedicated Z80 sound CPU driving twin YM2203s.</p>
+          <div class="chips"><span class="chip">gng &mdash; Ghosts&rsquo;n Goblins</span></div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Namco</div><h3>System 1</h3></div>
+        <div class="spec"><dl>
+          <dt>Main</dt><dd>6809 CPUs</dd>
+          <dt>MCU</dt><dd>HD63701</dd>
+          <dt>Audio</dt><dd>YM2151 + Namco WSG</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">Namco&rsquo;s multi-6809 board with an HD63701 MCU and the Namco 8-channel wave-sound generator alongside a YM2151.</p>
+          <div class="chips"><span class="chip">pacmania &mdash; Pac-Mania</span></div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Namco</div><h3>Galaga hardware</h3></div>
+        <div class="spec"><dl>
+          <dt>CPUs</dt><dd>3&times; Zilog Z80</dd>
+          <dt>Audio</dt><dd>Namco WSG</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">The triple-Z80 Galaga board &mdash; two game CPUs and a sound CPU sharing memory under a namco-vector display.</p>
+          <div class="chips"><span class="chip">galaga &mdash; Galaga</span></div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Namco / Nichibutsu</div><h3>Galaxian hardware</h3></div>
+        <div class="spec"><dl>
+          <dt>CPU</dt><dd>Zilog Z80</dd>
+          <dt>Shape</dt><dd>polymorphic board</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">A polymorphic board interface with per-variant sound synths and a discrete-audio profile &mdash; game identity is consumed only at the session root, which is the reference for the whole games-as-data pattern.</p>
+          <div class="chips"><span class="chip">galaxian</span><span class="chip">mooncrst</span><span class="chip">uniwars</span></div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Amstar</div><h3>Phoenix</h3></div>
+        <div class="spec"><dl>
+          <dt>CPU</dt><dd>Intel 8085</dd>
+          <dt>Shape</dt><dd>shares Galaxian module</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">The 8085-based Phoenix plugs into the same polymorphic board interface as Galaxian &mdash; a distinct board type carried by shared, board-neutral machinery.</p>
+          <div class="chips"><span class="chip">phoenix &mdash; Phoenix</span></div>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="top"><div class="mfr">Microsoft</div><h3>Xbox 360 offline</h3></div>
+        <div class="spec"><dl>
+          <dt>Kind</dt><dd>high-level</dd>
+          <dt>Input</dt><dd>extracted default.xex</dd>
+        </dl></div>
+        <div class="body">
+          <p class="logic">Not a hardware board but a high-level path for offline Xbox&nbsp;360 arcade titles, running from an extracted executable and its media &mdash; wired through the same catalog and session contract.</p>
+          <div class="chips"><span class="chip">robotron &mdash; Robotron: 2084</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="roms" class="alt">
+  <div class="wrap">
+    <div class="shead">
+      <p class="eyebrow">Where the ROMs live</p>
+      <h2>ROM library</h2>
+      <p class="prose">WhittyArcade keeps its own library under the platform data directory and cherry-picks the exact ROMs each loader needs &mdash; so a single merged set can be the source of truth.</p>
+    </div>
+    <div class="split">
+      <div>
+        <ol class="steps">
+          <li><b>Import</b> a ZIP, CHD or a whole folder; only recognised sets are copied into the library.</li>
+          <li><b>Organised</b> by board: <code>roms/&lt;board&gt;/&lt;set&gt;.zip</code>, keyed on the MAME short-name.</li>
+          <li><b>Audited</b> against each board&rsquo;s loader, so a missing or wrong ROM is reported by name.</li>
+          <li><b>Discovered</b> across the library, the working directory and legacy roots &mdash; merged, split or non-merged.</li>
+        </ol>
+      </div>
+      <div>
+<pre><code># import recognised sets from anywhere
+WhittyArcade --import ~/Downloads
+
+# list what each board expects
+WhittyArcade --list-roms
+
+# audit the whole library
+WhittyArcade --audit-roms
+
+# library location
+~/.local/share/WhittyArcade/roms/
+  system22/ridgerac.zip
+  model2/vcop.zip  system16b/shinobi.zip
+  ...</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="build">
+  <div class="wrap">
+    <div class="shead">
+      <p class="eyebrow">Build &amp; run</p>
+      <h2>Getting started</h2>
+    </div>
+    <div class="split">
+      <div class="prose">
+        <p>WhittyArcade is C++17 with an SDL3 host layer, and builds on Linux and Windows. Each board compiles to its own static library, and the CPU / chip cores are vendored as small libraries the boards link on demand.</p>
+        <p>Configure with CMake, build, then point the ROM importer at your sets. A suite of unit and real-ROM integration tests covers the catalog, session lifecycle and every board loader.</p>
+      </div>
+      <div>
+<pre><code>cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+
+# tools live behind flags
+build/WhittyArcade --import &lt;path&gt;
+build/WhittyArcade --audit-roms
+
+# tests
+ctest --test-dir build --output-on-failure</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap fbar">
+    <span class="mono">WhittyArcade &mdash; modular arcade emulation</span>
+    <span class="mono"><a href="https://github.com/CrownParkComputing/WhittyArcade">github.com/CrownParkComputing/WhittyArcade</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -31,6 +31,7 @@ int main() {
     for (const rom_set_manifest& manifest : supported_rom_sets()) {
         const bool has_board_storage = manifest.working &&
             (manifest.board == arcade_board_type::system22 ||
+             manifest.board == arcade_board_type::system246 ||
              manifest.board == arcade_board_type::model1 ||
              manifest.board == arcade_board_type::model2);
         assert((find_persistent_game(games, manifest.short_name) != nullptr) ==

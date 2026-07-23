@@ -4,7 +4,7 @@
 #include "arcade_types.h"
 #include "input_mapping.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -28,22 +28,24 @@ public:
     bool controller_connected() const { return m_controller != nullptr; }
 
 private:
-    static int watch_cabinet_button_events(void* userdata, SDL_Event* event);
-    bool open_controller(int joystick_index);
+    static bool watch_cabinet_button_events(void* userdata, SDL_Event* event);
+    bool open_controller(SDL_JoystickID joystick_id);
     void scan_for_controller();
-    float keyboard_value(input_action action, const uint8_t* keys) const;
+    float keyboard_value(input_action action, const bool* keys) const;
     float controller_value(input_action action) const;
-    float action_value(input_action action, const uint8_t* keys) const;
+    float action_value(input_action action, const bool* keys) const;
     float controller_axis_value(int axis) const;
     void set_controller_watch_bindings();
 
-    SDL_GameController* m_controller{nullptr};
+    SDL_Gamepad* m_controller{nullptr};
     input_mapping_config m_mappings{};
     std::string m_game_short_name;
     input_binding_table m_keyboard_bindings{};
     input_binding_table m_controller_bindings{};
-    std::array<int, SDL_CONTROLLER_AXIS_MAX> m_axis_centers{};
-    std::atomic<SDL_JoystickID> m_controller_instance{-1};
+    std::array<int, SDL_GAMEPAD_AXIS_COUNT> m_axis_centers{};
+    // SDL3 joystick instance ids are unsigned; 0 is the "no controller"
+    // sentinel (SDL3 never assigns instance id 0).
+    std::atomic<SDL_JoystickID> m_controller_instance{0};
     input_state m_state{};
     float m_keyboard_steering{0.0f};
     uint64_t m_update_count{0};
@@ -57,6 +59,10 @@ private:
     std::atomic_bool m_mouse_activity{false};
     std::atomic_bool m_test_input_enabled{true};
     bool m_time_crisis_mouse{false};
+    // Virtua Cop's model1io2 gun ADC spans a full 10-bit range calibrated in
+    // the I/O board, so its cursor maps to the whole 0..255 axis rather than
+    // Time Crisis's narrow cyber_axis window.
+    bool m_lightgun_full_range{false};
     bool m_lightgun_mouse_active{false};
     bool m_event_watch_installed{false};
     bool m_initialized{false};

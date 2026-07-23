@@ -250,14 +250,22 @@ int model1_audio_system::execute_sound_cpu(int requested_cycles) {
     return total;
 }
 
-void model1_audio_system::signal_frame() {
+void model1_audio_system::signal_frame(bool block) {
     if (!m_running.load(std::memory_order_acquire)) return;
     std::unique_lock<std::mutex> lock(m_frame_mutex);
-    m_frame_ready.wait(lock, [this] {
-        return !m_running.load(std::memory_order_acquire) ||
-               m_pending_frames < 8;
-    });
-    if (!m_running.load(std::memory_order_relaxed)) return;
+    if (block) {
+        m_frame_ready.wait(lock, [this] {
+            return !m_running.load(std::memory_order_acquire) ||
+                   m_pending_frames < 8;
+        });
+        if (!m_running.load(std::memory_order_relaxed)) return;
+    } else if (m_pending_frames >= 8) {
+        // Non-blocking: the audio thread is behind, so drop this frame's
+        // advance rather than stall the emulation thread. UART bytes carry a
+        // zero timestamp and are still delivered on the next buffer, so audio
+        // recovers without a frozen i960.
+        return;
+    }
     ++m_pending_frames;
     lock.unlock();
     m_frame_ready.notify_all();
@@ -354,6 +362,20 @@ void model1_audio_system::resample_add(resampler_state& state,
 }
 
 void model1_audio_system::fill_buffer(uint32_t buffer) {
+    // While the host machine is paused, keep the OpenAL queue fed with silence
+    // but do not run the 68000. The frame clock still advances by one frame so
+    // UART timestamps queued before/after the pause stay aligned with
+    // execute_sound_cpu's m_sound_frame_base.
+    if (m_paused.load(std::memory_order_relaxed)) {
+        m_sound_frame_base += 656u * 424u;
+        deliver_uart(m_sound_frame_base);
+        m_output.fill(0);
+        m_peak_sample.store(0, std::memory_order_relaxed);
+        alBufferData(buffer, AL_FORMAT_STEREO16, m_output.data(),
+                     static_cast<ALsizei>(m_output.size() * sizeof(int16_t)),
+                     OUTPUT_RATE);
+        return;
+    }
     // One video frame is 278,144 V60 clocks. The board's 10 MHz 68000 runs
     // exactly 5/8 as many cycles: 173,840. This preserves the sequencer and
     // UART timing regardless of host/OpenAL scheduling jitter.

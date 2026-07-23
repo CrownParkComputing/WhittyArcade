@@ -5,9 +5,9 @@ distribution named by the download artifact. It contains no game ROMs,
 firmware, keys, or other copyrighted game data.
 
 Use the artifact matching your distribution family. The executable is
-dynamically linked and expects the normal SDL2, SDL2_ttf, OpenAL, OpenGL,
+dynamically linked and expects the normal SDL3, SDL3_ttf, OpenAL, OpenGL,
 GLEW, Vulkan loader, zlib, MiniZip, mpg123, and GLM packages supplied by that
-distribution. The project currently publishes CI artifacts for Ubuntu 24.04,
+distribution. The project currently publishes CI artifacts for Ubuntu 26.04,
 Debian 13, Fedora 43, openSUSE Tumbleweed, and CachyOS/Arch Linux.
 
 From the extracted directory:

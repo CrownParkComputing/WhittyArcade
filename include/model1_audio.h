@@ -31,8 +31,20 @@ public:
     void start();
     void stop();
     bool enqueue_uart(uint8_t data, uint64_t v60_timestamp);
-    void signal_frame();
+    // Advance the audio by one video frame. With block=true (Model 1) the
+    // caller's CPU thread is throttled to the audio buffer, which is how the
+    // Model 1 V60 keeps real time. With block=false (Model 2 / Virtua Cop) the
+    // call never waits: if the audio has fallen behind, this frame's advance is
+    // dropped so the i960 CPU worker is never frozen on the audio device.
+    void signal_frame(bool block = true);
     void set_mix_levels(int master, int music, int effects);
+    // Freeze the emulated sound board without tearing down the stream. While
+    // paused the audio thread keeps advancing its frame clock (so queued UART
+    // timestamps stay aligned) but renders silence instead of running the
+    // 68000. Used when a host menu pauses the Model 2 machine.
+    void set_paused(bool paused) {
+        m_paused.store(paused, std::memory_order_relaxed);
+    }
 
     bool initialized() const { return m_initialized.load(); }
     uint32_t program_counter() const { return m_program_counter.load(); }
@@ -126,6 +138,7 @@ private:
 
     std::atomic<bool> m_running{};
     std::atomic<bool> m_initialized{};
+    std::atomic<bool> m_paused{};
     std::thread m_thread;
     std::mutex m_frame_mutex;
     std::condition_variable m_frame_ready;

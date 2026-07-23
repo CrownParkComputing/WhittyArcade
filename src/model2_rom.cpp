@@ -493,6 +493,125 @@ model2_rom_load_result load_virtua_cop_2(const source_reader& source) {
     result.error = errors.str();
     return result;
 }
+
+model2_rom_load_result load_virtua_cop(const source_reader& source) {
+    // Virtua Cop (Revision B) is an original Sega Model 2 light-gun game
+    // (Sega Game ID# 833-11127). It shares the TGP CPU board math tables
+    // (opr-1474X) with Sega Rally / Virtua Cop 2 but differs from the Model
+    // 2A sets in three ways: the i960 data bus is the smaller 0x2000000
+    // window, there is no Model 2A video board (mpr-1631X), and sound is the
+    // Sega Model 1 board (segam1audio: 68000 + YM3438 + two MultiPCM buses)
+    // rather than the SCSP. The MultiPCM regions ride in sound_cpu and the two
+    // multipcm_samples buses; the SCSP `samples` region is left empty.
+    //
+    // MAME reference: src/mame/sega/model2.cpp ROM_START(vcop).
+    model2_rom_load_result result;
+    result.set = model2_rom_set::virtua_cop;
+    model2_roms& roms = result.roms;
+    roms.set = model2_rom_set::virtua_cop;
+    std::ostringstream errors;
+
+    // i960 program: two word32 pairs. The revision-B program sits at word 0
+    // (0x000000 lane 0 / 0x000002 lane 2); the shared revision-A second half
+    // sits at word 0x20000 (0x040000 lane 0 / 0x040002 lane 2).
+    roms.main_cpu.assign(0x200000, 0xff);
+    copy_word32(source, {"epr-17166b.12", 0x020000, 0xa5647c59},
+                roms.main_cpu, 0x000000, errors);
+    copy_word32(source, {"epr-17167b.13", 0x020000, 0xf5dde26a},
+                roms.main_cpu, 0x000002, errors);
+    copy_word32(source, {"epr-17160a.14", 0x020000, 0x267f3242},
+                roms.main_cpu, 0x040000, errors);
+    copy_word32(source, {"epr-17161a.15", 0x020000, 0xf7126876},
+                roms.main_cpu, 0x040002, errors);
+
+    // Main data bus: 0x2000000 window (no ROM_COPY expansion, unlike the 2A
+    // sets). Two 0x200000 word32 pairs at 0x000000 and 0x400000, then a
+    // 0x80000 word32 pair at 0x800000.
+    roms.main_data.assign(0x2000000, 0xff);
+    copy_word32(source, {"mpr-17164.10", 0x200000, 0xac5fc501},
+                roms.main_data, 0x000000, errors);
+    copy_word32(source, {"mpr-17165.11", 0x200000, 0x82296d00},
+                roms.main_data, 0x000002, errors);
+    copy_word32(source, {"mpr-17162.8", 0x200000, 0x60ddd41e},
+                roms.main_data, 0x400000, errors);
+    copy_word32(source, {"mpr-17163.9", 0x200000, 0x8c1f9dc8},
+                roms.main_data, 0x400002, errors);
+    copy_word32(source, {"epr-17168a.6", 0x080000, 0x59091a37},
+                roms.main_data, 0x800000, errors);
+    copy_word32(source, {"epr-17169a.7", 0x080000, 0x0495808d},
+                roms.main_data, 0x800002, errors);
+
+    // Coprocessor data socket is empty; the bus masks reads with
+    // (size/4 - 1), so the region must stay a non-empty power of two.
+    roms.copro_data.assign(0x800000, 0x00);
+
+    // Polygons and textures: one 0x200000 word32 pair each. The region sizes
+    // match MAME's ROM_START(vcop) so the geometry unit's modulo addressing
+    // (polygon_rom.size()/4, texture_rom.size()/2) wraps identically.
+    roms.polygon_data.assign(0x1000000, 0xff);
+    copy_word32(source, {"mpr-17159.16", 0x200000, 0xe218727d},
+                roms.polygon_data, 0x000000, errors);
+    copy_word32(source, {"mpr-17156.20", 0x200000, 0xc4f4aabf},
+                roms.polygon_data, 0x000002, errors);
+
+    roms.texture_data.assign(0x1000000, 0xff);
+    copy_word32(source, {"mpr-17158.25", 0x200000, 0x1108d1ec},
+                roms.texture_data, 0x000000, errors);
+    copy_word32(source, {"mpr-17157.24", 0x200000, 0xcf31e33d},
+                roms.texture_data, 0x000002, errors);
+
+    // Sega Model 1 sound board. 68000 program in a 0xc0000 region, two
+    // 0x20000 word-swapped halves at 0x000000 and 0x020000.
+    roms.sound_cpu.assign(0xc0000, 0xff);
+    copy_word_swapped(source, {"epr-17170.7", 0x020000, 0x06a38ae2},
+                      roms.sound_cpu, 0x000000, errors);
+    copy_word_swapped(source, {"epr-17171.8", 0x020000, 0xb5e436f8},
+                      roms.sound_cpu, 0x020000, errors);
+
+    // MultiPCM bus 1: two 0x100000 samples at 0x000000 and 0x200000.
+    roms.multipcm_samples_1.assign(0x400000, 0x00);
+    copy_linear(source, {"mpr-17172.32", 0x100000, 0xab22cac3},
+                roms.multipcm_samples_1, 0x000000, errors);
+    copy_linear(source, {"mpr-17173.33", 0x100000, 0x3cb4005c},
+                roms.multipcm_samples_1, 0x200000, errors);
+
+    // MultiPCM bus 2: two 0x200000 samples at 0x000000 and 0x200000.
+    roms.multipcm_samples_2.assign(0x400000, 0x00);
+    copy_linear(source, {"mpr-17174.4", 0x200000, 0xa50369cc},
+                roms.multipcm_samples_2, 0x000000, errors);
+    copy_linear(source, {"mpr-17175.5", 0x200000, 0x9136d43c},
+                roms.multipcm_samples_2, 0x200000, errors);
+
+    // TGP CPU-board math tables — identical ROMs to Sega Rally / Virtua Cop 2.
+    roms.copro_tgp_tables.assign(0x40000, 0xff);
+    copy_word32(source, {"opr-14742a.45", 0x20000, 0x90c6b117},
+                roms.copro_tgp_tables, 0, errors);
+    copy_word32(source, {"opr-14743a.46", 0x20000, 0xae7f446b},
+                roms.copro_tgp_tables, 2, errors);
+
+    roms.other_data.assign(0x80000, 0xff);
+    constexpr std::array<rom_spec, 4> other{{
+        {"opr-14744.58", 0x20000, 0x730ea9e0},
+        {"opr-14745.59", 0x20000, 0x4c934d96},
+        {"opr-14746.62", 0x20000, 0x2a266cbd},
+        {"opr-14747.63", 0x20000, 0xa4ad5e19},
+    }};
+    for (std::size_t index = 0; index < other.size(); ++index)
+        copy_word32(source, other[index], roms.other_data,
+                    (index / 2) * 0x40000 + (index & 1) * 2, errors);
+
+    // Cabinet I/O board firmware (Sega model1io2, TMPZ84C015). 64 KiB Z80
+    // program shared with the i960 through dual-port RAM. This is the extra
+    // epr-17181.6 in the archive that the Model 2A sets do not carry.
+    roms.io_cpu.assign(0x10000, 0xff);
+    copy_linear(source, {"epr-17181.6", 0x10000, 0x1add2b82},
+                roms.io_cpu, 0, errors);
+
+    // No Model 2A video board (mpr-1631X), no drive CPU, no comm board.
+
+    result.error = errors.str();
+    return result;
+}
 } // namespace
 
 bool model2_roms::complete() const {
@@ -507,6 +626,9 @@ model2_rom_set model2_rom_loader::identify_set(const std::string& path) {
     if (source.contains("epr-18524.12") &&
         source.contains("epr-18525.13"))
         return model2_rom_set::virtua_cop_2;
+    if (source.contains("epr-17166b.12") &&
+        source.contains("epr-17167b.13"))
+        return model2_rom_set::virtua_cop;
     return model2_rom_set::unknown;
 }
 
@@ -514,6 +636,7 @@ const char* model2_rom_loader::set_short_name(model2_rom_set set) {
     switch (set) {
     case model2_rom_set::sega_rally_revision_c: return "srallyc";
     case model2_rom_set::virtua_cop_2: return "vcop2";
+    case model2_rom_set::virtua_cop: return "vcop";
     case model2_rom_set::unknown: return "";
     }
     return "";
@@ -525,10 +648,32 @@ const char* model2_rom_loader::set_display_name(model2_rom_set set) {
         return "Sega Rally Championship (Revision C)";
     case model2_rom_set::virtua_cop_2:
         return "Virtua Cop 2 (Model 2A)";
+    case model2_rom_set::virtua_cop:
+        return "Virtua Cop (Model 2)";
     case model2_rom_set::unknown:
         return "Unsupported Sega Model 2 ROM set";
     }
     return "Unsupported Sega Model 2 ROM set";
+}
+
+model2_game_profile model2_rom_loader::profile_for(model2_rom_set set) {
+    using sound = model2_game_profile::sound_board;
+    using io = model2_game_profile::io_kind;
+    switch (set) {
+    case model2_rom_set::sega_rally_revision_c:
+        // Model 2A-CRX driving cabinet: SCSP sound, 315-5296 wheel/pedal I/O.
+        return {sound::scsp, io::crx_wheel, false, "srallyc"};
+    case model2_rom_set::virtua_cop_2:
+        // Model 2A-CRX light-gun cabinet: SCSP sound, 315-5296 serial gun mux.
+        return {sound::scsp, io::crx_gun, true, "vcop2"};
+    case model2_rom_set::virtua_cop:
+        // Original Model 2 light-gun cabinet: Sega Model 1 sound board and a
+        // model1io2 I/O board over dual-port RAM.
+        return {sound::segam1audio, io::model1io2_dpram, true, "vcop"};
+    case model2_rom_set::unknown:
+        break;
+    }
+    return {};
 }
 
 bool model2_rom_loader::is_complete(model2_rom_set set,
@@ -544,10 +689,15 @@ bool model2_rom_loader::is_complete(model2_rom_set set,
         std::size_t polygon_data;
         std::size_t texture_data;
         std::size_t sound_cpu;
+        // SCSP `samples` region (Model 2A sets) and, alternatively, the size
+        // of each MultiPCM bus (original Model 2 sound board). Exactly one is
+        // non-zero per set; the other region is left empty and unchecked.
         std::size_t samples;
+        std::size_t multipcm;
         std::size_t copro_tgp_tables;
         std::size_t other_data;
         std::size_t video_tables;
+        std::size_t io_cpu;
         bool require_drive_cpu;
         bool require_comm_cpu;
     };
@@ -556,7 +706,7 @@ bool model2_rom_loader::is_complete(model2_rom_set set,
     case model2_rom_set::sega_rally_revision_c: {
         static constexpr layout srallyc{
             0x200000, 0x2400000, 0x2000000, 0x1000000, 0x80000,
-            0x800000, 0x40000, 0x80000, 0x200000, true, true,
+            0x800000, 0, 0x40000, 0x80000, 0x200000, 0, true, true,
         };
         expected = &srallyc;
         break;
@@ -564,9 +714,17 @@ bool model2_rom_loader::is_complete(model2_rom_set set,
     case model2_rom_set::virtua_cop_2: {
         static constexpr layout vcop2{
             0x200000, 0x2400000, 0x800000, 0x400000, 0x80000,
-            0x800000, 0x40000, 0x80000, 0x200000, false, false,
+            0x800000, 0, 0x40000, 0x80000, 0x200000, 0, false, false,
         };
         expected = &vcop2;
+        break;
+    }
+    case model2_rom_set::virtua_cop: {
+        static constexpr layout vcop{
+            0x200000, 0x2000000, 0x1000000, 0x1000000, 0xc0000,
+            0, 0x400000, 0x40000, 0x80000, 0, 0x10000, false, false,
+        };
+        expected = &vcop;
         break;
     }
     case model2_rom_set::unknown:
@@ -578,11 +736,20 @@ bool model2_rom_loader::is_complete(model2_rom_set set,
     if (roms.polygon_data.size() != expected->polygon_data) return false;
     if (roms.texture_data.size() != expected->texture_data) return false;
     if (roms.sound_cpu.size() != expected->sound_cpu) return false;
-    if (roms.samples.size() != expected->samples) return false;
+    if (expected->samples && roms.samples.size() != expected->samples)
+        return false;
+    if (expected->multipcm &&
+        (roms.multipcm_samples_1.size() != expected->multipcm ||
+         roms.multipcm_samples_2.size() != expected->multipcm))
+        return false;
     if (roms.copro_tgp_tables.size() != expected->copro_tgp_tables)
         return false;
     if (roms.other_data.size() != expected->other_data) return false;
-    if (roms.video_tables.size() != expected->video_tables) return false;
+    if (expected->video_tables &&
+        roms.video_tables.size() != expected->video_tables)
+        return false;
+    if (expected->io_cpu && roms.io_cpu.size() != expected->io_cpu)
+        return false;
     if (expected->require_drive_cpu &&
         roms.drive_cpu.size() != 0x10000) return false;
     if (expected->require_comm_cpu &&
@@ -597,6 +764,8 @@ model2_rom_load_result model2_rom_loader::load(const std::string& path) {
         return load_sega_rally(source, fs::path(path));
     case model2_rom_set::virtua_cop_2:
         return load_virtua_cop_2(source);
+    case model2_rom_set::virtua_cop:
+        return load_virtua_cop(source);
     case model2_rom_set::unknown:
         return {model2_rom_set::unknown, {},
                 "Unsupported Sega Model 2 ROM set: " + path + "\n"};

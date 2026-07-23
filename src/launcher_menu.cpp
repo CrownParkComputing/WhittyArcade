@@ -1,8 +1,8 @@
 #include "launcher_menu.h"
 #include "platform_paths.h"
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
+#include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
 #include <algorithm>
 #include <array>
@@ -26,6 +26,13 @@ constexpr SDL_Color white{238, 245, 250, 255};
 constexpr SDL_Color muted{159, 177, 190, 255};
 constexpr SDL_Color accent{70, 208, 255, 255};
 
+// SDL3's render path is float-based; the launcher lays out with integers, so
+// this converts a pixel rect to the SDL_FRect the renderer now expects.
+inline SDL_FRect frect(int x, int y, int w, int h) {
+    return SDL_FRect{static_cast<float>(x), static_cast<float>(y),
+                     static_cast<float>(w), static_cast<float>(h)};
+}
+
 struct rendered_text {
     SDL_Texture* texture{};
     int width{};
@@ -34,17 +41,18 @@ struct rendered_text {
 
 rendered_text make_text(SDL_Renderer* renderer, TTF_Font* font,
                         const std::string& text, SDL_Color color,
-                        Uint32 wrap_width = 0) {
+                        int wrap_width = 0) {
     if (text.empty()) return {};
     SDL_Surface* surface = wrap_width ?
-        TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), color, wrap_width) :
-        TTF_RenderUTF8_Blended(font, text.c_str(), color);
+        TTF_RenderText_Blended_Wrapped(font, text.c_str(), text.size(), color,
+                                       wrap_width) :
+        TTF_RenderText_Blended(font, text.c_str(), text.size(), color);
     if (!surface) return {};
     rendered_text result;
     result.texture = SDL_CreateTextureFromSurface(renderer, surface);
     result.width = surface->w;
     result.height = surface->h;
-    SDL_FreeSurface(surface);
+    SDL_DestroySurface(surface);
     return result;
 }
 
@@ -56,10 +64,10 @@ void destroy_text(rendered_text& text) {
 void draw_text(SDL_Renderer* renderer, const rendered_text& text,
                int x, int y, const SDL_Rect* clip = nullptr) {
     if (!text.texture) return;
-    SDL_Rect destination{x, y, text.width, text.height};
-    SDL_RenderSetClipRect(renderer, clip);
-    SDL_RenderCopy(renderer, text.texture, nullptr, &destination);
-    SDL_RenderSetClipRect(renderer, nullptr);
+    const SDL_FRect destination = frect(x, y, text.width, text.height);
+    SDL_SetRenderClipRect(renderer, clip);
+    SDL_RenderTexture(renderer, text.texture, nullptr, &destination);
+    SDL_SetRenderClipRect(renderer, nullptr);
 }
 
 int fallback_select(const std::string& title, const std::string& description,
@@ -87,7 +95,7 @@ int fallback_select(const std::string& title, const std::string& description,
         nullptr,
     };
     int selected = -1;
-    if (SDL_ShowMessageBox(&box, &selected) < 0) {
+    if (!SDL_ShowMessageBox(&box, &selected)) {
         std::fprintf(stderr, "Could not show launcher menu: %s\n",
                      SDL_GetError());
         return -1;
@@ -103,37 +111,35 @@ struct launcher_menu::implementation {
     TTF_Font* font{};
     bool sdl_initialized{};
     bool ttf_initialized{};
-    std::vector<SDL_GameController*> controllers;
+    std::vector<SDL_Gamepad*> controllers;
 
     explicit implementation(bool compact_utility_window) {
         SDL_SetHint("SDL_APP_ID", "WhittyArcade");
         SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "WhittyArcade");
         SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "WhittyArcade");
-        if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS |
-                              SDL_INIT_GAMECONTROLLER) != 0) {
+        if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS |
+                               SDL_INIT_GAMEPAD)) {
             std::fprintf(stderr, "Launcher SDL initialization failed: %s\n",
                          SDL_GetError());
             return;
         }
         sdl_initialized = true;
         if (!TTF_WasInit()) {
-            if (TTF_Init() != 0) {
+            if (!TTF_Init()) {
                 std::fprintf(stderr, "Launcher font initialization failed: %s\n",
-                             TTF_GetError());
+                             SDL_GetError());
                 return;
             }
             ttf_initialized = true;
         }
 
-        const Uint32 window_flags =
-            SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
-            SDL_WINDOW_ALLOW_HIGHDPI |
+        const SDL_WindowFlags window_flags =
+            SDL_WINDOW_RESIZABLE |
+            SDL_WINDOW_HIGH_PIXEL_DENSITY |
             (compact_utility_window ?
-                 static_cast<Uint32>(SDL_WINDOW_ALWAYS_ON_TOP |
-                                     SDL_WINDOW_UTILITY |
-                                     SDL_WINDOW_SKIP_TASKBAR) : 0u);
+                 (SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_UTILITY) : 0);
         window = SDL_CreateWindow(
-            "WhittyArcade", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+            "WhittyArcade",
             compact_utility_window ? compact_window_width : logical_width,
             compact_utility_window ? compact_window_height : logical_height,
             window_flags);
@@ -145,23 +151,23 @@ struct launcher_menu::implementation {
         SDL_SetWindowMinimumSize(window,
                                  compact_utility_window ? 480 : 560,
                                  compact_utility_window ? 438 : 500);
-        if (!compact_utility_window)
-            renderer = SDL_CreateRenderer(
-                window, -1,
-                SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if (!compact_utility_window) {
+            renderer = SDL_CreateRenderer(window, nullptr);
+            if (renderer) SDL_SetRenderVSync(renderer, 1);
+        }
         if (!renderer)
-            renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+            renderer = SDL_CreateRenderer(window, "software");
         if (!renderer) {
             std::fprintf(stderr, "Launcher renderer creation failed: %s\n",
                          SDL_GetError());
             return;
         }
-        SDL_RenderSetLogicalSize(renderer, logical_width, logical_height);
+        SDL_SetRenderLogicalPresentation(renderer, logical_width, logical_height,
+                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         if (compact_utility_window) {
-            SDL_SetWindowAlwaysOnTop(window, SDL_TRUE);
+            SDL_SetWindowAlwaysOnTop(window, true);
             SDL_RaiseWindow(window);
-            SDL_SetWindowInputFocus(window);
         }
 
         for (const std::filesystem::path& path : whitty_platform::font_paths()) {
@@ -170,37 +176,37 @@ struct launcher_menu::implementation {
         }
         if (!font)
             std::fprintf(stderr, "Could not open a launcher font: %s\n",
-                         TTF_GetError());
+                         SDL_GetError());
 
-        for (int index = 0; index < SDL_NumJoysticks(); ++index) {
-            if (SDL_IsGameController(index)) {
-                if (SDL_GameController* controller = SDL_GameControllerOpen(index))
-                    controllers.push_back(controller);
-            }
+        int count = 0;
+        if (SDL_JoystickID* ids = SDL_GetJoysticks(&count)) {
+            for (int index = 0; index < count; ++index)
+                open_controller(ids[index]);
+            SDL_free(ids);
         }
     }
 
     ~implementation() {
-        for (SDL_GameController* controller : controllers)
-            SDL_GameControllerClose(controller);
+        for (SDL_Gamepad* controller : controllers)
+            SDL_CloseGamepad(controller);
         if (font) TTF_CloseFont(font);
         if (renderer) SDL_DestroyRenderer(renderer);
         if (window) SDL_DestroyWindow(window);
         if (ttf_initialized) TTF_Quit();
         if (sdl_initialized)
             SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS |
-                              SDL_INIT_GAMECONTROLLER);
+                              SDL_INIT_GAMEPAD);
     }
 
     bool ready() const { return window && renderer && font; }
 
-    SDL_GameController* controller_for_instance(int32_t instance_id) const {
+    SDL_Gamepad* controller_for_instance(SDL_JoystickID instance_id) const {
         const auto found = std::find_if(
             controllers.begin(), controllers.end(),
-            [instance_id](SDL_GameController* controller) {
+            [instance_id](SDL_Gamepad* controller) {
                 return controller &&
-                    SDL_JoystickInstanceID(
-                        SDL_GameControllerGetJoystick(controller)) ==
+                    SDL_GetJoystickID(
+                        SDL_GetGamepadJoystick(controller)) ==
                         instance_id;
             });
         return found == controllers.end() ? nullptr : *found;
@@ -210,59 +216,59 @@ struct launcher_menu::implementation {
         controllers.erase(
             std::remove_if(
                 controllers.begin(), controllers.end(),
-                [](SDL_GameController* controller) {
+                [](SDL_Gamepad* controller) {
                     if (controller &&
-                        SDL_GameControllerGetAttached(controller))
+                        SDL_GamepadConnected(controller))
                         return false;
-                    if (controller) SDL_GameControllerClose(controller);
+                    if (controller) SDL_CloseGamepad(controller);
                     return true;
                 }),
             controllers.end());
     }
 
-    void open_controller(int device_index) {
-        if (device_index < 0 || device_index >= SDL_NumJoysticks() ||
-            !SDL_IsGameController(device_index))
-            return;
-        const SDL_JoystickID instance =
-            SDL_JoystickGetDeviceInstanceID(device_index);
-        if (instance >= 0 && controller_for_instance(instance)) return;
-        if (SDL_GameController* controller =
-                SDL_GameControllerOpen(device_index))
+    void open_controller(SDL_JoystickID instance) {
+        if (!SDL_IsGamepad(instance)) return;
+        if (controller_for_instance(instance)) return;
+        if (SDL_Gamepad* controller = SDL_OpenGamepad(instance))
             controllers.push_back(controller);
     }
 
     void refresh_controllers() {
         remove_disconnected_controllers();
-        for (int index = 0; index < SDL_NumJoysticks(); ++index)
-            open_controller(index);
+        int count = 0;
+        if (SDL_JoystickID* ids = SDL_GetJoysticks(&count)) {
+            for (int index = 0; index < count; ++index)
+                open_controller(ids[index]);
+            SDL_free(ids);
+        }
     }
 
     std::vector<launcher_controller_info> controller_list() {
         refresh_controllers();
         std::vector<launcher_controller_info> result;
         result.reserve(controllers.size());
-        for (SDL_GameController* controller : controllers) {
+        for (SDL_Gamepad* controller : controllers) {
             SDL_Joystick* joystick =
-                SDL_GameControllerGetJoystick(controller);
+                SDL_GetGamepadJoystick(controller);
             if (!joystick) continue;
             std::array<char, sdl_guid_text_size> guid{};
-            SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick),
+            SDL_GUIDToString(SDL_GetJoystickGUID(joystick),
                                       guid.data(),
                                       static_cast<int>(guid.size()));
-            const char* name = SDL_GameControllerName(controller);
+            const char* name = SDL_GetGamepadName(controller);
             result.push_back({guid.data(), name && *name ? name : "Controller",
-                              SDL_JoystickInstanceID(joystick)});
+                              static_cast<int32_t>(
+                                  SDL_GetJoystickID(joystick))});
         }
         return result;
     }
 
-    int hit_row(int mouse_x, int mouse_y, int top, int first, int visible,
+    int hit_row(float mouse_x, float mouse_y, int top, int first, int visible,
                 int total) const {
         float logical_x = 0.0f;
         float logical_y = 0.0f;
-        SDL_RenderWindowToLogical(renderer, mouse_x, mouse_y,
-                                  &logical_x, &logical_y);
+        SDL_RenderCoordinatesFromWindow(renderer, mouse_x, mouse_y,
+                                        &logical_x, &logical_y);
         const float top_y = static_cast<float>(top);
         const float bottom_y =
             static_cast<float>(top + visible * row_height);
@@ -284,8 +290,9 @@ struct launcher_menu::implementation {
         SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
         SDL_RenderClear(renderer);
         SDL_SetRenderDrawColor(renderer, 56, 198, 255, 255);
-        SDL_Rect top_border{0, 0, logical_width, 5};
-        SDL_Rect bottom_border{0, logical_height - 5, logical_width, 5};
+        const SDL_FRect top_border = frect(0, 0, logical_width, 5);
+        const SDL_FRect bottom_border =
+            frect(0, logical_height - 5, logical_width, 5);
         SDL_RenderFillRect(renderer, &top_border);
         SDL_RenderFillRect(renderer, &bottom_border);
 
@@ -304,9 +311,10 @@ struct launcher_menu::implementation {
             const int y = list_top + (index - first) * row_height;
             if (index == selected) {
                 SDL_SetRenderDrawColor(renderer, 19, 75, 101, 245);
-                SDL_Rect highlight{horizontal_margin, y + 2,
-                                   logical_width - horizontal_margin * 2,
-                                   row_height - 4};
+                const SDL_FRect highlight =
+                    frect(horizontal_margin, y + 2,
+                          logical_width - horizontal_margin * 2,
+                          row_height - 4);
                 SDL_RenderFillRect(renderer, &highlight);
             }
             rendered_text label = make_text(renderer, font,
@@ -368,24 +376,25 @@ struct launcher_menu::implementation {
 
             SDL_Event event{};
             if (!SDL_WaitEvent(&event)) continue;
-            if (event.type == SDL_QUIT) return -1;
-            if (event.type == SDL_CONTROLLERDEVICEADDED) {
-                open_controller(event.cdevice.which);
+            if (event.type == SDL_EVENT_QUIT) return -1;
+            if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+                open_controller(event.gdevice.which);
                 continue;
             }
-            if (event.type == SDL_CONTROLLERDEVICEREMOVED) {
+            if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
                 remove_disconnected_controllers();
                 continue;
             }
-            if (event.type == SDL_WINDOWEVENT) {
+            if (event.type >= SDL_EVENT_WINDOW_FIRST &&
+                event.type <= SDL_EVENT_WINDOW_LAST) {
                 redraw = true;
                 continue;
             }
             int movement = 0;
             bool activate = false;
             bool back = false;
-            if (event.type == SDL_KEYDOWN && !event.key.repeat) {
-                switch (event.key.keysym.sym) {
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+                switch (event.key.key) {
                 case SDLK_UP: movement = -1; break;
                 case SDLK_DOWN: movement = 1; break;
                 case SDLK_PAGEUP: movement = -visible; break;
@@ -398,25 +407,25 @@ struct launcher_menu::implementation {
                 case SDLK_ESCAPE: back = true; break;
                 default: break;
                 }
-            } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
-                switch (event.cbutton.button) {
-                case SDL_CONTROLLER_BUTTON_DPAD_UP: movement = -1; break;
-                case SDL_CONTROLLER_BUTTON_DPAD_DOWN: movement = 1; break;
-                case SDL_CONTROLLER_BUTTON_A:
-                case SDL_CONTROLLER_BUTTON_START: activate = true; break;
-                case SDL_CONTROLLER_BUTTON_B: back = true; break;
+            } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+                switch (event.gbutton.button) {
+                case SDL_GAMEPAD_BUTTON_DPAD_UP: movement = -1; break;
+                case SDL_GAMEPAD_BUTTON_DPAD_DOWN: movement = 1; break;
+                case SDL_GAMEPAD_BUTTON_SOUTH:
+                case SDL_GAMEPAD_BUTTON_START: activate = true; break;
+                case SDL_GAMEPAD_BUTTON_EAST: back = true; break;
                 default: break;
                 }
-            } else if (event.type == SDL_MOUSEWHEEL) {
+            } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
                 movement = event.wheel.y > 0 ? -1 : event.wheel.y < 0 ? 1 : 0;
-            } else if (event.type == SDL_MOUSEMOTION) {
+            } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
                 const int row = hit_row(event.motion.x, event.motion.y,
                                         list_top, first, visible, total);
                 if (row >= 0 && row != selected) {
                     selected = row;
                     redraw = true;
                 }
-            } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+            } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                        event.button.button == SDL_BUTTON_LEFT) {
                 const int row = hit_row(event.button.x, event.button.y,
                                         list_top, first, visible, total);
@@ -439,16 +448,16 @@ struct launcher_menu::implementation {
     std::optional<input_binding> capture_binding(
         const std::string& title, const std::string& description,
         bool keyboard, int32_t controller_instance, bool allow_inherit) {
-        SDL_GameController* target = keyboard ? nullptr :
+        SDL_Gamepad* target = keyboard ? nullptr :
             controller_for_instance(controller_instance);
         if (!keyboard && !target) return std::nullopt;
 
-        std::array<int, SDL_CONTROLLER_AXIS_MAX> baseline{};
+        std::array<int, SDL_GAMEPAD_AXIS_COUNT> baseline{};
         if (target) {
-            for (int axis = 0; axis < SDL_CONTROLLER_AXIS_MAX; ++axis) {
+            for (int axis = 0; axis < SDL_GAMEPAD_AXIS_COUNT; ++axis) {
                 baseline[static_cast<std::size_t>(axis)] =
-                    SDL_GameControllerGetAxis(
-                        target, static_cast<SDL_GameControllerAxis>(axis));
+                    SDL_GetGamepadAxis(
+                        target, static_cast<SDL_GamepadAxis>(axis));
             }
         }
 
@@ -468,52 +477,56 @@ struct launcher_menu::implementation {
 
             SDL_Event event{};
             if (!SDL_WaitEvent(&event)) continue;
-            if (event.type == SDL_QUIT) return std::nullopt;
-            if (event.type == SDL_WINDOWEVENT) {
+            if (event.type == SDL_EVENT_QUIT) return std::nullopt;
+            if (event.type >= SDL_EVENT_WINDOW_FIRST &&
+                event.type <= SDL_EVENT_WINDOW_LAST) {
                 redraw = true;
                 continue;
             }
-            if (event.type == SDL_CONTROLLERDEVICEADDED) {
-                open_controller(event.cdevice.which);
+            if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+                open_controller(event.gdevice.which);
                 continue;
             }
-            if (event.type == SDL_CONTROLLERDEVICEREMOVED) {
+            if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
                 remove_disconnected_controllers();
                 if (!keyboard &&
-                    event.cdevice.which == controller_instance)
+                    event.gdevice.which ==
+                        static_cast<SDL_JoystickID>(controller_instance))
                     return std::nullopt;
                 continue;
             }
-            if (event.type == SDL_KEYDOWN && !event.key.repeat) {
-                if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+                if (event.key.scancode == SDL_SCANCODE_ESCAPE)
                     return std::nullopt;
-                if (event.key.keysym.scancode == SDL_SCANCODE_DELETE)
+                if (event.key.scancode == SDL_SCANCODE_DELETE)
                     return input_binding{};
-                if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE)
+                if (event.key.scancode == SDL_SCANCODE_BACKSPACE)
                     return allow_inherit ?
                         input_binding{input_binding_type::inherit, -1, 0} :
                         input_binding{};
                 if (keyboard) {
                     return input_binding{
                         input_binding_type::keyboard,
-                        static_cast<int>(event.key.keysym.scancode), 0};
+                        static_cast<int>(event.key.scancode), 0};
                 }
                 continue;
             }
             if (keyboard ||
-                (event.type == SDL_CONTROLLERBUTTONDOWN &&
-                 event.cbutton.which != controller_instance))
+                (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
+                 event.gbutton.which !=
+                     static_cast<SDL_JoystickID>(controller_instance)))
                 continue;
-            if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+            if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
                 return input_binding{
                     input_binding_type::controller_button,
-                    static_cast<int>(event.cbutton.button), 0};
+                    static_cast<int>(event.gbutton.button), 0};
             }
-            if (event.type == SDL_CONTROLLERAXISMOTION &&
-                event.caxis.which == controller_instance &&
-                event.caxis.axis < SDL_CONTROLLER_AXIS_MAX) {
-                const int axis = static_cast<int>(event.caxis.axis);
-                const int delta = static_cast<int>(event.caxis.value) -
+            if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+                event.gaxis.which ==
+                    static_cast<SDL_JoystickID>(controller_instance) &&
+                event.gaxis.axis < SDL_GAMEPAD_AXIS_COUNT) {
+                const int axis = static_cast<int>(event.gaxis.axis);
+                const int delta = static_cast<int>(event.gaxis.value) -
                     baseline[static_cast<std::size_t>(axis)];
                 constexpr int capture_threshold = 16000;
                 if (std::abs(delta) >= capture_threshold) {
@@ -543,25 +556,28 @@ struct launcher_menu::implementation {
                 SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
                 SDL_RenderClear(renderer);
                 SDL_SetRenderDrawColor(renderer, 56, 198, 255, 255);
-                SDL_Rect top_border{0, 0, logical_width, 5};
-                SDL_Rect bottom_border{0, logical_height - 5,
-                                       logical_width, 5};
+                const SDL_FRect top_border = frect(0, 0, logical_width, 5);
+                const SDL_FRect bottom_border =
+                    frect(0, logical_height - 5, logical_width, 5);
                 SDL_RenderFillRect(renderer, &top_border);
                 SDL_RenderFillRect(renderer, &bottom_border);
                 draw_text(renderer, heading, horizontal_margin, 20);
                 if (text.texture) {
                     const int shown = std::min(body_height, text.height - scroll);
                     if (shown > 0) {
-                        SDL_Rect source{0, scroll, text.width, shown};
-                        SDL_Rect destination{horizontal_margin + 10, body_top,
-                                             text.width, shown};
-                        SDL_RenderCopy(renderer, text.texture, &source,
-                                       &destination);
+                        const SDL_FRect source =
+                            frect(0, scroll, text.width, shown);
+                        const SDL_FRect destination =
+                            frect(horizontal_margin + 10, body_top,
+                                  text.width, shown);
+                        SDL_RenderTexture(renderer, text.texture, &source,
+                                          &destination);
                     }
                 }
                 SDL_SetRenderDrawColor(renderer, 19, 75, 101, 245);
-                SDL_Rect highlight{horizontal_margin, 636,
-                                   logical_width - horizontal_margin * 2, 42};
+                const SDL_FRect highlight =
+                    frect(horizontal_margin, 636,
+                          logical_width - horizontal_margin * 2, 42);
                 SDL_RenderFillRect(renderer, &highlight);
                 draw_text(renderer, back, horizontal_margin + 12, 643);
                 if (text.height > body_height) {
@@ -577,19 +593,20 @@ struct launcher_menu::implementation {
 
             SDL_Event event{};
             if (!SDL_WaitEvent(&event)) continue;
-            if (event.type == SDL_QUIT) break;
-            if (event.type == SDL_CONTROLLERDEVICEADDED) {
-                open_controller(event.cdevice.which);
+            if (event.type == SDL_EVENT_QUIT) break;
+            if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+                open_controller(event.gdevice.which);
                 continue;
             }
-            if (event.type == SDL_WINDOWEVENT) {
+            if (event.type >= SDL_EVENT_WINDOW_FIRST &&
+                event.type <= SDL_EVENT_WINDOW_LAST) {
                 redraw = true;
                 continue;
             }
             int movement = 0;
             bool close = false;
-            if (event.type == SDL_KEYDOWN && !event.key.repeat) {
-                switch (event.key.keysym.sym) {
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+                switch (event.key.key) {
                 case SDLK_UP: movement = -32; break;
                 case SDLK_DOWN: movement = 32; break;
                 case SDLK_PAGEUP: movement = -body_height; break;
@@ -603,24 +620,24 @@ struct launcher_menu::implementation {
                 case SDLK_ESCAPE: close = true; break;
                 default: break;
                 }
-            } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
-                if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP)
+            } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+                if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP)
                     movement = -32;
-                else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN)
+                else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN)
                     movement = 32;
-                else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_A ||
-                         event.cbutton.button == SDL_CONTROLLER_BUTTON_B ||
-                         event.cbutton.button == SDL_CONTROLLER_BUTTON_START)
+                else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH ||
+                         event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST ||
+                         event.gbutton.button == SDL_GAMEPAD_BUTTON_START)
                     close = true;
-            } else if (event.type == SDL_MOUSEWHEEL) {
+            } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
                 movement = event.wheel.y > 0 ? -64 : event.wheel.y < 0 ? 64 : 0;
-            } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+            } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                        event.button.button == SDL_BUTTON_LEFT) {
                 float logical_x = 0.0f;
                 float logical_y = 0.0f;
-                SDL_RenderWindowToLogical(renderer, event.button.x,
-                                          event.button.y, &logical_x,
-                                          &logical_y);
+                SDL_RenderCoordinatesFromWindow(renderer, event.button.x,
+                                                event.button.y, &logical_x,
+                                                &logical_y);
                 close = logical_y >= 636 && logical_y < 678 &&
                         logical_x >= horizontal_margin &&
                         logical_x < logical_width - horizontal_margin;
@@ -652,7 +669,6 @@ int launcher_menu::select(const std::string& title,
                                initial_selection);
     SDL_SetWindowTitle(m_impl->window, title.c_str());
     SDL_RaiseWindow(m_impl->window);
-    SDL_SetWindowInputFocus(m_impl->window);
     return m_impl->select(title, description, items, back_label,
                           initial_selection);
 }
@@ -667,7 +683,6 @@ void launcher_menu::show_text(const std::string& title,
     }
     SDL_SetWindowTitle(m_impl->window, title.c_str());
     SDL_RaiseWindow(m_impl->window);
-    SDL_SetWindowInputFocus(m_impl->window);
     m_impl->show_text(title, text, back_label);
 }
 
@@ -688,7 +703,6 @@ std::optional<input_binding> launcher_menu::capture_binding(
     }
     SDL_SetWindowTitle(m_impl->window, title.c_str());
     SDL_RaiseWindow(m_impl->window);
-    SDL_SetWindowInputFocus(m_impl->window);
     return m_impl->capture_binding(title, description, keyboard,
                                    controller_instance, allow_inherit);
 }

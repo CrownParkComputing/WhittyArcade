@@ -2,11 +2,15 @@
 
 #include "arcade_catalog.h"
 #include "galaxian_rom.h"
+#include "gng_rom.h"
 #include "model1_rom.h"
 #include "model2_rom.h"
+#include "namco_rom.h"
 #include "platform_paths.h"
-#include "shinobi_rom.h"
+#include "system16b_rom.h"
 #include "system22_rom.h"
+#include "system246_rom.h"
+#include "xbox360_rom.h"
 
 #include <minizip/unzip.h>
 
@@ -47,6 +51,7 @@ struct identified_archive {
     const rom_set_manifest* manifest{};
     arcade_board_type board{arcade_board_type::system22};
     bool companion{};
+    bool disc{};
     std::string companion_label;
 };
 
@@ -67,9 +72,9 @@ constexpr std::array companion_archives{
                       "vr.zip (vformula parent)"},
     companion_archive{"segabill", arcade_board_type::model2,
                       "segabill.zip (optional billboard CPU)"},
-    companion_archive{"shinobi", arcade_board_type::shinobi,
+    companion_archive{"shinobi", arcade_board_type::system16b,
                       "shinobi.zip (Shinobi merged parent)"},
-    companion_archive{"shinobi6", arcade_board_type::shinobi,
+    companion_archive{"shinobi6", arcade_board_type::system16b,
                       "shinobi6.zip (Shinobi sound companion)"},
 };
 
@@ -81,10 +86,18 @@ constexpr std::array collection_aliases{
 };
 
 identified_archive identify_archive(const fs::path& path) {
+    if (lower(path.extension().string()) == ".chd") {
+        const system246_disc_info disc =
+            system246_rom_loader::inspect_disc(path.string());
+        if (disc)
+            return {nullptr, arcade_board_type::system246, true, true,
+                    "rrv1-a.chd (Ridge Racer V disc)"};
+        return {};
+    }
     const std::string value = path.string();
     if (const auto identity = identify_arcade_game(value))
         return {find_supported_rom_set(identity->short_name), identity->board,
-                false, {}};
+                false, false, {}};
 
     const std::string stem = lower(path.stem().string());
     const auto companion = std::find_if(
@@ -93,7 +106,7 @@ identified_archive identify_archive(const fs::path& path) {
             return stem == item.short_name;
         });
     if (companion != companion_archives.end())
-        return {nullptr, companion->board, true, companion->label};
+        return {nullptr, companion->board, true, false, companion->label};
     return {};
 }
 
@@ -145,6 +158,14 @@ std::string readiness_suffix(const fs::path& candidate,
             !sibling_exists(candidate, "namcoc74.zip") &&
             !archive_contains(candidate, "c74.bin"))
             missing.emplace_back("namcoc74.zip");
+    } else if (manifest.board == arcade_board_type::system246) {
+        const std::string disc_path =
+            system246_rom_loader::find_disc_path(candidate.string());
+        if (disc_path.empty()) {
+            missing.emplace_back("rrv1-a.chd");
+        } else if (!system246_rom_loader::inspect_disc(disc_path)) {
+            missing.emplace_back("valid rrv1-a.chd");
+        }
     } else if (std::string(manifest.short_name) == "vformula" &&
                !archive_contains(candidate, "mpr-14890.26") &&
                !sibling_exists(candidate, "vr.zip")) {
@@ -169,7 +190,13 @@ bool zip_extension(const fs::path& path) {
     return lower(path.extension().string()) == ".zip";
 }
 
+bool chd_extension(const fs::path& path) {
+    return lower(path.extension().string()) == ".chd";
+}
+
 bool known_collection_filename(const fs::path& path) {
+    if (chd_extension(path))
+        return lower(path.filename().string()) == "rrv1-a.chd";
     const std::string stem = lower(path.stem().string());
     const auto& games = supported_rom_sets();
     if (std::any_of(games.begin(), games.end(),
@@ -186,72 +213,14 @@ bool known_collection_filename(const fs::path& path) {
                      stem) != collection_aliases.end();
 }
 
-bool copy_archive(const fs::path& source, arcade_board_type board,
-                  const std::string& destination_filename,
-                  fs::path& destination, std::string& error_text) {
-    destination = data_root() / "WhittyArcade" / "roms" /
-                  arcade_board(board).rom_directory /
-                  destination_filename;
-    std::error_code error;
-    fs::create_directories(destination.parent_path(), error);
-    if (error) {
-        error_text = "Could not create ROM library directory: " +
-                     error.message();
-        return false;
-    }
-    if (normalized_path(source) == normalized_path(destination)) return true;
-    fs::copy_file(source, destination, fs::copy_options::overwrite_existing,
-                  error);
-    if (error) {
-        error_text = "Could not import " + source.string() + ": " +
-                     error.message();
-        return false;
-    }
-    return true;
-}
-
-std::vector<fs::path> candidates_from(const fs::path& source,
-                                      std::size_t& scanned,
-                                      std::string& error_text) {
-    std::vector<fs::path> result;
-    std::error_code error;
-    if (fs::is_regular_file(source, error)) {
-        if (!zip_extension(source)) {
-            error_text = "Only ZIP archives or directories can be imported: " +
-                         source.string();
-            return result;
-        }
-        ++scanned;
-        result.push_back(source);
-        return result;
-    }
-    if (!fs::is_directory(source, error)) {
-        error_text = "Import path does not exist: " + source.string();
-        return result;
-    }
-    fs::recursive_directory_iterator iterator(
-        source, fs::directory_options::skip_permission_denied, error), end;
-    while (!error && iterator != end) {
-        std::error_code type_error;
-        if (iterator->is_regular_file(type_error) &&
-            zip_extension(iterator->path())) {
-            ++scanned;
-            // A directory may be a complete MAME collection containing many
-            // thousands of games. Probe only names this build can consume.
-            if (known_collection_filename(iterator->path()))
-                result.push_back(iterator->path());
-        }
-        iterator.increment(error);
-    }
-    if (error)
-        error_text = "ROM directory scan stopped early: " + error.message();
-    return result;
-}
-
 } // namespace
 
 std::string rom_library_path() {
     return (data_root() / "WhittyArcade" / "roms").string();
+}
+
+std::string chd_library_path() {
+    return (data_root() / "WhittyArcade" / "chd").string();
 }
 
 std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
@@ -293,12 +262,16 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
     const fs::path current_directory = fs::is_directory(current, error) ?
         current : current.parent_path();
 
-    auto scan = [&](const fs::path& directory, bool recursive, bool prefer) {
+    auto scan = [&](const fs::path& directory, bool recursive, bool prefer,
+                    bool known_names_only) {
         error.clear();
         if (directory.empty() || !fs::is_directory(directory, error)) return;
         auto consider = [&](const fs::directory_entry& entry) {
             std::error_code type_error;
-            if (entry.is_regular_file(type_error) && zip_extension(entry.path()))
+            if (entry.is_regular_file(type_error) &&
+                zip_extension(entry.path()) &&
+                (!known_names_only ||
+                 known_collection_filename(entry.path())))
                 add(entry.path(), prefer);
         };
         if (recursive) {
@@ -318,23 +291,52 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
         }
     };
 
-    scan(current_directory, false, false);
-    // Imported copies win over transitory downloads and command-line peers.
-    scan(rom_library_path(), true, true);
-    if (!std::getenv("WHITTYARCADE_NO_LEGACY_ROM_SCAN")) {
-        if (const fs::path downloads = whitty_platform::downloads_root();
-            !downloads.empty()) {
-            scan(downloads / "WhittyArcade-Roms", true, false);
-            scan(downloads, false, false);
+    // Extracted sets are valid loader inputs too. Common ROM roots usually
+    // contain games directly, while WhittyArcade's durable library groups
+    // them below a board directory. Probe only those two shallow layouts so
+    // an extracted game's large media tree is never walked as a set of
+    // independent candidates.
+    auto scan_extracted = [&](const fs::path& directory, bool prefer) {
+        error.clear();
+        if (directory.empty() || !fs::is_directory(directory, error)) return;
+        fs::directory_iterator iterator(directory, error), end;
+        while (!error && iterator != end) {
+            std::error_code type_error;
+            if (iterator->is_directory(type_error)) {
+                const fs::path child = iterator->path();
+                const std::string child_name = lower(
+                    child.filename().string());
+                const bool board_directory = std::any_of(
+                    arcade_boards().begin(), arcade_boards().end(),
+                    [&](const arcade_board_descriptor& board) {
+                        return child_name == lower(board.rom_directory);
+                    });
+                if (board_directory) {
+                    std::error_code child_error;
+                    fs::directory_iterator child_iterator(child, child_error),
+                                           child_end;
+                    while (!child_error && child_iterator != child_end) {
+                        std::error_code child_type_error;
+                        if (child_iterator->is_directory(child_type_error))
+                            add(child_iterator->path(), prefer);
+                        child_iterator.increment(child_error);
+                    }
+                } else {
+                    add(child, prefer);
+                }
+            }
+            iterator.increment(error);
         }
-    }
-    if (const char* search_path = std::getenv("WHITTYARCADE_ROM_PATH")) {
-        std::stringstream paths(search_path);
-        std::string path;
-        while (std::getline(paths, path,
-                            whitty_platform::path_list_separator()))
-            if (!path.empty()) scan(path, true, false);
-    }
+    };
+
+    // Make sure the folders exist so the user knows where to drop files, then
+    // read the ROM folder directly. Nothing is imported, copied, or scanned
+    // from anywhere else.
+    fs::create_directories(rom_library_path(), error);
+    fs::create_directories(chd_library_path(), error);
+    scan(current_directory, false, false, false);
+    scan(rom_library_path(), true, true, true);
+    scan_extracted(rom_library_path(), true);
 
     std::sort(choices.begin(), choices.end(),
               [](const rom_choice& left, const rom_choice& right) {
@@ -342,68 +344,6 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
                   return left.label < right.label;
               });
     return choices;
-}
-
-rom_import_result import_rom_path(const std::string& source_path) {
-    return import_rom_paths({source_path});
-}
-
-rom_import_result import_rom_paths(const std::vector<std::string>& source_paths) {
-    rom_import_result result;
-    std::vector<std::pair<std::string, fs::path>> imported_games;
-    for (const std::string& source_text : source_paths) {
-        std::string scan_error;
-        const std::vector<fs::path> candidates = candidates_from(
-            fs::path(source_text), result.archives_scanned, scan_error);
-        if (!scan_error.empty()) {
-            if (!result.error.empty()) result.error += '\n';
-            result.error += scan_error;
-        }
-        for (const fs::path& candidate : candidates) {
-            const identified_archive identified = identify_archive(candidate);
-            if (!identified.manifest && !identified.companion) continue;
-            if (identified.manifest) ++result.games_found;
-            fs::path destination;
-            std::string copy_error;
-            const std::string destination_filename = identified.manifest ?
-                std::string(identified.manifest->short_name) + ".zip" :
-                lower(candidate.filename().string());
-            if (!copy_archive(candidate, identified.board,
-                              destination_filename, destination,
-                              copy_error)) {
-                if (!result.error.empty()) result.error += '\n';
-                result.error += copy_error;
-                continue;
-            }
-            ++result.archives_imported;
-            const std::string label = identified.manifest ?
-                identified.manifest->display_name : identified.companion_label;
-            result.details.push_back(label + " -> " + destination.string());
-            if (identified.manifest)
-                imported_games.emplace_back(identified.manifest->short_name,
-                                             destination);
-        }
-    }
-    std::sort(imported_games.begin(), imported_games.end(),
-              [](const auto& left, const auto& right) {
-                  return left.second.string() < right.second.string();
-              });
-    imported_games.erase(std::unique(
-        imported_games.begin(), imported_games.end(),
-        [](const auto& left, const auto& right) {
-            return left.second == right.second;
-        }), imported_games.end());
-    for (const auto& [short_name, path] : imported_games) {
-        const rom_audit_result audit = audit_rom_path(path.string());
-        result.details.push_back(std::string(audit.success ? "Audit OK: " :
-                                                              "Audit failed: ") +
-                                 short_name + " - " + audit.message);
-        if (!audit.success) {
-            if (!result.error.empty()) result.error += '\n';
-            result.error += short_name + ": " + audit.message;
-        }
-    }
-    return result;
 }
 
 rom_audit_result audit_rom_path(const std::string& path) {
@@ -432,6 +372,19 @@ rom_audit_result audit_rom_path(const std::string& path) {
                            "archives are missing or invalid.";
         break;
     }
+    case arcade_board_type::system246: {
+        const system246_rom_load_result loaded =
+            system246_rom_loader::load(path);
+        valid = static_cast<bool>(loaded);
+        loader_error = loaded.error;
+        break;
+    }
+    case arcade_board_type::xbox360: {
+        const xbox360_rom_info loaded = xbox360_rom_loader::inspect(path);
+        valid = static_cast<bool>(loaded);
+        loader_error = loaded.error;
+        break;
+    }
     case arcade_board_type::model1: {
         const model1_rom_load_result loaded = model1_rom_loader::load(path);
         valid = static_cast<bool>(loaded);
@@ -445,15 +398,15 @@ rom_audit_result audit_rom_path(const std::string& path) {
         break;
     }
     case arcade_board_type::phoenix:
-    case arcade_board_type::mooncrst: {
+    case arcade_board_type::galaxian: {
         const galaxian_rom_load_result loaded = galaxian_rom_loader::load(path);
         valid = static_cast<bool>(loaded);
         loader_error = loaded.error;
         break;
     }
-    case arcade_board_type::shinobi: {
-        const shinobi::shinobi_rom_load_result loaded =
-            shinobi::shinobi_rom_loader::load(path);
+    case arcade_board_type::system16b: {
+        const system16b::system16b_rom_load_result loaded =
+            system16b::system16b_rom_loader::load(path);
         const auto populated = [](const auto& bytes) {
             return std::any_of(bytes.begin(), bytes.end(),
                                [](uint8_t value) {
@@ -469,6 +422,19 @@ rom_audit_result audit_rom_path(const std::string& path) {
                            "unencrypted sound ROM data is incomplete.";
         break;
     }
+    case arcade_board_type::capcom_gng: {
+        const gng::rom_load_result loaded = gng::rom_loader::load(path);
+        valid = static_cast<bool>(loaded);
+        loader_error = loaded.error;
+        break;
+    }
+    case arcade_board_type::namco_galaga:
+    case arcade_board_type::namco_system1: {
+        const namco::load_result loaded = namco::rom_loader::load(path);
+        valid = static_cast<bool>(loaded);
+        loader_error = loaded.error;
+        break;
+    }
     }
     if (!valid) {
         if (loader_error.empty()) loader_error = "ROM audit failed.";
@@ -480,23 +446,10 @@ rom_audit_result audit_rom_path(const std::string& path) {
             "All required entries passed this loader's validation checks."};
 }
 
-std::string rom_import_result::summary() const {
-    std::ostringstream text;
-    text << "Scanned " << archives_scanned << " ZIP archive";
-    if (archives_scanned != 1) text << 's';
-    text << ".\nFound " << games_found << " supported game";
-    if (games_found != 1) text << 's';
-    text << " and imported " << archives_imported << " archive";
-    if (archives_imported != 1) text << 's';
-    text << ".";
-    if (!error.empty()) text << "\n\n" << error;
-    return text.str();
-}
-
 std::string required_rom_sets_text() {
     std::ostringstream text;
-    text << "Use current MAME ZIP archives. WhittyArcade keeps them unchanged; "
-            "merged, split and non-merged layouts are accepted.\n";
+    text << "Use current MAME ZIP/CHD files. WhittyArcade keeps them "
+            "unchanged; merged, split and non-merged layouts are accepted.\n";
     for (const arcade_board_descriptor& board : arcade_boards()) {
         text << '\n' << board.display_name << ":\n";
         for (const rom_set_manifest& manifest : supported_rom_sets()) {

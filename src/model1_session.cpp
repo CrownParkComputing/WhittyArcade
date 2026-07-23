@@ -129,20 +129,6 @@ public:
         }
     }
 
-    void open_operator_settings() override {
-        if (!m_machine ||
-            m_machine->rom_set() != model1_rom_set::virtua_formula)
-            return;
-        bool attract_sound = m_machine->attract_sound_enabled();
-        const bool previous = attract_sound;
-        show_modal([&attract_sound] {
-            show_model1_cabinet_settings(attract_sound);
-        });
-        if (attract_sound != previous &&
-            !m_machine->set_attract_sound_enabled(attract_sound))
-            std::fprintf(stderr,
-                         "Could not save Model 1 cabinet settings\n");
-    }
     void reload_input_mappings() override {
         if (m_input) m_input->reload_mappings();
     }
@@ -151,11 +137,28 @@ public:
     }
 
 protected:
+    operator_menu_definition operator_menu() const override {
+        if (!m_machine ||
+            m_machine->rom_set() != model1_rom_set::virtua_formula)
+            return make_unavailable_operator_menu();
+        return make_model1_operator_menu(m_machine->attract_sound_enabled());
+    }
+    void apply_operator_action(const operator_menu_action& action) override {
+        if (action.row_id != 0 || !m_machine ||
+            m_machine->rom_set() != model1_rom_set::virtua_formula)
+            return;
+        if (!m_machine->set_attract_sound_enabled(action.selected != 0))
+            std::fprintf(stderr,
+                         "Could not save Model 1 cabinet settings\n");
+    }
     void apply_audio_settings(const emulator_settings& settings) override {
         if (m_audio)
             m_audio->set_mix_levels(settings.master_volume,
                                     settings.music_volume,
                                     settings.effects_volume);
+    }
+    void set_audio_paused(bool paused) override {
+        if (m_audio) m_audio->set_paused(paused);
     }
 
 private:

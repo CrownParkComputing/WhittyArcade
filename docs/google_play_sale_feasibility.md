@@ -101,7 +101,7 @@ third-party families into the executable:
 | chips Z80 | zlib/libpng licence | Commercial/proprietary use allowed | Retain notice and mark modifications |
 | ymfm | BSD-3-Clause | Commercial/proprietary use allowed | Retain Aaron Giles notice and full BSD terms |
 | SegaPCM, MultiPCM and other adapted sound/video code | Individually identified BSD-3-Clause sources | Commercial/proprietary use is possible | Complete per-file provenance and exact copyright notices |
-| SDL2, SDL2_ttf, zlib, MiniZip, GLM and Android toolchain runtime | Release versions are not yet pinned for Android | Expected to be compatible, subject to the exact selected version and transitive dependencies | Lock versions/hashes; include SDL/zlib/MiniZip/GLM, FreeType/HarfBuzz and runtime notices as applicable |
+| SDL3, SDL3_ttf, zlib, MiniZip, GLM and Android toolchain runtime | Release versions are not yet pinned for Android | Expected to be compatible, subject to the exact selected version and transitive dependencies | Lock versions/hashes; include SDL/zlib/MiniZip/GLM, FreeType/HarfBuzz and runtime notices as applicable |
 | Bundled font | Not yet selected | Unknown until selected | Use a commercially redistributable font such as an appropriately licensed OFL font; include its licence and reserved-name obligations |
 
 MAME's official licence documentation confirms that the project as a whole is

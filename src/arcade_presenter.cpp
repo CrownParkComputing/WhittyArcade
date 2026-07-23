@@ -2,8 +2,8 @@
 
 #include "arcade_config.h"
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_vulkan.h>
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
@@ -17,9 +17,12 @@ namespace {
 std::array<int, 2> bounded_window_size(SDL_Window* window,
                                        int requested_width) {
     SDL_Rect usable{0, 0, 1920, 1080};
-    int display = SDL_GetWindowDisplayIndex(window);
-    if (display < 0 || SDL_GetDisplayUsableBounds(display, &usable) != 0)
-        SDL_GetDisplayBounds(0, &usable);
+    SDL_DisplayID display = window ? SDL_GetDisplayForWindow(window) :
+                                     SDL_GetPrimaryDisplay();
+    if (!display || !SDL_GetDisplayUsableBounds(display, &usable)) {
+        display = SDL_GetPrimaryDisplay();
+        if (display) SDL_GetDisplayBounds(display, &usable);
+    }
     int top = 0, left = 0, bottom = 0, right = 0;
     SDL_GetWindowBordersSize(window, &top, &left, &bottom, &right);
     const int maximum_width = std::max(320, std::min(
@@ -207,7 +210,7 @@ struct alternate_presenter::implementation {
     bool create_swapchain() {
         int drawable_width = 0;
         int drawable_height = 0;
-        SDL_Vulkan_GetDrawableSize(window, &drawable_width, &drawable_height);
+        SDL_GetWindowSizeInPixels(window, &drawable_width, &drawable_height);
         if (drawable_width <= 0 || drawable_height <= 0) return false;
 
         VkSurfaceCapabilitiesKHR capabilities{};
@@ -294,13 +297,13 @@ struct alternate_presenter::implementation {
     }
 
     bool initialize_vulkan() {
-        unsigned extension_count = 0;
-        if (!SDL_Vulkan_GetInstanceExtensions(window, &extension_count, nullptr))
+        Uint32 extension_count = 0;
+        const char* const* sdl_extensions =
+            SDL_Vulkan_GetInstanceExtensions(&extension_count);
+        if (!sdl_extensions)
             return false;
-        std::vector<const char*> extensions(extension_count);
-        if (!SDL_Vulkan_GetInstanceExtensions(window, &extension_count,
-                                              extensions.data()))
-            return false;
+        std::vector<const char*> extensions(
+            sdl_extensions, sdl_extensions + extension_count);
         auto app = vk_structure<VkApplicationInfo>(
             VK_STRUCTURE_TYPE_APPLICATION_INFO);
         app.pApplicationName = "WhittyArcade";
@@ -314,7 +317,7 @@ struct alternate_presenter::implementation {
         create.ppEnabledExtensionNames = extensions.data();
         if (!vk_ok(vkCreateInstance(&create, nullptr, &instance),
                    "vkCreateInstance") ||
-            !SDL_Vulkan_CreateSurface(window, instance, &surface))
+            !SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
             return false;
 
         uint32_t device_count = 0;
@@ -553,18 +556,29 @@ bool alternate_presenter::initialize(renderer_backend backend, int width,
     m_impl = std::make_unique<implementation>();
     m_impl->backend = backend;
     m_impl->settings = settings;
-    const uint32_t flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE |
-        SDL_WINDOW_ALLOW_HIGHDPI |
+    // X11 compositors only see a fullscreen request once the window is
+    // mapped.  Setting SDL_WINDOW_FULLSCREEN_DESKTOP on a hidden window and
+    // showing it after the first present leaves SDL believing it is
+    // fullscreen while the compositor tiles it as an ordinary window.  That
+    // made the live drawable jump between arbitrary tile sizes.  Create an
+    // initially-fullscreen output in the mapped state so SDL can publish the
+    // WM state as part of the initial map.
+    const SDL_WindowFlags visibility_flags = settings.fullscreen ?
+        SDL_WINDOW_FULLSCREEN :
+        SDL_WINDOW_HIDDEN;
+    const SDL_WindowFlags flags = visibility_flags | SDL_WINDOW_RESIZABLE |
+        SDL_WINDOW_HIGH_PIXEL_DENSITY |
         (backend == renderer_backend::vulkan ? SDL_WINDOW_VULKAN : 0);
     m_impl->window = SDL_CreateWindow(
         backend == renderer_backend::vulkan ? "WhittyArcade - Vulkan" :
                                               "WhittyArcade - Software",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, flags);
+        width, height, flags);
     if (!m_impl->window) {
         std::fprintf(stderr, "Output window creation failed: %s\n", SDL_GetError());
         shutdown();
         return false;
     }
+    m_impl->first_present = !settings.fullscreen;
     if (backend == renderer_backend::vulkan) {
         if (!m_impl->initialize_vulkan()) {
             shutdown();
@@ -572,7 +586,7 @@ bool alternate_presenter::initialize(renderer_backend backend, int width,
         }
     } else {
         m_impl->software_renderer = SDL_CreateRenderer(
-            m_impl->window, -1, SDL_RENDERER_SOFTWARE);
+            m_impl->window, "software");
         if (!m_impl->software_renderer) {
             std::fprintf(stderr, "Software output creation failed: %s\n",
                          SDL_GetError());
@@ -602,18 +616,25 @@ void alternate_presenter::shutdown() {
 void alternate_presenter::apply_settings(const emulator_settings& settings) {
     if (!m_impl || !m_impl->window) return;
     const bool vsync_changed = m_impl->settings.vsync != settings.vsync;
+    const bool fullscreen_changed =
+        m_impl->settings.fullscreen != settings.fullscreen;
     m_impl->settings = settings;
     if (settings.fullscreen) {
         SDL_SetWindowMinimumSize(m_impl->window, 1, 1);
         SDL_SetWindowMaximumSize(m_impl->window, 16384, 16384);
-        SDL_SetWindowFullscreen(m_impl->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        SDL_ShowWindow(m_impl->window);
+        if (!SDL_SetWindowFullscreen(m_impl->window, true))
+            std::fprintf(stderr, "Fullscreen request failed: %s\n",
+                         SDL_GetError());
+        m_impl->first_present = false;
     } else {
-        SDL_SetWindowFullscreen(m_impl->window, 0);
+        SDL_SetWindowFullscreen(m_impl->window, false);
         set_fixed_window_size(m_impl->window, settings.window_width);
         SDL_SetWindowPosition(m_impl->window, SDL_WINDOWPOS_CENTERED,
                               SDL_WINDOWPOS_CENTERED);
     }
-    if (vsync_changed && m_impl->backend == renderer_backend::vulkan)
+    if ((vsync_changed || fullscreen_changed) &&
+        m_impl->backend == renderer_backend::vulkan)
         m_impl->swapchain_dirty = true;
 }
 
@@ -621,9 +642,9 @@ void alternate_presenter::drawable_size(int& width, int& height) const {
     width = height = 1;
     if (!m_impl || !m_impl->window) return;
     if (m_impl->backend == renderer_backend::vulkan) {
-        SDL_Vulkan_GetDrawableSize(m_impl->window, &width, &height);
+        SDL_GetWindowSizeInPixels(m_impl->window, &width, &height);
     } else if (m_impl->software_renderer) {
-        SDL_GetRendererOutputSize(m_impl->software_renderer, &width, &height);
+        SDL_GetCurrentRenderOutputSize(m_impl->software_renderer, &width, &height);
     }
     width = std::max(width, 1);
     height = std::max(height, 1);
@@ -685,11 +706,12 @@ bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
     // Match the Vulkan and OpenGL presenters exactly: keep the arcade
     // framebuffer's aspect/resolution policy and letterbox around it instead
     // of stretching software output to a backend-dependent drawable size.
-    SDL_Rect destination{(output_width - copy_width) / 2,
-                         (output_height - copy_height) / 2,
-                         copy_width, copy_height};
-    SDL_RenderCopy(m_impl->software_renderer, m_impl->software_texture, nullptr,
-                   &destination);
+    SDL_FRect destination{
+        static_cast<float>((output_width - copy_width) / 2),
+        static_cast<float>((output_height - copy_height) / 2),
+        static_cast<float>(copy_width), static_cast<float>(copy_height)};
+    SDL_RenderTexture(m_impl->software_renderer, m_impl->software_texture,
+                      nullptr, &destination);
     if (overlay_pixels && overlay_width > 0 && overlay_height > 0) {
         if (!m_impl->software_overlay_texture ||
             overlay_width != m_impl->overlay_width ||
@@ -708,11 +730,12 @@ bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
         if (m_impl->software_overlay_texture) {
             SDL_UpdateTexture(m_impl->software_overlay_texture, nullptr,
                               overlay_pixels, overlay_width * 4);
-            const SDL_Rect overlay_destination{12, 12, overlay_width,
-                                               overlay_height};
-            SDL_RenderCopy(m_impl->software_renderer,
-                           m_impl->software_overlay_texture, nullptr,
-                           &overlay_destination);
+            const SDL_FRect overlay_destination{
+                12.0f, 12.0f, static_cast<float>(overlay_width),
+                static_cast<float>(overlay_height)};
+            SDL_RenderTexture(m_impl->software_renderer,
+                              m_impl->software_overlay_texture, nullptr,
+                              &overlay_destination);
         }
     }
     SDL_RenderPresent(m_impl->software_renderer);

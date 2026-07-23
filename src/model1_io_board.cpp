@@ -16,6 +16,99 @@ uint8_t scale_axis(uint8_t value, int minimum, int maximum, bool reverse) {
     return static_cast<uint8_t>(minimum + source * (maximum - minimum) / 255);
 }
 
+// Map an 8-bit host axis (0..255) onto a light gun's calibrated 10-bit ADC
+// range. Virtua Cop reads these back through the model1io2 FPGA.
+uint16_t scale_gun(uint8_t value, int minimum, int maximum) {
+    return static_cast<uint16_t>(minimum +
+                                 value * (maximum - minimum) / 255);
+}
+
+// Compact Zilog Z80 CTC: four channels in timer mode with Mode-2 vectored
+// interrupts. Enough of the TMPZ84C015's on-chip CTC for the Virtua Cop I/O
+// firmware, whose service loop is driven by a periodic CTC interrupt. Channels
+// 2 and 3 are used by the firmware as the SIO baud-rate clock and never enable
+// interrupts, so a plain down-counter models every channel the firmware uses.
+struct z80_ctc {
+    struct channel {
+        uint16_t time_constant{256};
+        int32_t counter{};       // remaining CTC clocks until the next zero
+        int prescale{16};
+        bool running{};
+        bool int_enable{};
+        bool tc_follows{};
+        bool int_pending{};
+    };
+    std::array<channel, 4> ch{};
+    uint8_t vector_base{};
+    int in_service{-1};
+
+    void reset() {
+        ch = {};
+        vector_base = 0;
+        in_service = -1;
+    }
+
+    void write(unsigned index, uint8_t data) {
+        channel& c = ch[index & 3];
+        if (c.tc_follows) {
+            c.time_constant = data ? data : 256;
+            c.counter = c.time_constant * c.prescale;
+            c.running = true;
+            c.tc_follows = false;
+            return;
+        }
+        if (data & 0x01) { // control word
+            c.int_enable = (data & 0x80) != 0;
+            c.prescale = (data & 0x20) ? 256 : 16;
+            c.tc_follows = (data & 0x04) != 0;
+            if (data & 0x02) { // software reset
+                c.running = false;
+                c.int_pending = false;
+            }
+        } else if ((index & 3) == 0) {
+            vector_base = data & 0xf8; // channel 0 carries the vector base
+        }
+    }
+
+    uint8_t read(unsigned index) const {
+        const channel& c = ch[index & 3];
+        const int down = c.prescale ?
+            (c.counter + c.prescale - 1) / c.prescale : 0;
+        return static_cast<uint8_t>(down & 0xff);
+    }
+
+    void tick(int cycles) {
+        for (channel& c : ch) {
+            if (!c.running) continue;
+            c.counter -= cycles;
+            while (c.counter <= 0) {
+                c.counter += c.time_constant * c.prescale;
+                if (c.int_enable) c.int_pending = true;
+            }
+        }
+    }
+
+    bool interrupt_requested() const {
+        if (in_service >= 0) return false;
+        for (const channel& c : ch)
+            if (c.int_pending) return true;
+        return false;
+    }
+
+    uint8_t acknowledge() {
+        for (int index = 0; index < 4; ++index) {
+            if (ch[index].int_pending) {
+                ch[index].int_pending = false;
+                in_service = index;
+                return static_cast<uint8_t>(vector_base | (index << 1));
+            }
+        }
+        return 0xff;
+    }
+
+    void return_from_interrupt() { in_service = -1; }
+};
+
 } // namespace
 
 struct model1_io_board::implementation {
@@ -25,7 +118,8 @@ struct model1_io_board::implementation {
                    std::array<uint8_t, 0x80>& operator_eeprom)
         : type(board_type), firmware(program), dpram(shared_ram),
           eeprom(operator_eeprom) {
-        valid = type == model1_io_board_type::standard_315_5338a &&
+        valid = (type == model1_io_board_type::standard_315_5338a ||
+                 type == model1_io_board_type::advanced_tmpz84c015) &&
                 firmware.size() == 0x10000 && dpram.size() >= 0x800;
         reset();
     }
@@ -54,6 +148,9 @@ struct model1_io_board::implementation {
         eeprom_write_shift = 0;
         eeprom_write_bits = 0;
         eeprom_write_address = 0;
+        ctc.reset();
+        fpga_counter = 0;
+        gun_ports.fill(0);
         pins = z80_init(&cpu);
     }
 
@@ -238,6 +335,10 @@ struct model1_io_board::implementation {
 
     void execute(int clocks) {
         if (!valid || clocks <= 0) return;
+        if (type == model1_io_board_type::advanced_tmpz84c015) {
+            advanced_execute(clocks);
+            return;
+        }
         for (int clock = 0; clock < clocks; ++clock) {
             pins = z80_tick(&cpu, pins);
             if (pins & Z80_MREQ) {
@@ -257,6 +358,187 @@ struct model1_io_board::implementation {
             }
         }
         total_clocks += static_cast<uint64_t>(clocks);
+    }
+
+    // ---- Advanced board (model1io2 / TMPZ84C015), used by Virtua Cop ----
+
+    // The 93C46 serial lines are bit-banged through 315-5338A port F on this
+    // board: clk = bit 5, di = bit 6, cs = bit 4. Data-out is read back through
+    // the board jumper port (0x8040 bit 6), not the chip.
+    void advanced_set_eeprom_lines(uint8_t data) {
+        const bool new_clock = (data & 0x20) != 0;
+        const bool new_cs = (data & 0x10) != 0;
+        eeprom_di = (data & 0x40) != 0;
+        if (!new_cs) {
+            eeprom_command = 0;
+            eeprom_command_bits = 0;
+            eeprom_read_bits = 0;
+            eeprom_write_bits = 0;
+            eeprom_do = true;
+        } else if (!eeprom_clock && new_clock) {
+            eeprom_rising_edge();
+        }
+        eeprom_cs = new_cs;
+        eeprom_clock = new_clock;
+    }
+
+    uint8_t advanced_board_read() const {
+        // bits 0-3 board buttons (not pressed = 1), bit4 ROM_EMU jumper,
+        // bit5 MODE jumper, bit6 EEPROM data-out, bit7 unused. The reset code
+        // needs bits 4 and 5 set to take the normal (0x0700) firmware path.
+        return static_cast<uint8_t>(0x0f | 0x10 | 0x20 | 0x80 |
+                                    (eeprom_do ? 0x40 : 0x00));
+    }
+
+    uint8_t advanced_chip_read(uint8_t offset) {
+        if (offset <= 6) {
+            if ((port_config & (1u << offset)) == 0)
+                return port_value[offset];
+            // Ports A/B/C are the IN0/IN1/IN2 digital inputs on this board.
+            if (offset <= 2) return digital_inputs[offset];
+            return 0xff;
+        }
+        if (offset == 0x08) return port_config;
+        if (offset == 0x0a) return serial_output;
+        if (offset == 0x0c)
+            return serial_address < dpram.size() ?
+                   dpram[serial_address] : 0xff;
+        if (offset == 0x0d) return 0x08; // status: transfer finished
+        return 0xff;
+    }
+
+    void advanced_chip_write(uint8_t offset, uint8_t value) {
+        if (offset <= 6) {
+            port_value[offset] = value;
+            if (offset == 5) advanced_set_eeprom_lines(value); // port F
+            else if (offset == 6) secondary_controls = (value & 0x40) != 0;
+            return;
+        }
+        if (offset == 0x08) { port_config = value; return; }
+        if (offset == 0x0a) { serial_output = value; return; }
+        if (offset != 0x09) return;
+        switch (value) {
+        case 0x00:
+            serial_address = static_cast<uint16_t>(
+                (serial_address & 0xff00) | serial_output);
+            break;
+        case 0x01:
+            serial_address = static_cast<uint16_t>(
+                (serial_address & 0x00ff) | (uint16_t{serial_output} << 8));
+            break;
+        case 0x07:
+            if (serial_address < dpram.size())
+                dpram[serial_address] = serial_output;
+            break;
+        default:
+            if ((value & 0xf8) == 0x70) { // write to a low DPRAM register
+                const unsigned reg = value & 0x07;
+                if (reg < dpram.size()) dpram[reg] = serial_output;
+            }
+            break;
+        }
+    }
+
+    uint8_t advanced_fpga_read(uint8_t offset) const {
+        // The firmware uploads an FPGA bitstream (0x1400 writes) before the
+        // gun registers respond; until then every read returns 0x80.
+        if (fpga_counter < 0x1400) return 0x80;
+        if (offset < 8)
+            return static_cast<uint8_t>(
+                gun_ports[offset >> 1] >> (8 * (offset & 1)));
+        if (offset == 8) return gun_offscreen;
+        return 0xff;
+    }
+
+    uint8_t advanced_memory_read(uint16_t address) {
+        if (address <= 0x7fff) return firmware[address];
+        if (address >= 0x8000 && address <= 0x800f)
+            return advanced_chip_read(static_cast<uint8_t>(address & 0x0f));
+        if (address == 0x8040) return advanced_board_read();
+        if (address == 0x8080) return 0xff; // dsw1
+        if (address >= 0x8100 && address <= 0x810f)
+            return advanced_fpga_read(static_cast<uint8_t>(address & 0x0f));
+        if (address >= 0x8200 && address <= 0x8207) return 0xff; // ADC
+        if (address >= 0xe000) return work_ram[address & 0x1fff];
+        return 0xff;
+    }
+
+    void advanced_memory_write(uint16_t address, uint8_t value) {
+        if (address >= 0x8000 && address <= 0x800f) {
+            advanced_chip_write(static_cast<uint8_t>(address & 0x0f), value);
+            return;
+        }
+        if (address >= 0x8100 && address <= 0x810f) {
+            if (fpga_counter < 0x2000) ++fpga_counter; // bitstream upload
+            return;
+        }
+        if (address >= 0xe000) work_ram[address & 0x1fff] = value;
+    }
+
+    void advanced_execute(int clocks) {
+        for (int clock = 0; clock < clocks; ++clock) {
+            ctc.tick(1);
+            if (ctc.interrupt_requested()) pins |= Z80_INT;
+            else pins &= ~Z80_INT;
+
+            pins = z80_tick(&cpu, pins);
+            if (pins & Z80_MREQ) {
+                const uint16_t address = Z80_GET_ADDR(pins);
+                if (pins & Z80_RD) {
+                    Z80_SET_DATA(pins, advanced_memory_read(address));
+                } else if (pins & Z80_WR) {
+                    advanced_memory_write(address, Z80_GET_DATA(pins));
+                }
+            } else if ((pins & (Z80_IORQ | Z80_M1)) ==
+                       (Z80_IORQ | Z80_M1)) {
+                // Mode-2 interrupt acknowledge: the CTC supplies the vector.
+                Z80_SET_DATA(pins, ctc.acknowledge());
+            } else if (pins & Z80_IORQ) {
+                const uint8_t port = static_cast<uint8_t>(
+                    Z80_GET_ADDR(pins) & 0xff);
+                if (pins & Z80_RD) {
+                    // CTC at 0x10-0x13; SIO/PIO reads idle high.
+                    if (port >= 0x10 && port <= 0x13) {
+                        Z80_SET_DATA(pins, ctc.read(port & 3));
+                    } else {
+                        Z80_SET_DATA(pins, 0xff);
+                    }
+                } else if (pins & Z80_WR) {
+                    const uint8_t value = Z80_GET_DATA(pins);
+                    if (port >= 0x10 && port <= 0x13) ctc.write(port & 3, value);
+                    // SIO (0x18-0x1b) and PIO (0x1c-0x1f) writes are accepted
+                    // but not modelled; the firmware only needs the CTC.
+                }
+            }
+            if (pins & Z80_RETI) ctc.return_from_interrupt();
+        }
+        total_clocks += static_cast<uint64_t>(clocks);
+    }
+
+    void set_gun_inputs(const input_state& state) {
+        uint8_t in0 = 0xff, in1 = 0xff;
+        if (state.coin1) in0 &= ~uint8_t{0x01};
+        if (state.coin2) in0 &= ~uint8_t{0x02};
+        if (state.test) in0 &= ~uint8_t{0x04};
+        if (state.service) in0 &= ~uint8_t{0x08};
+        if (state.start) in0 &= ~uint8_t{0x10};   // START1
+        if (state.p2_start) in0 &= ~uint8_t{0x20}; // START2
+        if (state.buttons[0]) in1 &= ~uint8_t{0x01};    // P1 trigger
+        if (state.p2_buttons[0]) in1 &= ~uint8_t{0x02}; // P2 trigger
+        digital_inputs[0] = in0;
+        digital_inputs[1] = in1;
+        digital_inputs[2] = 0xff; // IN2: DIP bank, all off = normal
+
+        // 10-bit gun ADC ranges from MAME's vcop light-gun calibration.
+        gun_ports[0] = scale_gun(state.left_stick_y, 0x024, 0x1a9); // P1Y
+        gun_ports[1] = scale_gun(state.left_stick_x, 0x083, 0x276); // P1X
+        gun_ports[2] = scale_gun(state.p2_stick_y, 0x027, 0x1a9);   // P2Y
+        gun_ports[3] = scale_gun(state.p2_stick_x, 0x080, 0x273);   // P2X
+
+        // Off-screen (reload): the reload button forces the gun off-screen.
+        gun_offscreen = 0xfc;
+        if (state.buttons[1]) gun_offscreen |= 0x01;
+        if (state.p2_buttons[1]) gun_offscreen |= 0x02;
     }
 
     void set_inputs(model1_rom_set game, const input_state& state) {
@@ -327,6 +609,13 @@ struct model1_io_board::implementation {
     bool secondary_controls{};
     uint8_t adc_shift{};
 
+    // Advanced (model1io2 / TMPZ84C015) board state.
+    z80_ctc ctc;
+    unsigned fpga_counter{};
+    // Gun coordinates in FPGA read order: P1Y, P1X, P2Y, P2X (10-bit each).
+    std::array<uint16_t, 4> gun_ports{};
+    uint8_t gun_offscreen{0xfc}; // FPGA offset 8: bit0 P1 off-screen, bit1 P2.
+
     bool eeprom_cs{};
     bool eeprom_clock{};
     bool eeprom_di{};
@@ -355,6 +644,9 @@ void model1_io_board::execute(int clocks) { m_impl->execute(clocks); }
 void model1_io_board::set_inputs(model1_rom_set game,
                                  const input_state& state) {
     m_impl->set_inputs(game, state);
+}
+void model1_io_board::set_gun_inputs(const input_state& state) {
+    m_impl->set_gun_inputs(state);
 }
 void model1_io_board::set_dip_switches(
         const std::array<uint8_t, 3>& switches) {
