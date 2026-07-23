@@ -1,4 +1,4 @@
-#include "namco_rom.h"
+#include "namco/namco_rom.h"
 
 #include <cassert>
 #include <string>

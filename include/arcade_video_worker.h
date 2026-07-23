@@ -3,7 +3,7 @@
 
 #include "arcade_settings.h"
 #include "namco/system22/system22_types.h"
-#include "model2_gpu_frame.h"
+#include "sega/model2/model2_gpu_frame.h"
 #include "operator_menu.h"
 
 #include <atomic>

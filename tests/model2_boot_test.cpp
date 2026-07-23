@@ -1,4 +1,4 @@
-#include "model2_machine.h"
+#include "sega/model2/model2_machine.h"
 #include "test_platform.h"
 
 #include <algorithm>

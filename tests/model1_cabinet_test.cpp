@@ -1,4 +1,4 @@
-#include "model1_cabinet.h"
+#include "sega/model1/model1_cabinet.h"
 
 #include <cstdio>
 

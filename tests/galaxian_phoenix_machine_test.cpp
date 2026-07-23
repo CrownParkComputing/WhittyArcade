@@ -6,7 +6,7 @@
 // produced frame contains a meaningful number of distinct colors
 // and visible pixels.
 
-#include "galaxian_machine.h"
+#include "namco/galaxian/galaxian_machine.h"
 
 #include <cassert>
 #include <array>

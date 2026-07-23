@@ -1,4 +1,4 @@
-#include "model1_dsb.h"
+#include "sega/model1/model1_dsb.h"
 
 #include <cassert>
 #include <cstdint>

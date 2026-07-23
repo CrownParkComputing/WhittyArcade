@@ -4,7 +4,7 @@
 
 #include "namco/system22/system22_types.h"
 #include "arcade_settings.h"
-#include "model2_gpu_frame.h"
+#include "sega/model2/model2_gpu_frame.h"
 #include "operator_menu.h"
 #include <SDL3_ttf/SDL_ttf.h>
 #include <array>

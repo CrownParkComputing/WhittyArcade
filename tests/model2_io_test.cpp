@@ -1,4 +1,4 @@
-#include "model2_bus.h"
+#include "sega/model2/model2_bus.h"
 #include "test_platform.h"
 
 #include <cassert>

@@ -1,4 +1,4 @@
-#include "model1_rom.h"
+#include "sega/model1/model1_rom.h"
 
 #include <cassert>
 #include <algorithm>

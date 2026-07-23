@@ -12,7 +12,7 @@
 // MAME's BSD-3-Clause `segas16b_v.cpp / segaic16.cpp / sega16sp.cpp` drivers.
 
 #include "sega/system16b/system16b_machine.h"
-#include "galaxian_machine.h"
+#include "namco/galaxian/galaxian_machine.h"
 
 #include <algorithm>
 #include <array>

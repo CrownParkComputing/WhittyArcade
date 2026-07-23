@@ -1,4 +1,4 @@
-#include "model1_io_board.h"
+#include "sega/model1/model1_io_board.h"
 
 #include <algorithm>
 #include <array>

@@ -298,7 +298,7 @@ add_library(m6809f STATIC
 target_include_directories(m6809f PUBLIC third_party/m6809f)
 target_compile_options(m6809f PRIVATE -O2 -w)
 
-add_library(model1_io STATIC src/model1_io_board.cpp)
+add_library(model1_io STATIC src/sega/model1/model1_io_board.cpp)
 target_include_directories(model1_io PUBLIC
     ${CMAKE_SOURCE_DIR}/include)
 target_include_directories(model1_io SYSTEM PUBLIC
@@ -313,7 +313,7 @@ add_library(model1_multipcm STATIC
 target_include_directories(model1_multipcm PUBLIC third_party/model1_audio)
 target_compile_options(model1_multipcm PRIVATE -w)
 
-add_library(model1_dsb STATIC src/model1_dsb.cpp)
+add_library(model1_dsb STATIC src/sega/model1/model1_dsb.cpp)
 target_include_directories(model1_dsb PUBLIC
     ${CMAKE_SOURCE_DIR}/include)
 target_include_directories(model1_dsb SYSTEM PUBLIC
@@ -337,12 +337,12 @@ set(SOURCES
     src/main.cpp
     src/arcade_session.cpp
     src/namco/system22/system22_session.cpp
-    src/model1_session.cpp
-    src/model2_session.cpp
-    src/galaxian_session.cpp
+    src/sega/model1/model1_session.cpp
+    src/sega/model2/model2_session.cpp
+    src/namco/galaxian/galaxian_session.cpp
     src/sega/system16b/system16b_session.cpp
     src/capcom/gng/gng_session.cpp
-    src/namco_session.cpp
+    src/namco/namco_session.cpp
     src/arcade_renderer.cpp
     src/arcade_input.cpp
     src/input_mapping.cpp
@@ -371,23 +371,23 @@ set(SOURCES
     src/xbox360_runtime_loader.cpp
     src/xbox360_audio.cpp
     src/xbox360_session.cpp
-    src/model1_rom.cpp
-    src/model1_machine.cpp
-    src/model1_audio.cpp
-    src/model2_rom.cpp
-    src/model2_scsp_dsp.cpp
-    src/model2_audio.cpp
-    src/model2_bus.cpp
-    src/model2_machine.cpp
-    src/model2_geometry.cpp
-    src/model2_video.cpp
-    src/galaxian_rom.cpp
-    src/galaxian_audio.cpp
-    src/galaxian_audio_mooncrst.cpp
-    src/galaxian_audio_phoenix.cpp
-    src/galaxian_machine.cpp
-    src/galaxian_machine_mooncrst.cpp
-    src/galaxian_machine_phoenix.cpp
+    src/sega/model1/model1_rom.cpp
+    src/sega/model1/model1_machine.cpp
+    src/sega/model1/model1_audio.cpp
+    src/sega/model2/model2_rom.cpp
+    src/sega/model2/model2_scsp_dsp.cpp
+    src/sega/model2/model2_audio.cpp
+    src/sega/model2/model2_bus.cpp
+    src/sega/model2/model2_machine.cpp
+    src/sega/model2/model2_geometry.cpp
+    src/sega/model2/model2_video.cpp
+    src/namco/galaxian/galaxian_rom.cpp
+    src/namco/galaxian/galaxian_audio.cpp
+    src/namco/galaxian/galaxian_audio_mooncrst.cpp
+    src/namco/galaxian/galaxian_audio_phoenix.cpp
+    src/namco/galaxian/galaxian_machine.cpp
+    src/namco/galaxian/galaxian_machine_mooncrst.cpp
+    src/namco/galaxian/galaxian_machine_phoenix.cpp
     src/sega/system16b/system16b_rom.cpp
     src/sega/system16b/system16b_audio.cpp
     src/sega/system16b/system16b_machine.cpp
@@ -395,12 +395,12 @@ set(SOURCES
     src/capcom/gng/gng_rom.cpp
     src/capcom/gng/gng_machine.cpp
     src/capcom/gng/gng_audio.cpp
-    src/namco_rom.cpp
-    src/galaga_machine.cpp
-    src/galaga_audio.cpp
-    src/system1_machine.cpp
-    src/system1_audio.cpp
-    src/system1_ym2151.cpp
+    src/namco/namco_rom.cpp
+    src/namco/galaga/galaga_machine.cpp
+    src/namco/galaga/galaga_audio.cpp
+    src/namco/system1/system1_machine.cpp
+    src/namco/system1/system1_audio.cpp
+    src/namco/system1/system1_ym2151.cpp
 )
 
 if(WHITTY_ENABLE_SYSTEM246)
@@ -567,12 +567,12 @@ add_executable(arcade_catalog_test
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/xbox360_rom.cpp
-    src/model1_rom.cpp
-    src/model2_rom.cpp
-    src/galaxian_rom.cpp
+    src/sega/model1/model1_rom.cpp
+    src/sega/model2/model2_rom.cpp
+    src/namco/galaxian/galaxian_rom.cpp
     src/sega/system16b/system16b_rom.cpp
     src/capcom/gng/gng_rom.cpp
-    src/namco_rom.cpp
+    src/namco/namco_rom.cpp
 )
 target_include_directories(arcade_catalog_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -590,12 +590,12 @@ add_executable(rom_library_test
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/xbox360_rom.cpp
-    src/model1_rom.cpp
-    src/model2_rom.cpp
-    src/galaxian_rom.cpp
+    src/sega/model1/model1_rom.cpp
+    src/sega/model2/model2_rom.cpp
+    src/namco/galaxian/galaxian_rom.cpp
     src/sega/system16b/system16b_rom.cpp
     src/capcom/gng/gng_rom.cpp
-    src/namco_rom.cpp
+    src/namco/namco_rom.cpp
 )
 target_include_directories(rom_library_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(rom_library_test PRIVATE PkgConfig::MINIZIP ZLIB::ZLIB)
@@ -605,7 +605,7 @@ add_test(NAME rom_library_test COMMAND rom_library_test)
 
 add_executable(namco_rom_test
     tests/namco_rom_test.cpp
-    src/namco_rom.cpp)
+    src/namco/namco_rom.cpp)
 target_include_directories(namco_rom_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(namco_rom_test PRIVATE PkgConfig::MINIZIP ZLIB::ZLIB)
 target_compile_options(namco_rom_test PRIVATE
@@ -873,8 +873,8 @@ add_test(NAME system22_audio_test COMMAND system22_audio_test)
 
 add_executable(model2_audio_test
     tests/model2_audio_test.cpp
-    src/model2_scsp_dsp.cpp
-    src/model2_audio.cpp
+    src/sega/model2/model2_scsp_dsp.cpp
+    src/sega/model2/model2_audio.cpp
     src/musashi_memory.cpp
 )
 target_include_directories(model2_audio_test PRIVATE
@@ -902,7 +902,7 @@ add_test(NAME system22_m37710_test COMMAND system22_m37710_test)
 
 add_executable(model1_rom_test
     tests/model1_rom_test.cpp
-    src/model1_rom.cpp
+    src/sega/model1/model1_rom.cpp
 )
 target_include_directories(model1_rom_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(model1_rom_test PRIVATE PkgConfig::MINIZIP ZLIB::ZLIB)
@@ -911,7 +911,7 @@ target_compile_options(model1_rom_test PRIVATE
 
 add_executable(model2_rom_test
     tests/model2_rom_test.cpp
-    src/model2_rom.cpp
+    src/sega/model2/model2_rom.cpp
 )
 target_include_directories(model2_rom_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(model2_rom_test PRIVATE PkgConfig::MINIZIP ZLIB::ZLIB)
@@ -920,7 +920,7 @@ target_compile_options(model2_rom_test PRIVATE
 
 add_executable(model2_vcop_rom_test
     tests/model2_vcop_rom_test.cpp
-    src/model2_rom.cpp
+    src/sega/model2/model2_rom.cpp
 )
 target_include_directories(model2_vcop_rom_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -931,8 +931,8 @@ target_compile_options(model2_vcop_rom_test PRIVATE
 
 add_executable(model1io2_board_test
     tests/model1io2_board_test.cpp
-    src/model1_io_board.cpp
-    src/model2_rom.cpp
+    src/sega/model1/model1_io_board.cpp
+    src/sega/model2/model2_rom.cpp
 )
 target_include_directories(model1io2_board_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/third_party/chips)
@@ -943,11 +943,11 @@ target_compile_options(model1io2_board_test PRIVATE
 
 add_executable(model2_boot_test
     tests/model2_boot_test.cpp
-    src/model2_rom.cpp
-    src/model2_bus.cpp
-    src/model2_machine.cpp
-    src/model2_geometry.cpp
-    src/model2_video.cpp
+    src/sega/model2/model2_rom.cpp
+    src/sega/model2/model2_bus.cpp
+    src/sega/model2/model2_machine.cpp
+    src/sega/model2/model2_geometry.cpp
+    src/sega/model2/model2_video.cpp
 )
 target_include_directories(model2_boot_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -961,7 +961,7 @@ target_compile_options(model2_boot_test PRIVATE
 
 add_executable(model2_geometry_test
     tests/model2_geometry_test.cpp
-    src/model2_geometry.cpp
+    src/sega/model2/model2_geometry.cpp
 )
 target_include_directories(model2_geometry_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -971,8 +971,8 @@ add_test(NAME model2_geometry_test COMMAND model2_geometry_test)
 
 add_executable(model2_video_test
     tests/model2_video_test.cpp
-    src/model2_geometry.cpp
-    src/model2_video.cpp
+    src/sega/model2/model2_geometry.cpp
+    src/sega/model2/model2_video.cpp
 )
 target_include_directories(model2_video_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -984,7 +984,7 @@ add_test(NAME model2_video_test COMMAND model2_video_test)
 
 add_executable(model2_io_test
     tests/model2_io_test.cpp
-    src/model2_bus.cpp
+    src/sega/model2/model2_bus.cpp
 )
 target_include_directories(model2_io_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(model2_io_test PRIVATE model1_io)
@@ -994,8 +994,8 @@ add_test(NAME model2_io_test COMMAND model2_io_test)
 
 add_executable(model1_boot_test
     tests/model1_boot_test.cpp
-    src/model1_rom.cpp
-    src/model1_machine.cpp
+    src/sega/model1/model1_rom.cpp
+    src/sega/model1/model1_machine.cpp
 )
 target_include_directories(model1_boot_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -1029,8 +1029,8 @@ add_test(NAME model1_dsb_test COMMAND model1_dsb_test)
 add_executable(galaxian_phoenix_machine_test
     tests/galaxian_phoenix_machine_test.cpp
     src/high_scores.cpp
-    src/galaxian_machine.cpp
-    src/galaxian_machine_phoenix.cpp
+    src/namco/galaxian/galaxian_machine.cpp
+    src/namco/galaxian/galaxian_machine_phoenix.cpp
 )
 target_include_directories(galaxian_phoenix_machine_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -1052,10 +1052,10 @@ endif()
 
 add_executable(galaxian_mooncrst_machine_test
     tests/galaxian_mooncrst_machine_test.cpp
-    src/galaxian_audio_mooncrst.cpp
+    src/namco/galaxian/galaxian_audio_mooncrst.cpp
     src/high_scores.cpp
-    src/galaxian_machine.cpp
-    src/galaxian_machine_mooncrst.cpp
+    src/namco/galaxian/galaxian_machine.cpp
+    src/namco/galaxian/galaxian_machine_mooncrst.cpp
 )
 target_include_directories(galaxian_mooncrst_machine_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -1079,10 +1079,10 @@ endif()
 
 add_executable(galaxian_base_machine_test
     tests/galaxian_base_machine_test.cpp
-    src/galaxian_audio_mooncrst.cpp
+    src/namco/galaxian/galaxian_audio_mooncrst.cpp
     src/high_scores.cpp
-    src/galaxian_machine.cpp
-    src/galaxian_machine_mooncrst.cpp
+    src/namco/galaxian/galaxian_machine.cpp
+    src/namco/galaxian/galaxian_machine_mooncrst.cpp
 )
 target_include_directories(galaxian_base_machine_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -1104,10 +1104,10 @@ endif()
 
 add_executable(galaxian_uniwars_machine_test
     tests/galaxian_uniwars_machine_test.cpp
-    src/galaxian_audio_mooncrst.cpp
+    src/namco/galaxian/galaxian_audio_mooncrst.cpp
     src/high_scores.cpp
-    src/galaxian_machine.cpp
-    src/galaxian_machine_mooncrst.cpp
+    src/namco/galaxian/galaxian_machine.cpp
+    src/namco/galaxian/galaxian_machine_mooncrst.cpp
 )
 target_include_directories(galaxian_uniwars_machine_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -1129,9 +1129,9 @@ endif()
 
 add_executable(galaxian_audio_test
     tests/galaxian_audio_test.cpp
-    src/galaxian_audio.cpp
-    src/galaxian_audio_phoenix.cpp
-    src/galaxian_audio_mooncrst.cpp
+    src/namco/galaxian/galaxian_audio.cpp
+    src/namco/galaxian/galaxian_audio_phoenix.cpp
+    src/namco/galaxian/galaxian_audio_mooncrst.cpp
 )
 target_include_directories(galaxian_audio_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -1143,7 +1143,7 @@ add_test(NAME galaxian_audio_test COMMAND galaxian_audio_test)
 
 add_executable(galaxian_rom_loader_test
     tests/galaxian_rom_loader_test.cpp
-    src/galaxian_rom.cpp
+    src/namco/galaxian/galaxian_rom.cpp
 )
 target_include_directories(galaxian_rom_loader_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)

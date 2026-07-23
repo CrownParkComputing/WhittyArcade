@@ -1,4 +1,4 @@
-#include "model2_video.h"
+#include "sega/model2/model2_video.h"
 
 #include <algorithm>
 #include <cassert>
