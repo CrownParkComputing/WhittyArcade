@@ -2461,9 +2461,14 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     // the board independently at its true aspect.
     const bool second_window = dual_output && !m_display_settings.fullscreen;
     if (dual_output && m_display_settings.fullscreen) {
-        const int split = std::clamp(m_ctx->width / 2, 1, m_ctx->width - 1);
-        panes[0] = {0, 0, split, m_ctx->height};
-        panes[1] = {split, 0, m_ctx->width - split, m_ctx->height};
+        // Leave a gutter down the centre so the two arcade screens never
+        // touch; each half then letterboxes its game at its true aspect.
+        const int gap = std::max(m_ctx->width / 40, 24);
+        const int left_w = std::clamp((m_ctx->width - gap) / 2, 1,
+                                      m_ctx->width - 1);
+        panes[0] = {0, 0, left_w, m_ctx->height};
+        panes[1] = {left_w + gap, 0, m_ctx->width - left_w - gap,
+                    m_ctx->height};
         pane_count = 2;
     }
 

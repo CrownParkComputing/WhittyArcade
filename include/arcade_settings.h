@@ -30,6 +30,10 @@ struct emulator_settings {
     bool show_renderer{true};
     renderer_backend renderer{renderer_backend::opengl};
     output_mode output{output_mode::single};
+    // Runtime-only physical display assignment used by paired cabinet
+    // processes. -1 follows the desktop/window-manager default. This is not
+    // persisted because a portable install may see a different monitor order.
+    int display_index{-1};
 };
 
 const char* renderer_backend_name(renderer_backend backend);
