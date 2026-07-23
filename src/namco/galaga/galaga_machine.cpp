@@ -35,6 +35,7 @@ class namco51 {
 public:
     void reset() {
         mode = arguments = credits = reads = last_coins = last_buttons = 0;
+        players = 0;
         coins.fill(0);
         coins_per_credit.fill(1);
         credits_per_coin.fill(1);
@@ -59,7 +60,7 @@ public:
         }
         switch (data & 7) {
         case 1: arguments = 4; credits = 0; break;
-        case 2: mode = 1; reads = 0; break;
+        case 2: mode = 1; reads = 0; players = 0; break;
         case 3: remap = false; break;
         case 4: remap = true; break;
         case 5: mode = 0; reads = 0; break;
@@ -78,6 +79,9 @@ public:
         if (phase == 0) return credit_status();
         return joystick(phase - 1);
     }
+
+    int credit_count() const { return credits; }
+    int selected_players() const { return players; }
 
 private:
     void insert_coin(unsigned slot) {
@@ -103,9 +107,11 @@ private:
         if (mode == 1) {
             if ((edges & now & 0x04) && credits >= 1) {
                 --credits;
+                players = 1;
                 mode = 2;
             } else if ((edges & now & 0x08) && credits >= 2) {
                 credits -= 2;
+                players = 2;
                 mode = 2;
             }
         }
@@ -131,7 +137,7 @@ private:
     std::array<uint8_t, 4> ports{0x0f, 0x0f, 0x0f, 0x0f};
     std::array<int, 2> coins{}, coins_per_credit{1, 1},
         credits_per_coin{1, 1};
-    int mode{}, arguments{}, credits{}, reads{};
+    int mode{}, arguments{}, credits{}, reads{}, players{};
     uint8_t last_coins{}, last_buttons{};
     bool remap{}, test{};
 };
@@ -152,6 +158,7 @@ struct galaga_machine::impl {
     uint8_t io_control{};
     uint8_t dip_a{0xff}, dip_b{0xff};
     bool irq_main{}, irq_sub{}, sound_nmi{}, secondary_run{}, flip{}, test{};
+    bool network_two_player{};
     bool loaded{};
     unsigned frame_number{};
     uint16_t star_lfsr{0x7fff};
@@ -273,7 +280,7 @@ struct galaga_machine::impl {
     }
 
     void put(int x, int y, uint32_t color) {
-        if (flip) {
+        if (flip && !network_two_player) {
             x = 287 - x;
             y = 223 - y;
         }
@@ -440,6 +447,17 @@ void galaga_machine::reset() {
     m_impl->star_lfsr = 0x7fff;
 }
 
+void galaga_machine::configure_network_two_player(bool enabled) {
+    m_impl->network_two_player = enabled;
+    // Galaga selects the P2 joystick/fire port only in cocktail mode. Network
+    // play uses that authentic turn gate, but suppresses the physical
+    // cocktail monitor rotation because each player has an upright display.
+    if (enabled)
+        m_impl->dip_a &= static_cast<uint8_t>(~0x80U);
+    else
+        m_impl->dip_a |= 0x80U;
+}
+
 void galaga_machine::set_input(const input_state& input) {
     std::array<uint8_t, 4> ports{0x0f, 0x0f, 0x0f, 0x0f};
     const auto clear = [](uint8_t& port, unsigned bit, bool pressed) {
@@ -502,6 +520,20 @@ const uint32_t* galaga_machine::framebuffer() const {
 
 uint16_t galaga_machine::program_counter() const {
     return m_impl->main.cpu.pc;
+}
+
+int galaga_machine::active_player() const {
+    // Original Galaga work RAM $9840 is the current-player selector.
+    const uint8_t player = m_impl->ram[0x1840];
+    return player == 0 ? 1 : player == 1 ? 2 : -1;
+}
+
+int galaga_machine::credit_count() const {
+    return m_impl->io51.credit_count();
+}
+
+int galaga_machine::selected_players() const {
+    return m_impl->io51.selected_players();
 }
 
 } // namespace namco

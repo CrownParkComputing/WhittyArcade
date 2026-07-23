@@ -3,10 +3,12 @@
 
 #include "arcade_catalog.h"
 #include "arcade_frontend.h"
+#include "arcade_input.h"
 #include "arcade_session.h"
 #include "arcade_video_worker.h"
 #include "input_mapper.h"
 #include "launcher_menu.h"
+#include "multiplayer_lobby.h"
 #include "rom_library.h"
 
 #if defined(_WIN32)
@@ -26,9 +28,207 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#include <process.h>
+#include <windows.h>
+#else
+#include <csignal>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
+
+struct runtime_options {
+    int cabinet_node{};
+    uint16_t pair_port_base{35112};
+    bool independent_pair{};
+    bool twin_screen{};
+    bool network_pair{};
+    std::vector<std::string> positional;
+};
+
+bool set_environment(const char* name, const std::string& value) {
+#if defined(_WIN32)
+    return _putenv_s(name, value.c_str()) == 0;
+#else
+    return setenv(name, value.c_str(), 1) == 0;
+#endif
+}
+
+bool unset_environment(const char* name) {
+#if defined(_WIN32)
+    return _putenv_s(name, "") == 0;
+#else
+    return unsetenv(name) == 0;
+#endif
+}
+
+runtime_options parse_runtime_options(int argc, char* argv[]) {
+    runtime_options options;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument(argv[index]);
+        if (argument == "--cabinet-node" && index + 1 < argc) {
+            options.cabinet_node = std::atoi(argv[++index]);
+        } else if (argument == "--pair-port-base" && index + 1 < argc) {
+            const int value = std::atoi(argv[++index]);
+            if (value > 1024 && value < 65535)
+                options.pair_port_base = static_cast<uint16_t>(value);
+        } else if (argument == "--independent-cabinet") {
+            options.independent_pair = true;
+        } else if (argument == "--twin-screen") {
+            options.twin_screen = true;
+        } else if (argument == "--network-cabinet") {
+            options.network_pair = true;
+        } else {
+            options.positional.emplace_back(argument);
+        }
+    }
+    if (options.cabinet_node != 1 && options.cabinet_node != 2)
+        options.cabinet_node = 0;
+    return options;
+}
+
+void configure_cabinet_environment(int node, uint16_t port_base,
+                                   bool linked_model2,
+                                   bool network_link = false,
+                                   bool generic_input_link = false) {
+    if (node != 1 && node != 2) {
+        unset_environment("WHITTY_CABINET_NODE");
+        unset_environment("MODEL2_COMM_NODE");
+        unset_environment("MODEL2_COMM_LOCAL_PORT");
+        unset_environment("MODEL2_COMM_PEER_PORT");
+        unset_environment("MODEL2_COMM_NETWORK");
+        unset_environment("WHITTY_INPUT_LINK");
+        unset_environment("WHITTY_INPUT_LOCAL_PORT");
+        unset_environment("WHITTY_INPUT_PEER_PORT");
+        unset_environment("WHITTY_VIDEO_ROLE");
+        unset_environment("WHITTY_VIDEO_PORT");
+        unset_environment("RRACER_CONTROLLER");
+        return;
+    }
+    const uint16_t local_port =
+        static_cast<uint16_t>(port_base + (node == 2 ? 1 : 0));
+    const uint16_t peer_port =
+        static_cast<uint16_t>(port_base + (node == 1 ? 1 : 0));
+    set_environment("WHITTY_CABINET_NODE", std::to_string(node));
+    if (linked_model2) {
+        set_environment("MODEL2_COMM_NODE", std::to_string(node));
+        set_environment("MODEL2_COMM_LOCAL_PORT", std::to_string(local_port));
+        set_environment("MODEL2_COMM_PEER_PORT", std::to_string(peer_port));
+        if (network_link)
+            set_environment("MODEL2_COMM_NETWORK", "1");
+        else
+            unset_environment("MODEL2_COMM_NETWORK");
+    } else {
+        unset_environment("MODEL2_COMM_NODE");
+        unset_environment("MODEL2_COMM_LOCAL_PORT");
+        unset_environment("MODEL2_COMM_PEER_PORT");
+        unset_environment("MODEL2_COMM_NETWORK");
+    }
+    if (generic_input_link) {
+        set_environment("WHITTY_INPUT_LINK", "1");
+        set_environment("WHITTY_INPUT_LOCAL_PORT",
+                        std::to_string(local_port));
+        set_environment("WHITTY_INPUT_PEER_PORT",
+                        std::to_string(peer_port));
+        const uint16_t video_port = port_base <= 65533 ?
+            static_cast<uint16_t>(port_base + 2) :
+            static_cast<uint16_t>(port_base - 2);
+        set_environment("WHITTY_VIDEO_ROLE", std::to_string(node));
+        set_environment("WHITTY_VIDEO_PORT", std::to_string(video_port));
+    } else {
+        unset_environment("WHITTY_INPUT_LINK");
+        unset_environment("WHITTY_INPUT_LOCAL_PORT");
+        unset_environment("WHITTY_INPUT_PEER_PORT");
+        unset_environment("WHITTY_VIDEO_ROLE");
+        unset_environment("WHITTY_VIDEO_PORT");
+    }
+    set_environment("RRACER_CONTROLLER", std::to_string(node - 1));
+}
+
+uint16_t choose_pair_port_base() {
+#if defined(_WIN32)
+    const unsigned process_id = GetCurrentProcessId();
+#else
+    const unsigned process_id = static_cast<unsigned>(getpid());
+#endif
+    return static_cast<uint16_t>(36000 + (process_id % 12000) * 2 % 24000);
+}
+
+class cabinet_companion {
+public:
+    ~cabinet_companion() { stop(); }
+
+    bool start(const std::string& executable, const std::string& rom_path,
+               const std::string& bios_path, bool explicit_bios_path,
+               uint16_t port_base, bool independent_pair) {
+        stop();
+        std::vector<std::string> arguments{
+            executable,
+            "--cabinet-node", "2",
+            "--pair-port-base", std::to_string(port_base),
+        };
+        if (independent_pair)
+            arguments.emplace_back("--independent-cabinet");
+        arguments.push_back(rom_path);
+        if (explicit_bios_path) arguments.push_back(bios_path);
+        std::vector<char*> native_arguments;
+        native_arguments.reserve(arguments.size() + 1);
+        for (std::string& argument : arguments)
+            native_arguments.push_back(argument.data());
+        native_arguments.push_back(nullptr);
+#if defined(_WIN32)
+        m_process = _spawnv(_P_NOWAIT, executable.c_str(),
+                            native_arguments.data());
+        return m_process != -1;
+#else
+        const pid_t child = fork();
+        if (child < 0) return false;
+        if (child == 0) {
+            execv(executable.c_str(), native_arguments.data());
+            std::_Exit(127);
+        }
+        m_process = child;
+        return true;
+#endif
+    }
+
+    void stop() {
+        if (m_process == -1) return;
+#if defined(_WIN32)
+        HANDLE handle = reinterpret_cast<HANDLE>(m_process);
+        TerminateProcess(handle, 0);
+        WaitForSingleObject(handle, 2000);
+        CloseHandle(handle);
+#else
+        const pid_t child = static_cast<pid_t>(m_process);
+        int status = 0;
+        const pid_t ended = waitpid(child, &status, WNOHANG);
+        if (ended == 0) {
+            kill(child, SIGTERM);
+            for (int attempt = 0; attempt < 20; ++attempt) {
+                if (waitpid(child, &status, WNOHANG) == child) {
+                    m_process = -1;
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            kill(child, SIGKILL);
+            waitpid(child, &status, 0);
+        }
+#endif
+        m_process = -1;
+    }
+
+    bool running() const { return m_process != -1; }
+
+private:
+    std::intptr_t m_process{-1};
+};
 
 int run_video_lifecycle_test() {
     emulator_settings settings;
@@ -144,11 +344,13 @@ int main(int argc, char* argv[]) {
     if (const std::optional<int> result = run_tool_command(argc, argv))
         return *result;
 
-    std::string rom_path = argc > 1 ? argv[1] : "roms/";
+    const runtime_options runtime = parse_runtime_options(argc, argv);
+    std::string rom_path = runtime.positional.empty() ?
+        "roms/" : runtime.positional[0];
     std::string bios_path;
-    const bool explicit_bios_path = argc > 2;
+    const bool explicit_bios_path = runtime.positional.size() > 1;
     if (explicit_bios_path) {
-        bios_path = argv[2];
+        bios_path = runtime.positional[1];
     } else {
         std::error_code error;
         const fs::path candidate(rom_path);
@@ -161,16 +363,40 @@ int main(int argc, char* argv[]) {
     // creates fresh CPUs, RAM, input and sound devices for every selection.
     auto shared_video = std::make_shared<arcade_video_worker>();
     auto cabinet_state = std::make_shared<arcade_cabinet_state>();
+    cabinet_companion companion;
+    cabinet_launch_mode launch_mode =
+        runtime.twin_screen ? cabinet_launch_mode::independent_pair :
+        (runtime.cabinet_node ?
+            (runtime.network_pair ? cabinet_launch_mode::linked_network :
+                (runtime.independent_pair ?
+                    cabinet_launch_mode::independent_pair :
+                    cabinet_launch_mode::linked_pair)) :
+            cabinet_launch_mode::single);
+    int cabinet_node = runtime.cabinet_node;
+    uint16_t pair_port_base = runtime.pair_port_base;
     bool restart = true;
-    bool startup_menu = argc <= 1;
+    bool startup_menu = runtime.positional.empty();
+    std::unique_ptr<multiplayer_lobby> lobby;
+    if (startup_menu)
+        lobby = std::make_unique<multiplayer_lobby>();
 
     while (restart) {
         restart = false;
         if (startup_menu) {
             startup_menu = false;
-            rom_selection_result selection = show_rom_selector(rom_path);
+            rom_selection_result selection =
+                show_rom_selector(rom_path, lobby.get());
             if (selection.action == rom_selection_action::selected) {
                 rom_path = std::move(selection.path);
+                launch_mode = selection.launch_mode;
+                cabinet_node = selection.cabinet_node;
+                if (selection.fullscreen_override >= 0)
+                    settings.fullscreen =
+                        selection.fullscreen_override != 0;
+                settings.twin_separate_monitors =
+                    selection.twin_separate_monitors;
+                if (launch_mode == cabinet_launch_mode::linked_network)
+                    pair_port_base = 35112;
                 if (!explicit_bios_path)
                     bios_path = fs::path(rom_path).parent_path().string();
             } else if (selection.action ==
@@ -188,19 +414,138 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        const bool native_model2_link =
+            std::string_view(identity->short_name) == "srallyc";
+        const rom_set_manifest* launch_manifest =
+            find_supported_rom_set(identity->short_name);
+        const bool supports_two_player = launch_manifest &&
+            launch_manifest->multiplayer != arcade_multiplayer_mode::none;
+        if (launch_mode == cabinet_launch_mode::linked_network &&
+            !supports_two_player) {
+            std::fprintf(stderr,
+                         "%s has no supported Player 2 input path; "
+                         "starting single-screen mode instead\n",
+                         identity->short_name);
+            launch_mode = cabinet_launch_mode::single;
+            cabinet_node = 0;
+        }
+        const bool local_pair =
+            launch_mode == cabinet_launch_mode::linked_pair;
+        if (cabinet_node == 0 && local_pair) {
+            pair_port_base = choose_pair_port_base();
+            if (!companion.start(argv[0], rom_path, bios_path,
+                                 explicit_bios_path, pair_port_base,
+                                 false)) {
+                std::fprintf(stderr,
+                             "Could not start the second cabinet process\n");
+                launch_mode = cabinet_launch_mode::single;
+            } else {
+                cabinet_node = 1;
+            }
+        }
+        configure_cabinet_environment(
+            cabinet_node, pair_port_base,
+            native_model2_link &&
+                (launch_mode == cabinet_launch_mode::linked_pair ||
+                 launch_mode == cabinet_launch_mode::linked_network),
+            launch_mode == cabinet_launch_mode::linked_network,
+            !native_model2_link &&
+                launch_mode == cabinet_launch_mode::linked_network);
+        settings.output =
+            launch_mode == cabinet_launch_mode::independent_pair ?
+                output_mode::dual : output_mode::single;
+        if (cabinet_node) {
+            settings.display_index =
+                launch_mode == cabinet_launch_mode::linked_network ?
+                    0 : cabinet_node - 1;
+            std::printf("Starting cabinet %d on display %d\n",
+                        cabinet_node, settings.display_index + 1);
+        } else {
+            settings.display_index = -1;
+        }
+
+        emulator_settings session_settings = settings;
+        // Player 2 contributes controls to Player 1 and presents Player 1's
+        // authoritative picture. Silence the hidden local board so two
+        // unsynchronised audio timelines can never be heard together.
+        if (cabinet_node == 2 &&
+            launch_mode == cabinet_launch_mode::linked_network &&
+            !native_model2_link) {
+            session_settings.master_volume = 0;
+            session_settings.music_volume = 0;
+            session_settings.effects_volume = 0;
+        }
         std::unique_ptr<emulator_session> emu = create_emulator_session(
             identity->board, shared_video, cabinet_state);
-        if (!emu->initialize(rom_path, bios_path, settings)) return 1;
+        if (!emu->initialize(rom_path, bios_path, session_settings)) return 1;
+        if (launch_mode == cabinet_launch_mode::independent_pair) {
+            shared_video->set_cabinet_status(
+                "TWIN SCREEN  |  PLAYER 1 + PLAYER 2");
+        } else if (cabinet_node &&
+                   launch_mode == cabinet_launch_mode::linked_network &&
+                   !native_model2_link) {
+            shared_video->set_cabinet_status(
+                "PLAYER " + std::to_string(cabinet_node) +
+                "  |  WAITING FOR NETWORK PLAYER...");
+        }
         const std::vector<rom_choice> installed_games =
-            discover_rom_choices(rom_path);
+            cabinet_node == 2 ? std::vector<rom_choice>{} :
+                                discover_rom_choices(rom_path);
         emu->set_rom_choices(installed_games);
         const std::string current_game_short_name(identity->short_name);
 
         auto deadline = std::chrono::steady_clock::now();
         arcade_host_action host_action =
             arcade_host_action::continue_running;
+        bool generic_peer_visible = false;
+        int displayed_turn = -2;
         while ((host_action = emu->process_events()) ==
                arcade_host_action::continue_running) {
+            if (cabinet_node &&
+                launch_mode == cabinet_launch_mode::linked_network &&
+                !native_model2_link) {
+                const bool connected = arcade_input_network_peer_seen();
+                int active_turn = -1;
+                if (launch_manifest &&
+                    launch_manifest->multiplayer ==
+                        arcade_multiplayer_mode::simultaneous) {
+                    active_turn = 0;
+                } else if (launch_manifest &&
+                           launch_manifest->multiplayer ==
+                               arcade_multiplayer_mode::alternating) {
+                    if (cabinet_node == 1) {
+                        active_turn = emu->active_player();
+                        arcade_input_set_authoritative_player(
+                            active_turn == 1 || active_turn == 2 ?
+                                static_cast<uint8_t>(active_turn) : 0);
+                    } else {
+                        active_turn = static_cast<int>(
+                            arcade_input_network_authoritative_player());
+                    }
+                }
+                if (connected != generic_peer_visible ||
+                    active_turn != displayed_turn) {
+                    generic_peer_visible = connected;
+                    displayed_turn = active_turn;
+                    std::string status =
+                        "CABINET " + std::to_string(cabinet_node) +
+                        (connected ?
+                            "  |  NETWORK CONNECTED" :
+                            "  |  WAITING FOR NETWORK PLAYER...");
+                    if (connected) {
+                        if (launch_manifest &&
+                            launch_manifest->multiplayer ==
+                                arcade_multiplayer_mode::simultaneous)
+                            status += "  |  BOTH PLAYERS ACTIVE";
+                        else if (active_turn == 1 || active_turn == 2)
+                            status += "  |  PLAYER " +
+                                std::to_string(active_turn) + " TURN";
+                        else
+                            status += "  |  ALTERNATING TURNS";
+                    }
+                    shared_video->set_cabinet_status(std::move(status));
+                }
+            }
             if (emu->take_operator_settings_request())
                 emu->open_operator_settings();
 
@@ -222,7 +567,7 @@ int main(int argc, char* argv[]) {
             }
 
             if (emu->take_settings_change(settings) &&
-                !save_settings(settings)) {
+                cabinet_node != 2 && !save_settings(settings)) {
                 std::fprintf(stderr, "Could not save settings to %s\n",
                              settings_path().c_str());
             }
@@ -235,6 +580,10 @@ int main(int argc, char* argv[]) {
                 if (!explicit_bios_path)
                     bios_path = fs::path(rom_path).parent_path().string();
                 restart = true;
+                if (companion.running()) {
+                    companion.stop();
+                    cabinet_node = 0;
+                }
                 break;
             }
 
@@ -270,11 +619,19 @@ int main(int argc, char* argv[]) {
         }
 
         if (host_action == arcade_host_action::return_to_menu) {
+            if (cabinet_node == 2 &&
+                launch_mode != cabinet_launch_mode::linked_network)
+                return 0;
             // The launcher owns its own SDL window, so tear down the running
             // cabinet and process-wide presentation window before reopening
             // it. A newly selected board starts with fresh CPU/RAM/audio.
             emu.reset();
             shared_video->shutdown();
+            companion.stop();
+            cabinet_node = 0;
+            launch_mode = cabinet_launch_mode::single;
+            configure_cabinet_environment(0, pair_port_base, false);
+            settings = load_settings();
             startup_menu = true;
             restart = true;
         }

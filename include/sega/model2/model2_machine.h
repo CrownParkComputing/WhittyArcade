@@ -71,6 +71,11 @@ public:
     uint64_t unmapped_writes() const;
     uint32_t last_unmapped_read() const;
     uint32_t last_unmapped_write() const;
+    bool communication_peer_mode() const;
+    bool communication_linked() const;
+    uint8_t communication_node_id() const;
+    uint8_t srally_link_type() const;
+    bool set_srally_link_type(uint8_t type);
 
 private:
     void update_interrupt_lines();

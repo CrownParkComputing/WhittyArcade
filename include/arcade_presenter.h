@@ -30,7 +30,10 @@ public:
     bool present_rgba_bottom_up(const uint8_t* pixels, int width, int height,
                                 const uint8_t* overlay_pixels = nullptr,
                                 int overlay_width = 0,
-                                int overlay_height = 0);
+                                int overlay_height = 0,
+                                bool menu_visible = false,
+                                int display_width = 0,
+                                int display_height = 0);
 
 private:
     struct implementation;

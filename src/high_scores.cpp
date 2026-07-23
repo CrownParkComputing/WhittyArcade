@@ -312,7 +312,8 @@ fs::path score_root() {
 }
 
 fs::path own_score_path(const std::string& short_name) {
-    return score_root() / (short_name + ".hi");
+    return score_root() /
+        (whitty_platform::cabinet_scoped_name(short_name) + ".hi");
 }
 
 std::vector<fs::path> score_candidates(const std::string& short_name) {

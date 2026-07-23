@@ -61,6 +61,7 @@ void arcade_video_worker::reset_session() {
         m_tasks.emplace_back([completed](polygon_renderer_gpu& renderer) {
             renderer.set_lightgun_cursor(false);
             renderer.set_single_screen_only(false);
+            renderer.set_cabinet_status({});
             renderer.reset_session_ui();
             completed->set_value();
         });
@@ -182,6 +183,12 @@ void arcade_video_worker::refresh_output() {
 void arcade_video_worker::set_single_screen_only(bool enabled) {
     enqueue([enabled](polygon_renderer_gpu& renderer) {
         renderer.set_single_screen_only(enabled);
+    });
+}
+
+void arcade_video_worker::set_cabinet_status(std::string status) {
+    enqueue([status = std::move(status)](polygon_renderer_gpu& renderer) mutable {
+        renderer.set_cabinet_status(std::move(status));
     });
 }
 

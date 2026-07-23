@@ -46,6 +46,9 @@ public:
     virtual void set_paused(bool paused) = 0;
     virtual void refresh_output() = 0;
     virtual double frame_seconds() const = 0;
+    // 1/2 for an alternating game's active side, 0 when both players are
+    // active, and -1 when this board does not expose a verified turn marker.
+    virtual int active_player() const { return -1; }
     // True when run_frame waits for the emulated display producer. Such a
     // session must not also be throttled by main()'s independent host timer.
     virtual bool producer_paced() const { return false; }

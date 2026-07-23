@@ -317,6 +317,26 @@ bool model2_machine::flush_nvram() {
     return m_impl->bus.flush_nvram();
 }
 
+bool model2_machine::communication_peer_mode() const {
+    return m_impl && m_impl->bus.communication_peer_mode();
+}
+
+bool model2_machine::communication_linked() const {
+    return m_impl && m_impl->bus.communication_linked();
+}
+
+uint8_t model2_machine::communication_node_id() const {
+    return m_impl ? m_impl->bus.communication_node_id() : 0;
+}
+
+uint8_t model2_machine::srally_link_type() const {
+    return m_impl ? m_impl->bus.srally_link_type() : 0;
+}
+
+bool model2_machine::set_srally_link_type(uint8_t type) {
+    return m_impl && m_impl->bus.set_srally_link_type(type);
+}
+
 void model2_machine::run_frame(bool render_frame) {
     ++m_frame_number;
     m_impl->i960_work_ms = 0.0;

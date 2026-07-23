@@ -4,14 +4,68 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <type_traits>
+
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 namespace {
 constexpr float axis_deadzone = 0.15f;
 constexpr float cabinet_press_threshold = 0.5f;
 constexpr std::size_t sdl_guid_text_size = 33;
+constexpr std::array<uint8_t, 4> input_link_magic{{'W', 'A', 'I', '2'}};
+
+std::atomic_bool network_peer_seen{false};
+std::atomic_uint32_t network_peer_ipv4{0};
+std::atomic_uint8_t network_authoritative_player{0};
+
+struct network_input_packet {
+    std::array<uint8_t, 4> magic{};
+    uint8_t version{};
+    uint8_t node{};
+    uint16_t state_size{};
+    uint32_t session{};
+    uint32_t sequence{};
+    uint8_t active_player{};
+    uint8_t reserved[3]{};
+    input_state state{};
+};
+static_assert(std::is_trivially_copyable_v<input_state>);
+
+#if defined(_WIN32)
+using input_native_socket = SOCKET;
+constexpr input_native_socket invalid_input_socket = INVALID_SOCKET;
+input_native_socket to_input_socket(std::intptr_t value) {
+    return static_cast<input_native_socket>(value);
+}
+#else
+using input_native_socket = int;
+constexpr input_native_socket invalid_input_socket = -1;
+input_native_socket to_input_socket(std::intptr_t value) {
+    return static_cast<input_native_socket>(value);
+}
+#endif
+
+uint16_t input_link_port(const char* name) {
+    const char* value = std::getenv(name);
+    if (!value || !*value) return 0;
+    const unsigned long parsed = std::strtoul(value, nullptr, 10);
+    return parsed > 1024 && parsed <= 65535 ?
+        static_cast<uint16_t>(parsed) : 0;
+}
 
 constexpr std::array<input_action, 4> cabinet_actions{{
     input_action::coin1,
@@ -37,10 +91,273 @@ uint8_t cyber_axis(float normalized) {
 int watch_code(const input_binding& binding, input_binding_type type) {
     return binding.type == type ? binding.code : -1;
 }
+
+bool second_cabinet_process() {
+    const char* node = std::getenv("WHITTY_CABINET_NODE");
+    return node && std::strcmp(node, "2") == 0;
+}
+
+void route_player_two_keyboard_to_cabinet(
+        input_binding_table& bindings) {
+    if (!second_cabinet_process()) return;
+    // A network cabinet is a separate physical machine, so its local user
+    // gets the normal P1 keyboard layout; the link maps that contribution to
+    // the authoritative game's P2 inputs. Only the second process of a local
+    // two-cabinet setup needs the alternate P2 keys.
+    const char* network_link = std::getenv("WHITTY_INPUT_LINK");
+    if (network_link && *network_link &&
+        std::strcmp(network_link, "0") != 0)
+        return;
+    const auto copy = [&bindings](input_action destination,
+                                  input_action source) {
+        bindings[input_action_index(destination)] =
+            bindings[input_action_index(source)];
+    };
+    copy(input_action::coin1, input_action::coin2);
+    copy(input_action::start1, input_action::start2);
+    copy(input_action::p1_left, input_action::p2_left);
+    copy(input_action::p1_right, input_action::p2_right);
+    copy(input_action::p1_up, input_action::p2_up);
+    copy(input_action::p1_down, input_action::p2_down);
+    copy(input_action::p1_action1, input_action::p2_action1);
+    copy(input_action::p1_action2, input_action::p2_action2);
+    copy(input_action::steer_left, input_action::p2_left);
+    copy(input_action::steer_right, input_action::p2_right);
+    copy(input_action::gas, input_action::p2_up);
+    copy(input_action::brake, input_action::p2_down);
+    copy(input_action::shift_down, input_action::p2_action1);
+    copy(input_action::shift_up, input_action::p2_action2);
+}
 } // namespace
+
+bool arcade_input_network_peer_seen() {
+    return network_peer_seen.load(std::memory_order_acquire);
+}
+
+uint32_t arcade_input_network_peer_ipv4() {
+    return network_peer_ipv4.load(std::memory_order_acquire);
+}
+
+void arcade_input_set_authoritative_player(uint8_t player) {
+    network_authoritative_player.store(
+        player <= 2 ? player : 0, std::memory_order_release);
+}
+
+uint8_t arcade_input_network_authoritative_player() {
+    return network_authoritative_player.load(std::memory_order_acquire);
+}
 
 arcade_input::~arcade_input() {
     shutdown();
+}
+
+bool arcade_input::initialize_network_link() {
+    shutdown_network_link();
+    const char* enabled = std::getenv("WHITTY_INPUT_LINK");
+    if (!enabled || !*enabled || std::strcmp(enabled, "0") == 0)
+        return true;
+    const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+    const int node = node_text ? std::atoi(node_text) : 0;
+    const uint16_t local_port = input_link_port("WHITTY_INPUT_LOCAL_PORT");
+    const uint16_t peer_port = input_link_port("WHITTY_INPUT_PEER_PORT");
+    if ((node != 1 && node != 2) || !local_port || !peer_port)
+        return false;
+
+#if defined(_WIN32)
+    static const bool winsock_ready = [] {
+        WSADATA data{};
+        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+    }();
+    if (!winsock_ready) return false;
+#endif
+    const input_native_socket socket_handle =
+        ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socket_handle == invalid_input_socket) return false;
+    int enabled_option = 1;
+    setsockopt(socket_handle, SOL_SOCKET, SO_REUSEADDR,
+               reinterpret_cast<const char*>(&enabled_option),
+               sizeof(enabled_option));
+    setsockopt(socket_handle, SOL_SOCKET, SO_BROADCAST,
+               reinterpret_cast<const char*>(&enabled_option),
+               sizeof(enabled_option));
+    // Input is live state, not an event recording. A small receive buffer
+    // prevents a stalled frame from accumulating seconds of old commands.
+    const int receive_buffer = 32768;
+    setsockopt(socket_handle, SOL_SOCKET, SO_RCVBUF,
+               reinterpret_cast<const char*>(&receive_buffer),
+               sizeof(receive_buffer));
+#if defined(_WIN32)
+    u_long nonblocking = 1;
+    if (ioctlsocket(socket_handle, FIONBIO, &nonblocking) != 0) {
+        closesocket(socket_handle);
+        return false;
+    }
+#else
+    const int flags = fcntl(socket_handle, F_GETFL, 0);
+    if (flags < 0 ||
+        fcntl(socket_handle, F_SETFL, flags | O_NONBLOCK) < 0) {
+        ::close(socket_handle);
+        return false;
+    }
+#endif
+    sockaddr_in local{};
+    local.sin_family = AF_INET;
+    local.sin_port = htons(local_port);
+    local.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (::bind(socket_handle, reinterpret_cast<const sockaddr*>(&local),
+               sizeof(local)) != 0) {
+#if defined(_WIN32)
+        closesocket(socket_handle);
+#else
+        ::close(socket_handle);
+#endif
+        return false;
+    }
+
+    m_network_socket = static_cast<std::intptr_t>(socket_handle);
+    m_network_peer_port = peer_port;
+    m_network_node = static_cast<uint8_t>(node);
+    const uint64_t ticks = static_cast<uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    m_network_session = static_cast<uint32_t>(
+        ticks ^ (ticks >> 32) ^ reinterpret_cast<std::uintptr_t>(this));
+    if (m_network_session == 0) m_network_session = 1;
+    m_network_peer_session = 0;
+    m_network_sequence = 0;
+    m_network_peer_sequence = 0;
+    m_network_peer_age = 0xffff;
+    m_network_peer_state = {};
+    network_peer_seen.store(false, std::memory_order_release);
+    network_peer_ipv4.store(0, std::memory_order_release);
+    std::printf("WhittyArcade player %u input link UDP %u -> %u\n",
+                m_network_node, local_port, peer_port);
+    return true;
+}
+
+void arcade_input::shutdown_network_link() {
+    if (m_network_socket != -1) {
+        const input_native_socket socket_handle =
+            to_input_socket(m_network_socket);
+#if defined(_WIN32)
+        closesocket(socket_handle);
+#else
+        ::close(socket_handle);
+#endif
+    }
+    m_network_socket = -1;
+    m_network_peer_port = 0;
+    m_network_node = 0;
+    m_network_session = 0;
+    m_network_peer_session = 0;
+    m_network_peer_age = 0xffff;
+    m_network_peer_state = {};
+    network_peer_seen.store(false, std::memory_order_release);
+    network_peer_ipv4.store(0, std::memory_order_release);
+}
+
+void arcade_input::exchange_network_input(const input_state& local_state) {
+    if (m_network_socket == -1 || m_network_node == 0) return;
+    const input_native_socket socket_handle =
+        to_input_socket(m_network_socket);
+    network_input_packet outgoing{};
+    outgoing.magic = input_link_magic;
+    outgoing.version = 1;
+    outgoing.node = m_network_node;
+    outgoing.state_size = static_cast<uint16_t>(sizeof(input_state));
+    outgoing.session = m_network_session;
+    outgoing.sequence = ++m_network_sequence;
+    outgoing.active_player =
+        network_authoritative_player.load(std::memory_order_acquire);
+    outgoing.state = local_state;
+
+    sockaddr_in peer{};
+    peer.sin_family = AF_INET;
+    peer.sin_port = htons(m_network_peer_port);
+    peer.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    sendto(socket_handle, reinterpret_cast<const char*>(&outgoing),
+           static_cast<int>(sizeof(outgoing)), 0,
+           reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
+    // Also loop the LAN packet onto this host so the exact two-computer mode
+    // can be tested with two local WhittyArcade instances.
+    peer.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    sendto(socket_handle, reinterpret_cast<const char*>(&outgoing),
+           static_cast<int>(sizeof(outgoing)), 0,
+           reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
+
+    bool received_peer = false;
+    for (;;) {
+        network_input_packet incoming{};
+        sockaddr_in sender{};
+#if defined(_WIN32)
+        int sender_size = sizeof(sender);
+#else
+        socklen_t sender_size = sizeof(sender);
+#endif
+        const int received = static_cast<int>(recvfrom(
+            socket_handle, reinterpret_cast<char*>(&incoming),
+            static_cast<int>(sizeof(incoming)), 0,
+            reinterpret_cast<sockaddr*>(&sender), &sender_size));
+        if (received != static_cast<int>(sizeof(incoming))) break;
+        if (incoming.magic != input_link_magic ||
+            incoming.version != 1 ||
+            incoming.node == m_network_node ||
+            incoming.state_size != sizeof(input_state))
+            continue;
+        if (incoming.session != m_network_peer_session) {
+            m_network_peer_session = incoming.session;
+            m_network_peer_sequence = 0;
+        }
+        // UDP may duplicate and reorder datagrams. Keep only the newest live
+        // state; an older button-down packet must never follow a newer
+        // button-release and make firing stick.
+        if (m_network_peer_sequence != 0 &&
+            static_cast<int32_t>(incoming.sequence -
+                                 m_network_peer_sequence) <= 0)
+            continue;
+        m_network_peer_state = incoming.state;
+        if (incoming.node == 1)
+            network_authoritative_player.store(
+                incoming.active_player <= 2 ?
+                    incoming.active_player : 0,
+                std::memory_order_release);
+        m_network_peer_sequence = incoming.sequence;
+        m_network_peer_age = 0;
+        network_peer_ipv4.store(sender.sin_addr.s_addr,
+                                std::memory_order_release);
+        received_peer = true;
+    }
+    if (!received_peer && m_network_peer_age < 0xfffe)
+        ++m_network_peer_age;
+    const bool connected = m_network_peer_age < 180;
+    const bool input_fresh = m_network_peer_age < 6;
+    network_peer_seen.store(connected, std::memory_order_release);
+
+    // Both emulators see the same logical cabinet: computer one supplies P1,
+    // while computer two's normal controls feed the original board's P2 lines.
+    if (!connected) {
+        if (m_network_node == 2) m_state = input_state{};
+        return;
+    }
+    const input_state neutral{};
+    const input_state& remote =
+        input_fresh ? m_network_peer_state : neutral;
+    const input_state& player1 =
+        m_network_node == 1 ? local_state : remote;
+    const input_state& player2 =
+        m_network_node == 2 ? local_state : remote;
+    input_state combined = player1;
+    combined.coin2 = combined.coin2 || player2.coin1 || player2.coin2;
+    combined.p2_start =
+        combined.p2_start || player2.start || player2.p2_start;
+    combined.p2_stick_x = player2.left_stick_x;
+    combined.p2_stick_y = player2.left_stick_y;
+    for (std::size_t button = 0; button < std::size(combined.p2_buttons);
+         ++button) {
+        combined.p2_buttons[button] =
+            combined.p2_buttons[button] || player2.buttons[button] ||
+            player2.p2_buttons[button];
+    }
+    m_state = combined;
 }
 
 bool arcade_input::watch_cabinet_button_events(void* userdata,
@@ -102,6 +419,7 @@ bool arcade_input::initialize(std::string_view game_short_name) {
     m_mappings = load_input_mappings();
     m_keyboard_bindings = keyboard_bindings_for(m_mappings,
                                                  m_game_short_name);
+    route_player_two_keyboard_to_cabinet(m_keyboard_bindings);
     m_controller_bindings = default_controller_bindings();
     for (std::size_t slot = 0; slot < cabinet_actions.size(); ++slot) {
         const input_binding& binding = m_keyboard_bindings[
@@ -125,6 +443,9 @@ bool arcade_input::initialize(std::string_view game_short_name) {
         std::printf("Time Crisis mouse gun: move to aim, left click fires, "
                     "hold Space to stand, release Space or right click to "
                     "take cover/reload\n");
+    if (!initialize_network_link())
+        std::fprintf(stderr,
+                     "Could not open WhittyArcade's network player link\n");
     return true;
 }
 
@@ -135,6 +456,7 @@ void arcade_input::reload_mappings() {
     m_mappings = load_input_mappings();
     m_keyboard_bindings = keyboard_bindings_for(m_mappings,
                                                  m_game_short_name);
+    route_player_two_keyboard_to_cabinet(m_keyboard_bindings);
     for (std::size_t slot = 0; slot < cabinet_actions.size(); ++slot) {
         const input_binding& binding = m_keyboard_bindings[
             input_action_index(cabinet_actions[slot])];
@@ -166,6 +488,7 @@ void arcade_input::reload_mappings() {
 
 void arcade_input::shutdown() {
     std::lock_guard<std::mutex> sdl_lock(arcade_sdl_mutex());
+    shutdown_network_link();
     if (m_event_watch_installed) {
         SDL_RemoveEventWatch(&arcade_input::watch_cabinet_button_events, this);
         m_event_watch_installed = false;
@@ -231,10 +554,9 @@ void arcade_input::scan_for_controller() {
     if (!ids) return;
     if (const char* preferred = std::getenv("RRACER_CONTROLLER")) {
         const int index = static_cast<int>(std::strtol(preferred, nullptr, 0));
-        if (index >= 0 && index < count && open_controller(ids[index])) {
-            SDL_free(ids);
-            return;
-        }
+        if (index >= 0 && index < count) open_controller(ids[index]);
+        SDL_free(ids);
+        return;
     }
     for (int index = 0; index < count; ++index)
         if (open_controller(ids[index])) {
@@ -494,6 +816,7 @@ void arcade_input::update() {
         }
     }
 
+    exchange_network_input(m_state);
     for (uint8_t& frames : m_cabinet_pulse_frames)
         if (frames != 0) --frames;
 }

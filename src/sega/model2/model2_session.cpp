@@ -8,6 +8,7 @@
 #include "sega/model2/model2_machine.h"
 #include "sega/model2/model2_rom.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -43,10 +44,29 @@ public:
         if (!m_gpu_renderer->initialize(settings)) return false;
         m_machine = std::make_unique<model2_machine>();
         if (!m_machine->initialize(rom_path)) return false;
+        if (const char* node = std::getenv("MODEL2_COMM_NODE")) {
+            const int cabinet = std::atoi(node);
+            if (cabinet == 1 || cabinet == 2) {
+                m_link_cabinet = cabinet;
+                m_gpu_renderer->set_cabinet_status(
+                    "CABINET " + std::to_string(cabinet) +
+                    "  |  WAITING FOR CABINET " +
+                    std::to_string(cabinet == 1 ? 2 : 1) + "...");
+            }
+        }
         // Resolve game identity once, here at the composition root; the board
         // hardware reads this profile rather than switching on the rom set.
         const model2_game_profile profile =
             model2_rom_loader::profile_for(m_machine->rom_set());
+        if (m_machine->rom_set() ==
+            model2_rom_set::sega_rally_revision_c) {
+            const uint8_t role = m_link_cabinet == 1 ? 1 :
+                                 m_link_cabinet == 2 ? 2 : 0;
+            if (!m_machine->set_srally_link_type(role))
+                std::fprintf(stderr,
+                             "Could not save Sega Rally LINK TYPE\n");
+            m_link_role.store(role, std::memory_order_release);
+        }
         // Light-gun cabinets replace the desktop pointer with the on-screen P1
         // gun sight, exactly like Time Crisis.
         m_gpu_renderer->set_lightgun_cursor(profile.lightgun);
@@ -128,12 +148,42 @@ public:
 
 protected:
     operator_menu_definition operator_menu() const override {
+        if (m_machine && m_machine->rom_set() ==
+                model2_rom_set::sega_rally_revision_c) {
+            operator_menu_definition menu;
+            menu.title = "SEGA RALLY CABINET SETTINGS";
+            menu.description =
+                "Saved directly to Sega Rally EEPROM. Launch mode sets this "
+                "automatically.";
+            menu.rows = {
+                {0, "Cabinet / link type",
+                    {"Single player cabinet  [NOTLINK]",
+                     "Linked cabinet 1  [CAR1]",
+                     "Linked cabinet 2  [CAR2]"},
+                    m_link_role.load(std::memory_order_acquire)},
+                {1, "Open original Sega service menu", {}, 0, true},
+                {2, "CAR1 = network node 1; CAR2 = network node 2",
+                    {}, 0, false, false},
+            };
+            return menu;
+        }
         return make_service_operator_menu(
             "SEGA MODEL 2 OPERATOR SETTINGS",
             "The original cabinet service menu will restart the board.");
     }
     void apply_operator_action(const operator_menu_action& action) override {
-        if (action.row_id == 0) enter_service_menu();
+        if (m_machine && m_machine->rom_set() ==
+                model2_rom_set::sega_rally_revision_c) {
+            if (action.row_id == 0) {
+                const int role = std::clamp(action.selected, 0, 2);
+                m_link_role.store(role, std::memory_order_release);
+                m_link_role_requested.store(role, std::memory_order_release);
+            } else if (action.row_id == 1) {
+                enter_service_menu();
+            }
+        } else if (action.row_id == 0) {
+            enter_service_menu();
+        }
     }
     void apply_audio_settings(const emulator_settings& settings) override {
         if (m_audio)
@@ -235,6 +285,16 @@ private:
                     false, std::memory_order_acq_rel)) {
                 m_machine->reset_preserving_nvram();
             }
+            const int requested_role = m_link_role_requested.exchange(
+                -1, std::memory_order_acq_rel);
+            if (requested_role >= 0) {
+                if (!m_machine->set_srally_link_type(
+                        static_cast<uint8_t>(requested_role))) {
+                    std::fprintf(stderr,
+                                 "Could not save Sega Rally LINK TYPE\n");
+                }
+                m_machine->reset_preserving_nvram();
+            }
             const int service_frames = m_service_boot_frames.load(
                 std::memory_order_acquire);
             if (service_frames > 0) {
@@ -249,6 +309,15 @@ private:
             const auto machine_begin = std::chrono::steady_clock::now();
             m_machine->run_frame(false);
             const auto machine_end = std::chrono::steady_clock::now();
+            if (m_link_cabinet &&
+                m_machine->communication_linked() != m_link_connected) {
+                m_link_connected = m_machine->communication_linked();
+                m_gpu_renderer->set_cabinet_status(
+                    "CABINET " + std::to_string(m_link_cabinet) +
+                    (m_link_connected ?
+                        "  |  LINKED: 2 CABINETS" :
+                        "  |  WAITING FOR PEER..."));
+            }
             m_machine->render_video_layers();
             const auto layers_end = std::chrono::steady_clock::now();
             model2_gpu_frame gpu_frame = m_machine->make_gpu_frame();
@@ -344,6 +413,10 @@ private:
     std::atomic<bool> m_service_reset_requested{false};
     std::atomic<int> m_service_boot_frames{0};
     std::atomic<bool> m_service_session{false};
+    std::atomic<int> m_link_role{0};
+    std::atomic<int> m_link_role_requested{-1};
+    int m_link_cabinet{};
+    bool m_link_connected{};
     uint64_t m_frame_number{}; // CPU-worker owned.
 };
 

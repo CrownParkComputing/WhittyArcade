@@ -59,12 +59,38 @@ Implemented and tested:
 - Native Model 1 support for Virtua Formula, Virtua Fighter, Star Wars Arcade
   and Wing War, including per-game ROM maps and sound-board variants
 - Native Model 2 support for Sega Rally Championship with i960, geometry,
-  SCSP audio, inputs, NVRAM and race-frame regression coverage
+  SCSP audio, inputs, NVRAM and race-frame regression coverage. Its launcher
+  distinguishes a single cabinet, two locally linked cabinets on one
+  computer, and one linked cabinet on each of two LAN computers. These modes
+  automatically save Sega's matching `NOTLINK`, `CAR1` and `CAR2` EEPROM
+  setting; the same choice is also available in the pause/operator menu.
 - Phoenix, Galaxian, Moon Cresta, UniWar S and Shinobi
   machine/video/input/audio paths using the same board-neutral session and
   presentation contracts
 - Shared scaling, filtering, settings, overlays and ROM menus across OpenGL,
   Vulkan-transfer and SDL software presentation
+- Every installed game offers single screen and mirrored twin-screen output.
+  The two-machine LAN choice appears only for titles whose P2 inputs are
+  implemented. For ordinary
+  alternating/simultaneous multiplayer games, Player 1 owns the authoritative
+  emulator and sends its final picture to Player 2; Player 2 sends its local
+  controls back as the arcade game's P2 inputs. Both displays therefore show
+  the same game and score, including while the players take turns. Native
+  multi-cabinet games such as Sega Rally instead run two linked arcade boards.
+- Two normally opened WhittyArcade apps discover each other in the launcher,
+  elect Player 1/Player 2 automatically and expose a shared **Multiplayer**
+  game list. Player 1 chooses once; Player 2 launches the same installed ROM
+  without any role, ROM or IP setup. Galaga inserts the two required credits,
+  uses the original 2-player start input and changes control/display ownership
+  immediately when the original board advances to the other player's turn.
+- Single-screen fullscreen output fills the display while retaining the
+  original arcade monitor aspect (3:4 for the vertical sets and 4:3 for the
+  standard horizontal cabinets), with only the required black bars.
+- Twin Screen preserves each board's exact native framebuffer with one
+  integer multiplier on both axes and a visible border around each player
+  viewport. For example, Galaga remains 224x288 per player; on a 5120x1440
+  desktop each bordered image is 896x1152 (4x), centred in its own half
+  without horizontal or vertical stretching.
 
 The base System 22 sets boot the MC68020, both C71s and C74 together and reach
 their attract/gameplay rendering. Time Crisis and Dirt Dash boot their Super
@@ -84,6 +110,42 @@ Not implemented yet:
 
 The current binary remains experimental; the limitations above affect hardware
 accuracy and cabinet peripherals rather than basic startup and rendering.
+
+## Display and cabinet modes
+
+The arcade selector exposes clear choices based on each working ROM's
+implemented cabinet inputs:
+
+- **Single screen** runs one normal cabinet display.
+- **Twin Screen Fullscreen** places two bordered native-pixel viewports in
+  separate fullscreen panes.
+- **Twin Screen Two Windows** creates independent Player 1 and Player 2
+  windows on the same desktop, each with its own bordered native-pixel
+  viewport.
+- **Twin Screen Two Monitors** centres Player 1 on physical monitor 1 and
+  Player 2 on physical monitor 2. Sega Rally starts CAR1 and CAR2 as two
+  native linked cabinet processes for every Twin mode.
+- **Multiplayer** detects the other open app, assigns Player 1 and Player 2,
+  and lists games installed on both systems. Player 1 selects the game once
+  and Player 2 follows automatically. For ordinary games Player 1 streams the
+  picture and audio remains on Player 1, while Player 2 contributes the second
+  player's coin, start, directions and buttons. Each computer uses its normal
+  local P1 control layout. Sega Rally runs its real Model 2 link protocol
+  instead.
+
+For direct launch/testing, use `--twin-screen` for a local mirrored output, or
+use the same ROM and port base on each LAN computer:
+
+```bash
+./build/WhittyArcade --cabinet-node 1 --network-cabinet \
+  --pair-port-base 35112 /path/to/game.zip
+./build/WhittyArcade --cabinet-node 2 --network-cabinet \
+  --pair-port-base 35112 /path/to/game.zip
+```
+
+The generic link uses the selected base and base+1 UDP ports for controls and
+base+2 TCP for Player 1's authoritative video. The Sega Rally link uses its
+native cabinet communication in place of the generic video stream.
 
 Ridge Racer Full Scale is recognized but marked **not working**: its video ROM
 dump and linked-cabinet display path are incomplete, so the emulator prevents

@@ -9,8 +9,67 @@
 #include <filesystem>
 #include <fstream>
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 namespace {
 constexpr uint16_t i960_burst = 0x0001;
+constexpr std::size_t comm_frame_start = 0x2000;
+constexpr std::size_t comm_frame_size = 0x0e00;
+constexpr std::size_t comm_frame_receive =
+    comm_frame_start + 0x01c0;
+constexpr std::size_t comm_packet_header = 16;
+constexpr std::array<uint8_t, 4> comm_packet_magic{{'W', 'A', 'M', '2'}};
+
+uint16_t environment_port(const char* name, uint16_t fallback) {
+    const char* value = std::getenv(name);
+    if (!value || !*value) return fallback;
+    const unsigned long parsed = std::strtoul(value, nullptr, 10);
+    return parsed > 0 && parsed <= 65535 ?
+        static_cast<uint16_t>(parsed) : fallback;
+}
+
+int environment_comm_node() {
+    const char* node = std::getenv("MODEL2_COMM_NODE");
+    const int node_id = node ? std::atoi(node) : 0;
+    return node_id == 1 || node_id == 2 ? node_id : 0;
+}
+
+void write_packet_u32(uint8_t* destination, uint32_t value) {
+    destination[0] = static_cast<uint8_t>(value);
+    destination[1] = static_cast<uint8_t>(value >> 8);
+    destination[2] = static_cast<uint8_t>(value >> 16);
+    destination[3] = static_cast<uint8_t>(value >> 24);
+}
+
+uint32_t read_packet_u32(const uint8_t* source) {
+    return static_cast<uint32_t>(source[0]) |
+           (static_cast<uint32_t>(source[1]) << 8) |
+           (static_cast<uint32_t>(source[2]) << 16) |
+           (static_cast<uint32_t>(source[3]) << 24);
+}
+
+#if defined(_WIN32)
+using native_socket = SOCKET;
+constexpr native_socket invalid_socket = INVALID_SOCKET;
+native_socket to_native_socket(std::intptr_t value) {
+    return static_cast<native_socket>(value);
+}
+#else
+using native_socket = int;
+constexpr native_socket invalid_socket = -1;
+native_socket to_native_socket(std::intptr_t value) {
+    return static_cast<native_socket>(value);
+}
+#endif
 
 bool trace_fifo_words(uint32_t frame) {
     if (!std::getenv("MODEL2_FIFO_WORD_TRACE")) return false;
@@ -32,7 +91,8 @@ namespace fs = std::filesystem;
 fs::path model2_nvram_directory(const char* leaf) {
     fs::path root = whitty_platform::config_root();
     if (root.empty()) root = ".";
-    return root / "WhittyArcade" / "nvram" / (leaf ? leaf : "srallyc");
+    return root / "WhittyArcade" / "nvram" /
+        whitty_platform::cabinet_scoped_name(leaf ? leaf : "srallyc");
 }
 
 bool read_exact(const fs::path& path, uint8_t* data, std::size_t size) {
@@ -82,6 +142,19 @@ void initialize_srally_backup(std::vector<uint8_t>& ram) {
     std::fill(ram.begin(), ram.end(), 0xff);
 }
 
+uint16_t sega_record_crc(const uint8_t* data, std::size_t size) {
+    // Sega's settings records use CRC-16/CCITT over the record after its
+    // two-byte checksum. The stored value is the one's complement.
+    uint16_t crc = 0xffff;
+    while (size-- > 0) {
+        crc ^= static_cast<uint16_t>(*data++) << 8;
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = static_cast<uint16_t>(
+                (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1);
+    }
+    return static_cast<uint16_t>(~crc);
+}
+
 uint8_t dword_byte(uint32_t value, uint32_t address) {
     return static_cast<uint8_t>(value >> ((address & 3) * 8));
 }
@@ -112,7 +185,200 @@ void write_dword(std::vector<uint8_t>& bytes, std::size_t offset,
 model2_bus::model2_bus() = default;
 
 model2_bus::~model2_bus() {
+    close_comm_peer();
     if (!m_backup_ram.empty()) save_nvram();
+}
+
+bool model2_bus::open_comm_peer() {
+    close_comm_peer();
+#if defined(_WIN32)
+    static const bool winsock_ready = [] {
+        WSADATA data{};
+        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+    }();
+    if (!winsock_ready) return false;
+#endif
+    const native_socket socket_handle =
+        ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socket_handle == invalid_socket) return false;
+
+    int reuse = 1;
+    setsockopt(socket_handle, SOL_SOCKET, SO_REUSEADDR,
+               reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+    if (m_comm_network)
+        setsockopt(socket_handle, SOL_SOCKET, SO_BROADCAST,
+                   reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#if defined(_WIN32)
+    u_long nonblocking = 1;
+    if (ioctlsocket(socket_handle, FIONBIO, &nonblocking) != 0) {
+        closesocket(socket_handle);
+        return false;
+    }
+#else
+    const int flags = fcntl(socket_handle, F_GETFL, 0);
+    if (flags < 0 ||
+        fcntl(socket_handle, F_SETFL, flags | O_NONBLOCK) < 0) {
+        ::close(socket_handle);
+        return false;
+    }
+#endif
+    sockaddr_in local{};
+    local.sin_family = AF_INET;
+    local.sin_port = htons(m_comm_local_port);
+    local.sin_addr.s_addr =
+        htonl(m_comm_network ? INADDR_ANY : INADDR_LOOPBACK);
+    if (::bind(socket_handle, reinterpret_cast<const sockaddr*>(&local),
+               sizeof(local)) != 0) {
+#if defined(_WIN32)
+        closesocket(socket_handle);
+#else
+        ::close(socket_handle);
+#endif
+        return false;
+    }
+    m_comm_socket = static_cast<std::intptr_t>(socket_handle);
+    std::printf("Model 2 cabinet %u: link UDP %u -> %u\n",
+                m_comm_node_id, m_comm_local_port, m_comm_peer_port);
+    return true;
+}
+
+void model2_bus::close_comm_peer() {
+    if (m_comm_socket == -1) return;
+    const native_socket socket_handle = to_native_socket(m_comm_socket);
+#if defined(_WIN32)
+    closesocket(socket_handle);
+#else
+    ::close(socket_handle);
+#endif
+    m_comm_socket = -1;
+}
+
+void model2_bus::initialize_comm_board() {
+    std::fill(m_communication_ram.begin(), m_communication_ram.end(), 0);
+    m_communication_ram[0x01] = 0x02;
+    m_communication_ram[0x12] = 0x00;
+    m_communication_ram[0x13] = 0x0e; // 0x0e00-byte frame
+    m_communication_ram[0x14] = 0xc0;
+    m_communication_ram[0x15] = 0x01; // ring offset 0x01c0
+    m_comm_zfg = 0;
+
+    const char* link = std::getenv("MODEL2_COMM_LINK");
+    const int node_id = environment_comm_node();
+    m_comm_peer_mode = node_id != 0;
+    m_comm_network =
+        m_comm_peer_mode && std::getenv("MODEL2_COMM_NETWORK") != nullptr;
+    m_comm_node_id =
+        m_comm_peer_mode ? static_cast<uint8_t>(node_id) : 0;
+    const uint16_t default_local = node_id == 2 ? 15113 : 15112;
+    const uint16_t default_peer = node_id == 2 ? 15112 : 15113;
+    m_comm_local_port =
+        environment_port("MODEL2_COMM_LOCAL_PORT", default_local);
+    m_comm_peer_port =
+        environment_port("MODEL2_COMM_PEER_PORT", default_peer);
+    // MAME's default endpoints listen on 0.0.0.0:15112 and connect back to
+    // 127.0.0.1:15112. Thus a NOTLINK cabinet still forms a one-node ring
+    // after the communication board's four-second discovery period.
+    m_comm_loopback = !m_comm_peer_mode &&
+        (!link || std::strcmp(link, "0") != 0);
+    m_comm_peer_seen = false;
+    m_comm_link_alive = false;
+    m_comm_link_timer = 0x00e8; // 58 Hz * 4 seconds in EPR-16726
+    m_comm_loopback_frame_valid = false;
+    m_communication_ram[0x00] = 0x00;
+    m_communication_ram[0x02] = 0xff;
+    m_communication_ram[0x03] = 0xff;
+
+    if (m_comm_peer_mode && !open_comm_peer())
+        std::fprintf(stderr,
+                     "Model 2 cabinet %u could not open link port %u\n",
+                     m_comm_node_id, m_comm_local_port);
+    if (std::getenv("MODEL2_COMM_TRACE"))
+        std::fprintf(stderr,
+                     "Model 2 comm enabled frame=%u loopback=%d "
+                     "peer=%d node=%u\n",
+                     m_frame_number, m_comm_loopback,
+                     m_comm_peer_mode, m_comm_node_id);
+}
+
+void model2_bus::tick_comm_peer() {
+    if (m_comm_socket == -1 || m_communication_ram.size() <
+            comm_frame_receive + comm_frame_size)
+        return;
+
+    std::array<uint8_t, comm_packet_header + comm_frame_size> packet{};
+    std::copy(comm_packet_magic.begin(), comm_packet_magic.end(),
+              packet.begin());
+    packet[4] = 1;
+    packet[5] = m_comm_node_id;
+    packet[6] = 1;
+    write_packet_u32(packet.data() + 8, ++m_comm_sequence);
+    write_packet_u32(packet.data() + 12,
+                     static_cast<uint32_t>(comm_frame_size));
+    std::copy_n(m_communication_ram.begin() + comm_frame_start,
+                comm_frame_size, packet.begin() + comm_packet_header);
+
+    sockaddr_in peer{};
+    peer.sin_family = AF_INET;
+    peer.sin_port = htons(m_comm_peer_port);
+    peer.sin_addr.s_addr = htonl(
+        m_comm_network ? INADDR_BROADCAST : INADDR_LOOPBACK);
+    const native_socket socket_handle = to_native_socket(m_comm_socket);
+    sendto(socket_handle, reinterpret_cast<const char*>(packet.data()),
+           static_cast<int>(packet.size()), 0,
+           reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
+    // Also loop the LAN packet onto this host. This supports two-computer
+    // testing on one machine and does not affect remote discovery; packets
+    // still carry a node ID and self-originated frames are ignored.
+    if (m_comm_network) {
+        peer.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        sendto(socket_handle, reinterpret_cast<const char*>(packet.data()),
+               static_cast<int>(packet.size()), 0,
+               reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
+    }
+
+    bool received_payload = false;
+    for (;;) {
+        std::array<uint8_t, comm_packet_header + comm_frame_size> incoming{};
+        sockaddr_in sender{};
+#if defined(_WIN32)
+        int sender_size = sizeof(sender);
+#else
+        socklen_t sender_size = sizeof(sender);
+#endif
+        const int received = static_cast<int>(recvfrom(
+            socket_handle, reinterpret_cast<char*>(incoming.data()),
+            static_cast<int>(incoming.size()), 0,
+            reinterpret_cast<sockaddr*>(&sender), &sender_size));
+        if (received < static_cast<int>(comm_packet_header)) break;
+        if (!std::equal(comm_packet_magic.begin(), comm_packet_magic.end(),
+                        incoming.begin()) ||
+            incoming[4] != 1 || incoming[5] == m_comm_node_id)
+            continue;
+        m_comm_peer_seen = true;
+        const uint32_t payload_size = read_packet_u32(incoming.data() + 12);
+        if ((incoming[6] & 1) && payload_size == comm_frame_size &&
+            received == static_cast<int>(comm_packet_header +
+                                         comm_frame_size)) {
+            std::copy_n(incoming.begin() + comm_packet_header,
+                        comm_frame_size,
+                        m_communication_ram.begin() + comm_frame_receive);
+            received_payload = true;
+        }
+    }
+
+    if (m_comm_peer_seen && !m_comm_link_alive) {
+        m_comm_link_alive = true;
+        m_communication_ram[0x00] = 0x01;
+        m_communication_ram[0x02] = m_comm_node_id;
+        m_communication_ram[0x03] = 0x02;
+        std::printf("Model 2 cabinet %u: linked as node %u of 2\n",
+                    m_comm_node_id, m_comm_node_id);
+    } else if (!m_comm_link_alive) {
+        m_communication_ram[0x00] = 0x00;
+        m_communication_ram[0x02] = 0xff;
+        m_communication_ram[0x03] = 0xff;
+    }
+    if (received_payload) m_comm_zfg ^= 1;
 }
 
 uint32_t model2_bus::video_control() const {
@@ -194,6 +460,61 @@ bool model2_bus::save_nvram() {
         m_last_nvram_save_frame = m_frame_number;
     }
     return saved;
+}
+
+uint8_t model2_bus::srally_link_type() const {
+    // Sega Rally's 0x24-byte operator-settings record begins at EEPROM word
+    // zero. Byte 0x0b is LINK TYPE: 0=NOTLINK, 1=CAR1, 2=CAR2 (then
+    // CAR3/CAR4/RELAY, which WhittyArcade's two-cabinet UI does not expose).
+    constexpr std::size_t link_type_offset = 0x0b;
+    const std::size_t word = link_type_offset / 2;
+    const uint8_t value = static_cast<uint8_t>(
+        m_eeprom_words[word] >> ((link_type_offset & 1) * 8));
+    return value <= 2 ? value : 0;
+}
+
+bool model2_bus::set_srally_link_type(uint8_t type) {
+    if (type > 2 ||
+        !m_roms ||
+        m_roms->set != model2_rom_set::sega_rally_revision_c)
+        return false;
+
+    std::array<uint8_t, 128> bytes{};
+    for (std::size_t word = 0; word < m_eeprom_words.size(); ++word) {
+        bytes[word * 2] = static_cast<uint8_t>(m_eeprom_words[word]);
+        bytes[word * 2 + 1] =
+            static_cast<uint8_t>(m_eeprom_words[word] >> 8);
+    }
+    constexpr std::size_t record_size = 0x24;
+    constexpr std::size_t link_type_offset = 0x0b;
+    if (bytes[2] != record_size || bytes[3] != 0) return false;
+    m_forced_srally_link_type = static_cast<int8_t>(type);
+    if (bytes[link_type_offset] == type) return true;
+
+    bytes[link_type_offset] = type;
+    // Match an original service-menu save by advancing its revision counter.
+    uint32_t revision = static_cast<uint32_t>(bytes[4]) |
+        (static_cast<uint32_t>(bytes[5]) << 8) |
+        (static_cast<uint32_t>(bytes[6]) << 16) |
+        (static_cast<uint32_t>(bytes[7]) << 24);
+    ++revision;
+    bytes[4] = static_cast<uint8_t>(revision);
+    bytes[5] = static_cast<uint8_t>(revision >> 8);
+    bytes[6] = static_cast<uint8_t>(revision >> 16);
+    bytes[7] = static_cast<uint8_t>(revision >> 24);
+    const uint16_t checksum =
+        sega_record_crc(bytes.data() + 2, record_size - 2);
+    bytes[0] = static_cast<uint8_t>(checksum);
+    bytes[1] = static_cast<uint8_t>(checksum >> 8);
+    for (std::size_t word = 0; word < m_eeprom_words.size(); ++word)
+        m_eeprom_words[word] = static_cast<uint16_t>(
+            bytes[word * 2] | (bytes[word * 2 + 1] << 8));
+    if (std::getenv("MODEL2_NVRAM_TRACE"))
+        std::fprintf(stderr,
+                     "Sega Rally EEPROM LINK TYPE=%u revision=%u crc=%04x\n",
+                     type, revision, checksum);
+    m_nvram_dirty = true;
+    return save_nvram();
 }
 
 bool model2_bus::in_range(uint32_t address, uint32_t base,
@@ -279,6 +600,7 @@ void model2_bus::attach(const model2_roms& roms,
 }
 
 void model2_bus::reset() {
+    close_comm_peer();
     auto clear = [](std::vector<uint8_t>& memory, uint8_t value = 0) {
         std::fill(memory.begin(), memory.end(), value);
     };
@@ -326,8 +648,14 @@ void model2_bus::reset() {
     m_comm_fg = 0;
     m_comm_zfg = 0;
     m_comm_loopback = false;
+    m_comm_peer_mode = false;
+    m_comm_peer_seen = false;
     m_comm_link_alive = false;
     m_comm_link_timer = 0;
+    m_comm_node_id = 0;
+    m_comm_local_port = 0;
+    m_comm_peer_port = 0;
+    m_comm_sequence = 0;
     m_comm_loopback_frame.fill(0);
     m_comm_loopback_frame_valid = false;
     ++m_video_generation;
@@ -395,6 +723,16 @@ void model2_bus::reset() {
     m_unmapped_writes = 0;
     m_last_unmapped_read = 0;
     m_last_unmapped_write = 0;
+
+    // A paired WhittyArcade launch represents two cabinets with their
+    // communication boards physically attached. Bring the board up before
+    // the game boots so the two processes can discover one another even when
+    // an old battery-RAM image still says NOTLINK. Normal single-cabinet
+    // launches have no MODEL2_COMM_NODE and retain the game's CN behaviour.
+    if (environment_comm_node() != 0) {
+        m_comm_cn = 1;
+        initialize_comm_board();
+    }
 }
 
 uint8_t model2_bus::read8(uint32_t address) {
@@ -527,8 +865,9 @@ uint8_t model2_bus::read8(uint32_t address) {
         }
         return m_uart_registers[0];
     }
-    if (in_range(address, 0x01d00000, m_backup_ram.size()))
+    if (in_range(address, 0x01d00000, m_backup_ram.size())) {
         return read_region(m_backup_ram, address, 0x01d00000, 0xff);
+    }
     if (in_range(address, 0x02000000, 0x2000000))
         return read_region(m_roms->main_data, address, 0x02000000);
     if (in_range(address, 0x06000000, 0x1000000))
@@ -903,41 +1242,24 @@ void model2_bus::write8(uint32_t address, uint8_t value) {
         return;
     }
     if (address == 0x01a04000 || address == 0x01a14000) {
+        if (std::getenv("MODEL2_COMM_TRACE"))
+            std::fprintf(stderr,
+                         "Model 2 comm CN=%u frame=%u (was %u)\n",
+                         value & 1, m_frame_number, m_comm_cn);
         const bool enabling = !m_comm_cn && (value & 1);
         m_comm_cn = value & 1;
         if (!m_comm_cn) {
+            close_comm_peer();
             m_comm_fg = 0;
             m_comm_zfg = 0;
             m_comm_loopback = false;
+            m_comm_peer_mode = false;
+            m_comm_peer_seen = false;
             m_comm_link_alive = false;
             m_comm_link_timer = 0;
             m_comm_loopback_frame_valid = false;
         } else if (enabling) {
-            std::fill(m_communication_ram.begin(),
-                      m_communication_ram.end(), 0);
-            m_communication_ram[0x01] = 0x02;
-            m_communication_ram[0x12] = 0x00;
-            m_communication_ram[0x13] = 0x0e; // 0x0e00-byte frame
-            m_communication_ram[0x14] = 0xc0;
-            m_communication_ram[0x15] = 0x01; // ring offset 0x01c0
-            m_comm_zfg = 0;
-            const char* link = std::getenv("MODEL2_COMM_LINK");
-            // MAME's default endpoints listen on 0.0.0.0:15112 and connect
-            // back to 127.0.0.1:15112. Thus a NOTLINK cabinet still forms a
-            // one-node ring after the communication board's four-second
-            // discovery period. Sega Rally does not activate its local AI
-            // cars while that ring remains pending.
-            m_comm_loopback = !link || std::strcmp(link, "0") != 0;
-            m_comm_link_alive = false;
-            m_comm_link_timer = 0x00e8; // 58 Hz * 4 seconds in EPR-16726
-            m_comm_loopback_frame_valid = false;
-            m_communication_ram[0x00] = 0x00;
-            m_communication_ram[0x02] = 0xff;
-            m_communication_ram[0x03] = 0xff;
-            if (std::getenv("MODEL2_COMM_TRACE"))
-                std::fprintf(stderr,
-                             "Model 2 comm enabled frame=%u loopback=%d\n",
-                             m_frame_number, m_comm_loopback);
+            initialize_comm_board();
         }
         return;
     }
@@ -1212,7 +1534,59 @@ void model2_bus::eeprom_clock_rising(bool data_in) {
             (m_eeprom_write_shift << 1) | (data_in ? 1 : 0));
         if (++m_eeprom_write_bits == 16) {
             if (m_eeprom_write_enabled) {
-                m_eeprom_words[m_eeprom_address] = m_eeprom_write_shift;
+                uint16_t write_value = m_eeprom_write_shift;
+                // LINK TYPE is the high byte of word five.  The launcher
+                // selects the physical cabinet role, so make Sega Rally's
+                // startup transaction itself observe/write that role.  A
+                // later checksum-only repair leaves the game's in-memory
+                // settings as NOTLINK for the whole current boot.
+                if (m_eeprom_address == 5 &&
+                    m_forced_srally_link_type >= 0 &&
+                    environment_comm_node() != 0) {
+                    write_value = static_cast<uint16_t>(
+                        (write_value & 0x00ff) |
+                        (static_cast<uint16_t>(
+                             m_forced_srally_link_type) << 8));
+                }
+                if (std::getenv("MODEL2_NVRAM_TRACE") &&
+                    m_eeprom_address <= 0x11)
+                    std::fprintf(stderr,
+                                 "Sega Rally EEPROM word %u: %04x -> %04x\n",
+                                 m_eeprom_address,
+                                 m_eeprom_words[m_eeprom_address],
+                                 write_value);
+                m_eeprom_words[m_eeprom_address] = write_value;
+                // A paired host chooses the physical cabinet role. Keep
+                // Sega Rally's startup rewrite from reverting CAR1/CAR2 to
+                // NOTLINK while the communication ring is still starting.
+                // The game writes its complete 0x24-byte settings record in
+                // order, so repair the role and checksum when its final word
+                // arrives.
+                if (m_eeprom_address == 0x11 &&
+                    m_forced_srally_link_type >= 0) {
+                    constexpr std::size_t record_size = 0x24;
+                    constexpr std::size_t link_type_offset = 0x0b;
+                    std::array<uint8_t, record_size> record{};
+                    for (std::size_t word = 0; word < record.size() / 2;
+                         ++word) {
+                        record[word * 2] =
+                            static_cast<uint8_t>(m_eeprom_words[word]);
+                        record[word * 2 + 1] = static_cast<uint8_t>(
+                            m_eeprom_words[word] >> 8);
+                    }
+                    record[link_type_offset] =
+                        static_cast<uint8_t>(m_forced_srally_link_type);
+                    const uint16_t checksum = sega_record_crc(
+                        record.data() + 2, record_size - 2);
+                    record[0] = static_cast<uint8_t>(checksum);
+                    record[1] = static_cast<uint8_t>(checksum >> 8);
+                    for (std::size_t word = 0; word < record.size() / 2;
+                         ++word) {
+                        m_eeprom_words[word] = static_cast<uint16_t>(
+                            record[word * 2] |
+                            (record[word * 2 + 1] << 8));
+                    }
+                }
                 m_nvram_dirty = true;
             }
             m_eeprom_write_pending = false;
@@ -1380,10 +1754,9 @@ void model2_bus::vblank() {
     // Keeping a separate staging frame matters because TX and RX regions
     // overlap; copying the current bytes immediately made opponents consume
     // partially updated state and disappear intermittently.
-    if (m_comm_cn && m_comm_loopback) {
-        constexpr std::size_t frame_start = 0x2000;
-        constexpr std::size_t frame_size = 0x0e00;
-        constexpr std::size_t frame_receive = frame_start + 0x01c0;
+    if (m_comm_cn && m_comm_peer_mode) {
+        tick_comm_peer();
+    } else if (m_comm_cn && m_comm_loopback) {
         if (!m_comm_link_alive) {
             m_communication_ram[0x00] = 0x00;
             m_communication_ram[0x02] = 0xff;
@@ -1403,16 +1776,16 @@ void model2_bus::vblank() {
                                  "Model 2 comm linked frame=%u id=1 count=1\n",
                                  m_frame_number);
             }
-        } else if (frame_receive + frame_size <=
+        } else if (comm_frame_receive + comm_frame_size <=
                    m_communication_ram.size()) {
             if (m_comm_loopback_frame_valid) {
                 std::copy(m_comm_loopback_frame.begin(),
                           m_comm_loopback_frame.end(),
-                          m_communication_ram.begin() + frame_receive);
+                          m_communication_ram.begin() + comm_frame_receive);
                 m_comm_zfg ^= 1;
             }
-            std::copy_n(m_communication_ram.begin() + frame_start,
-                        frame_size, m_comm_loopback_frame.begin());
+            std::copy_n(m_communication_ram.begin() + comm_frame_start,
+                        comm_frame_size, m_comm_loopback_frame.begin());
             m_comm_loopback_frame_valid = true;
         }
     } else if (m_comm_cn) {

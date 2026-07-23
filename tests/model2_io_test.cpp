@@ -24,6 +24,7 @@ int main() {
     };
     store_word(roms.copro_tgp_tables, 0, 0x3f800000);
     store_word(roms.copro_data, 0x20 * 4, 0xc3461cee);
+    roms.set = model2_rom_set::sega_rally_revision_c;
     model2_bus bus;
     bus.attach(roms);
 
@@ -172,6 +173,7 @@ int main() {
     // cabinet is attached and it refuses normal standalone coin/start input.
     assert(bus.read8(0x01a04000) == 0xfe);
     assert(bus.read8(0x01a04002) == 0xfe);
+    if (!test_unset_environment("MODEL2_COMM_NODE")) return 1;
     if (!test_unset_environment("MODEL2_COMM_LINK")) return 1;
     bus.write8(0x01a04000, 1);
     assert(bus.read8(0x01a04000) == 0xff);
@@ -206,6 +208,84 @@ int main() {
     if (!test_unset_environment("MODEL2_COMM_LINK")) return 1;
     assert(bus.read8(0x01a04000) == 0xfe);
     assert(bus.read8(0x01a04002) == 0xfe);
+
+    // Paired WhittyArcade processes use two localhost UDP endpoints. Exercise
+    // the same transport in-process: each cabinet receives the other
+    // cabinet's complete preceding communication frame and reports a
+    // two-node ring.
+    model2_bus peer1;
+    if (!test_set_environment("MODEL2_COMM_NODE", "1")) return 1;
+    if (!test_set_environment("MODEL2_COMM_LOCAL_PORT", "35121")) return 1;
+    if (!test_set_environment("MODEL2_COMM_PEER_PORT", "35122")) return 1;
+    peer1.attach(roms);
+    model2_bus peer2;
+    if (!test_set_environment("MODEL2_COMM_NODE", "2")) return 1;
+    if (!test_set_environment("MODEL2_COMM_LOCAL_PORT", "35122")) return 1;
+    if (!test_set_environment("MODEL2_COMM_PEER_PORT", "35121")) return 1;
+    peer2.attach(roms);
+    // Paired launch powers both boards for discovery, but the game's CN
+    // reset must still take effect. Sega Rally resets and then enables the
+    // board after reading its CAR1/CAR2 operator setting.
+    assert(peer1.read8(0x01a04000) == 0xff);
+    assert(peer2.read8(0x01a04000) == 0xff);
+    peer1.write8(0x01a04000, 0);
+    peer2.write8(0x01a04000, 0);
+    assert(peer1.read8(0x01a04000) == 0xfe);
+    assert(peer2.read8(0x01a04000) == 0xfe);
+    if (!test_set_environment("MODEL2_COMM_NODE", "1")) return 1;
+    if (!test_set_environment("MODEL2_COMM_LOCAL_PORT", "35121")) return 1;
+    if (!test_set_environment("MODEL2_COMM_PEER_PORT", "35122")) return 1;
+    peer1.write8(0x01a04000, 1);
+    if (!test_set_environment("MODEL2_COMM_NODE", "2")) return 1;
+    if (!test_set_environment("MODEL2_COMM_LOCAL_PORT", "35122")) return 1;
+    if (!test_set_environment("MODEL2_COMM_PEER_PORT", "35121")) return 1;
+    peer2.write8(0x01a04000, 1);
+    peer1.write8(0x01a02000, 0x11);
+    peer2.write8(0x01a02000, 0x22);
+    for (unsigned tick = 0; tick < 4; ++tick) {
+        peer1.vblank();
+        peer2.vblank();
+    }
+    assert(peer1.read8(0x01a00000) == 0x01);
+    assert(peer2.read8(0x01a00000) == 0x01);
+    assert(peer1.read8(0x01a00002) == 0x01);
+    assert(peer2.read8(0x01a00002) == 0x02);
+    assert(peer1.read8(0x01a00003) == 0x02);
+    assert(peer2.read8(0x01a00003) == 0x02);
+    assert(peer1.read8(0x01a021c0) == 0x22);
+    assert(peer2.read8(0x01a021c0) == 0x11);
+    if (!test_unset_environment("MODEL2_COMM_NODE")) return 1;
+    if (!test_unset_environment("MODEL2_COMM_LOCAL_PORT")) return 1;
+    if (!test_unset_environment("MODEL2_COMM_PEER_PORT")) return 1;
+    peer1.write8(0x01a04000, 0);
+    peer2.write8(0x01a04000, 0);
+
+    // Network-cabinet mode uses the same packet protocol on two physical
+    // computers. LAN broadcast removes the need to type the peer's address;
+    // each role listens on its own fixed port and ignores its own node ID.
+    {
+        model2_bus network1;
+        if (!test_set_environment("MODEL2_COMM_NETWORK", "1")) return 1;
+        if (!test_set_environment("MODEL2_COMM_NODE", "1")) return 1;
+        if (!test_set_environment("MODEL2_COMM_LOCAL_PORT", "35123")) return 1;
+        if (!test_set_environment("MODEL2_COMM_PEER_PORT", "35124")) return 1;
+        network1.attach(roms);
+        model2_bus network2;
+        if (!test_set_environment("MODEL2_COMM_NODE", "2")) return 1;
+        if (!test_set_environment("MODEL2_COMM_LOCAL_PORT", "35124")) return 1;
+        if (!test_set_environment("MODEL2_COMM_PEER_PORT", "35123")) return 1;
+        network2.attach(roms);
+        for (unsigned tick = 0; tick < 4; ++tick) {
+            network1.vblank();
+            network2.vblank();
+        }
+        assert(network1.read8(0x01a00000) == 0x01);
+        assert(network2.read8(0x01a00000) == 0x01);
+        if (!test_unset_environment("MODEL2_COMM_NETWORK")) return 1;
+        if (!test_unset_environment("MODEL2_COMM_NODE")) return 1;
+        if (!test_unset_environment("MODEL2_COMM_LOCAL_PORT")) return 1;
+        if (!test_unset_environment("MODEL2_COMM_PEER_PORT")) return 1;
+    }
 
     // The main CPU's 8251 UART must generate a fresh interrupt after every
     // transmitted byte. Sega Rally queues one MIDI byte per TXRDY edge.
@@ -303,6 +383,13 @@ int main() {
     };
     const uint16_t factory = read_eeprom_word(bus, 0);
     assert(factory == 0xeada);
+    assert(bus.srally_link_type() == 0);
+    assert(bus.set_srally_link_type(1));
+    assert(bus.srally_link_type() == 1);
+    assert(bus.set_srally_link_type(2));
+    assert(bus.srally_link_type() == 2);
+    assert(bus.set_srally_link_type(0));
+    assert(bus.srally_link_type() == 0);
 
     // Unlock, write one complete x16 word, let the periodic NVRAM flush run,
     // and prove that a new board instance reads exactly the same bits back.

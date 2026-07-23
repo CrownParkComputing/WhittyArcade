@@ -22,6 +22,13 @@ struct arcade_game_identity {
     const char* short_name;
 };
 
+enum class arcade_multiplayer_mode : uint8_t {
+    none,
+    alternating,
+    simultaneous,
+    native_link,
+};
+
 struct rom_set_manifest {
     const char* short_name;
     const char* display_name;
@@ -29,6 +36,10 @@ struct rom_set_manifest {
     const char* split_parent;
     const char* extra_archives;
     bool working;
+    // Advertise multiplayer launch modes only when the current emulator
+    // actually wires the board's P2 inputs, not merely because the original
+    // title was marketed for multiple players.
+    arcade_multiplayer_mode multiplayer{arcade_multiplayer_mode::none};
 };
 
 constexpr std::size_t arcade_board_count = 11;

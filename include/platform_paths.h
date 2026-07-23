@@ -17,6 +17,19 @@ inline fs::path environment_path(const char* name) {
     return value && *value ? fs::path(value) : fs::path{};
 }
 
+inline int cabinet_node() {
+    const char* value = std::getenv("WHITTY_CABINET_NODE");
+    if (!value || !*value) return 0;
+    const int node = std::atoi(value);
+    return node == 1 || node == 2 ? node : 0;
+}
+
+inline std::string cabinet_scoped_name(std::string name) {
+    const int node = cabinet_node();
+    if (node > 1) name += "-cab" + std::to_string(node);
+    return name;
+}
+
 #if defined(_WIN32)
 inline fs::path windows_environment_path(const wchar_t* name) {
     const wchar_t* value = _wgetenv(name);

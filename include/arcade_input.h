@@ -11,6 +11,14 @@
 #include <string>
 #include <string_view>
 
+// True after the board-neutral two-computer input link has received a packet
+// from the other WhittyArcade instance. Native cabinet links (for example
+// Sega Rally's Model 2 board) report their own state instead.
+bool arcade_input_network_peer_seen();
+uint32_t arcade_input_network_peer_ipv4();
+void arcade_input_set_authoritative_player(uint8_t player);
+uint8_t arcade_input_network_authoritative_player();
+
 class arcade_input {
 public:
     ~arcade_input();
@@ -36,6 +44,9 @@ private:
     float action_value(input_action action, const bool* keys) const;
     float controller_axis_value(int axis) const;
     void set_controller_watch_bindings();
+    bool initialize_network_link();
+    void shutdown_network_link();
+    void exchange_network_input(const input_state& local_state);
 
     SDL_Gamepad* m_controller{nullptr};
     input_mapping_config m_mappings{};
@@ -67,4 +78,13 @@ private:
     bool m_event_watch_installed{false};
     bool m_initialized{false};
     bool m_suppressed{false};
+    std::intptr_t m_network_socket{-1};
+    uint16_t m_network_peer_port{};
+    uint8_t m_network_node{};
+    uint32_t m_network_session{};
+    uint32_t m_network_peer_session{};
+    uint32_t m_network_sequence{};
+    uint32_t m_network_peer_sequence{};
+    uint16_t m_network_peer_age{0xffff};
+    input_state m_network_peer_state{};
 };
