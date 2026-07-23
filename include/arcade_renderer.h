@@ -82,6 +82,11 @@ private:
     TTF_Font* m_settings_font{nullptr};
     int m_fps_texture_width{0};
     int m_fps_texture_height{0};
+    // Player 1/2 corner labels for dual output (built once, drawn per pane).
+    uint32_t m_player_label_texture[2]{0, 0};
+    int m_player_label_w[2]{0, 0};
+    int m_player_label_h[2]{0, 0};
+    bool m_player_labels_ready{false};
     uint64_t m_fps_frame_count{0};
     double m_last_fps{0.0};
     std::chrono::steady_clock::time_point m_fps_epoch{};
@@ -172,6 +177,7 @@ private:
     void cycle_rom_board(int direction);
     void update_settings_texture();
     void update_fps_texture(double fps);
+    void ensure_player_labels();
     void draw_settings_overlay();
     void draw_fps_overlay();
     void update_lightgun_cursor();

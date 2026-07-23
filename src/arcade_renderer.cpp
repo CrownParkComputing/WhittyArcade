@@ -2519,6 +2519,28 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
+    // In the fullscreen split, both players share one surface with no window
+    // titles to tell them apart, so label each half in its bottom-left corner.
+    if (pane_count == 2) {
+        ensure_player_labels();
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glUseProgram(m_settings_program);
+        glActiveTexture(GL_TEXTURE0);
+        const GLint tex_loc =
+            glGetUniformLocation(m_settings_program, "settings_texture");
+        glUniform1i(tex_loc, 0);
+        glBindVertexArray(m_settings_vertex_array);
+        for (int pane = 0; pane < 2; ++pane) {
+            if (!m_player_label_texture[pane]) continue;
+            glViewport(panes[pane].x + 16, panes[pane].y + 16,
+                       m_player_label_w[pane], m_player_label_h[pane]);
+            glBindTexture(GL_TEXTURE_2D, m_player_label_texture[pane]);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
+        glDisable(GL_BLEND);
+    }
+
     const bool status_overlay_visible =
         m_display_settings.show_fps || m_display_settings.show_renderer;
     if (status_overlay_visible) {
@@ -3440,6 +3462,44 @@ void polygon_renderer_gpu::update_fps_texture(double fps) {
     SDL_DestroySurface(panel);
 }
 
+void polygon_renderer_gpu::ensure_player_labels() {
+    if (m_player_labels_ready || !m_settings_font) return;
+    m_player_labels_ready = true;
+    const std::array<const char*, 2> texts{"PLAYER 1", "PLAYER 2"};
+    // Match the light-gun sight colours: cyan for P1, pink for P2.
+    const std::array<SDL_Color, 2> colours{{{56, 214, 255, 255},
+                                            {255, 92, 140, 255}}};
+    for (int i = 0; i < 2; ++i) {
+        SDL_Surface* text = TTF_RenderText_Blended(
+            m_settings_font, texts[i], std::strlen(texts[i]), colours[i]);
+        if (!text) continue;
+        constexpr int padding = 8;
+        SDL_Surface* panel = SDL_CreateSurface(
+            text->w + padding * 2, text->h + padding, SDL_PIXELFORMAT_RGBA32);
+        if (!panel) {
+            SDL_DestroySurface(text);
+            continue;
+        }
+        const SDL_PixelFormatDetails* fmt =
+            SDL_GetPixelFormatDetails(panel->format);
+        SDL_FillSurfaceRect(panel, nullptr,
+                            SDL_MapRGBA(fmt, nullptr, 8, 13, 20, 200));
+        SDL_Rect destination{padding, padding / 2, text->w, text->h};
+        SDL_BlitSurface(text, nullptr, panel, &destination);
+        SDL_DestroySurface(text);
+        if (!m_player_label_texture[i]) glGenTextures(1, &m_player_label_texture[i]);
+        glBindTexture(GL_TEXTURE_2D, m_player_label_texture[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, panel->w, panel->h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, panel->pixels);
+        m_player_label_w[i] = panel->w;
+        m_player_label_h[i] = panel->h;
+        SDL_DestroySurface(panel);
+    }
+}
+
 void polygon_renderer_gpu::draw_fps_overlay() {
     if (!m_fps_texture || m_fps_texture_width <= 0 ||
         m_fps_texture_height <= 0)
@@ -3522,6 +3582,12 @@ void polygon_renderer_gpu::destroy_post_pipeline() {
 void polygon_renderer_gpu::destroy_settings_overlay() {
     if (m_settings_texture) glDeleteTextures(1, &m_settings_texture);
     if (m_fps_texture) glDeleteTextures(1, &m_fps_texture);
+    for (int i = 0; i < 2; ++i) {
+        if (m_player_label_texture[i])
+            glDeleteTextures(1, &m_player_label_texture[i]);
+        m_player_label_texture[i] = 0;
+    }
+    m_player_labels_ready = false;
     if (m_settings_vertex_array)
         glDeleteVertexArrays(1, &m_settings_vertex_array);
     if (m_settings_program) glDeleteProgram(m_settings_program);
