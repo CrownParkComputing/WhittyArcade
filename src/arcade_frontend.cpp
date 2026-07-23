@@ -447,14 +447,14 @@ rom_selection_result show_rom_selector(const std::string& current_path) {
     for (;;) {
         const std::vector<std::string> main_items{
             "Go Arcade",
-            "ROM Library / Import",
+            "ROM Folders",
             "Controllers / Keyboard",
             "EEPROM / NVRAM Manager",
             "High Scores",
         };
         const std::string description = choices.empty() ?
-            "No games are installed yet. Open ROM Library / Import to add "
-            "MAME ZIP archives, or manage saved data and scores." :
+            "No games are installed yet. Open ROM Folders to see where to "
+            "place MAME ZIP archives and disc images." :
             "Choose where you want to go. Games are organised by their "
             "original arcade hardware.";
         const int selected_page = menu.select(
@@ -513,7 +513,8 @@ rom_selection_result show_rom_selector(const std::string& current_path) {
                                 .display_name) + " Games",
                 game_indices.empty() ?
                     "No installed ROM archives were found for this board. "
-                    "Use ROM Library / Import from the Main Menu to add one." :
+                    "Open ROM Folders from the Main Menu to see where to place "
+                    "the required files." :
                     "Choose a game to start.",
                 labels, "Back to Boards", current_selection);
             if (selected_game < 0 ||

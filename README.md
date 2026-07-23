@@ -1,10 +1,12 @@
 # WhittyArcade
 
-WhittyArcade is a standalone multi-board arcade emulator. It currently covers
-Namco System 22, Sega Model 1, Sega Model 2, Phoenix hardware, Galaxian
-hardware and Sega System 16B. MAME's BSD hardware implementations are the
-primary behaviour reference; machine integration, scheduling, frontend,
-storage and host output are standalone.
+WhittyArcade is a focused standalone multi-board arcade emulator for Windows
+and Linux. Its 26 working sets span Namco System 22 / Super System 22, System
+246, Model 1, Model 2, Namco System 1, Galaga, Galaxian, Phoenix, Sega System
+16B, Ghosts'n Goblins hardware and an isolated offline Xbox 360 runtime.
+MAME's BSD hardware implementations are the primary behaviour reference;
+machine integration, scheduling, frontend, storage and host output are
+standalone.
 
 ## Current status
 
@@ -189,36 +191,42 @@ firmware archives or loose firmware files.
 ./build/WhittyArcade /path/to/vformula.zip
 ./build/WhittyArcade /path/to/galaxian.zip
 ./build/WhittyArcade /path/to/uniwars.zip
+./build/WhittyArcade /path/to/gng.zip
+./build/WhittyArcade /path/to/galaga.zip
+./build/WhittyArcade /path/to/pacmania.zip
 ```
 
 ## ROM library and MAME archive layouts
 
-The launcher has a **ROM Library / Import** page. It can import selected ZIPs
-or scan a complete MAME ROM folder. Imported archives are copied unchanged to
-`$XDG_DATA_HOME/WhittyArcade/roms` (normally
-`~/.local/share/WhittyArcade/roms`) on Linux, or
-`%LOCALAPPDATA%\WhittyArcade\roms` on Windows, and grouped into board
-subdirectories.
-WhittyArcade never extracts, modifies or repacks ROM contents, so the imported
-files remain usable by MAME. The original download can safely be removed after
-importing.
+There is no ROM import step. WhittyArcade creates and reads two folders
+directly:
 
-The same importer is available without the GUI:
+- Linux: `~/.local/share/WhittyArcade/roms` and
+  `~/.local/share/WhittyArcade/chd` (or the equivalent below
+  `$XDG_DATA_HOME`).
+- Windows: `%LOCALAPPDATA%\WhittyArcade\roms` and
+  `%LOCALAPPDATA%\WhittyArcade\chd`.
+
+Put supported MAME ZIPs or extracted sets in `roms`, and disc media such as
+`rrv1-a.chd` in `chd`. Files are read in place: WhittyArcade does not copy,
+extract, modify or repack them. Open **ROM Folders** in the launcher to display
+the active paths and run the installed-set audit.
+
+The command-line audit and listing tools use the same folders:
 
 ```bash
-./build/WhittyArcade --import /path/to/mame/roms
-./build/WhittyArcade --import game.zip parent.zip
 ./build/WhittyArcade --list-roms
 ./build/WhittyArcade --audit-roms
+./build/WhittyArcade --audit-roms /path/to/game.zip
 ```
 
 All three standard MAME layouts are supported:
 
-- **Non-merged:** select/import the game ZIP; it already contains its shared
-  ROMs.
+- **Non-merged:** place the game ZIP in the ROM folder; it already contains
+  its shared ROMs.
 - **Split:** keep the listed parent or companion ZIP beside the game ZIP.
   Loaders search the selected archive first and then the exact companion.
-- **Merged:** select/import the parent archive. Entries in clone
+- **Merged:** place the parent archive in the ROM folder. Entries in clone
   subdirectories are found by basename.
 
 Required MAME short names for this build:
@@ -235,6 +243,8 @@ Required MAME short names for this build:
 | Galaxian hardware | `galaxian`, `mooncrst`, `uniwars` | None |
 | Sega System 16B | `shinobi4` | Split collections also need `shinobi6.zip` for the unencrypted sound program; merged `shinobi.zip` works directly |
 | Capcom Ghosts'n Goblins | `gng` | World parent set; ZIP or extracted directory, validated by exact MAME sizes and CRC-32 values |
+| Namco Galaga | `galaga` | None |
+| Namco System 1 | `pacmania` | None |
 
 `vcop` (Virtua Cop, Revision B) is the original Sega Model 2 light-gun game.
 Unlike the Model 2A sets it drives a Sega Model 1 sound board (68000 + YM3438 +
@@ -246,11 +256,10 @@ Racer Full Scale) is still detected and shown as not working. Clone revisions
 not listed above are not silently substituted for the supported program
 revision.
 
-Besides the durable library, discovery checks the explicitly selected path,
-its directory, the legacy `~/Downloads/WhittyArcade-Roms` tree, supported ZIPs
-below `~/Downloads`, and the common `~/roms`, `~/Roms`, and `~/.mame/roms`
-roots. Extra read-only library roots can be supplied as a colon-separated
-`WHITTYARCADE_ROM_PATH` on Linux, or a semicolon-separated value on Windows.
+When a ROM path is supplied explicitly on the command line, WhittyArcade also
+checks that path and its immediate directory for required parent, companion
+and firmware archives. Automatic launcher discovery otherwise stays inside the
+dedicated ROM and CHD folders.
 
 Expected firmware:
 
@@ -260,6 +269,25 @@ Expected firmware:
 The firmware may be loose or stored in `namcoc71.zip` and `namcoc74.zip`.
 Time Crisis and Dirt Dash need `c71.bin` but use the M37710 program contained
 in their own sets, so neither requires `namcoc74.zip`.
+
+## WhittyArcade compared with FinalBurn Neo
+
+WhittyArcade is not an FBNeo fork or replacement. The projects serve different
+use cases:
+
+| Area | WhittyArcade | FinalBurn Neo |
+|---|---|---|
+| Focus | Selected boards with explicit machine, cabinet, operator and frontend integration, including several Namco/Sega 3D systems | Broad arcade, console and computer coverage |
+| Frontend | Purpose-built standalone Windows/Linux arcade launcher and pause menu | Standalone ports plus a widely used Libretro core |
+| ROM workflow | Reads supported current-MAME ZIPs, extracted sets and CHDs directly from dedicated folders; no import/copy/repack step | Requires ROM sets matching the installed FBNeo version; official DAT/rebuild guidance is provided |
+| Catalog | 26 working sets across 11 board/runtime groups | A substantially broader multi-system catalog |
+| Cabinet tools | Per-game driving, twin-stick and light-gun paths; DIP/operator menus; EEPROM/NVRAM manager; verified high-score viewers | Broad input/DIP coverage, native cheats and optional `hiscore.dat` integration |
+| Wider ecosystem | Focused desktop feature set; no netplay, rewind, run-ahead or achievements at present | The Libretro core supports saves, rewind, run-ahead, pre-emptive frames, netplay, achievements and cheats through RetroArch |
+
+See the [official FBNeo repository](https://github.com/finalburnneo/FBNeo) and
+[official Libretro FBNeo documentation](https://docs.libretro.com/library/fbneo/)
+for its current scope and feature matrix. Standalone FBNeo and the Libretro
+core do not expose exactly the same frontend features.
 
 ## Controls
 

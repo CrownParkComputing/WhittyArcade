@@ -29,10 +29,11 @@ chmod +x WhittyArcade
 ./WhittyArcade
 ```
 
-The launcher opens automatically. Select **ROM Library / Import** to import
-individual MAME-compatible ZIP archives or scan a folder. Archives are copied
-unchanged into `~/.local/share/WhittyArcade/roms`; nothing is extracted or
-repacked.
+The launcher opens automatically. Select **ROM Folders** to display the active
+locations. Put MAME-compatible ZIPs or extracted sets in
+`~/.local/share/WhittyArcade/roms` and disc images in
+`~/.local/share/WhittyArcade/chd`. WhittyArcade reads files in place; there is
+no import, copy, extraction or repacking step.
 
 You must provide ROMs and firmware that you are legally entitled to use.
 WhittyArcade does not provide them or link to downloads.
@@ -45,8 +46,7 @@ WhittyArcade does not provide them or link to downloads.
 - `5`: coin 1
 - `1`: start 1
 - `F2`: cabinet test switch
-- `S`: emulator settings during gameplay
-- `C`: controller mappings during gameplay
+- `P`: pause and open the shared in-game menu
 - Escape during gameplay: return to the launcher
 
 Open **Controllers / Keyboard** in the launcher to inspect or change every
@@ -54,9 +54,8 @@ binding. Profiles can be set globally, per arcade board, or per game.
 
 ## Galaxian and UniWar S
 
-Import the standard MAME `galaxian` or `uniwars` ZIP through **ROM Library /
-Import**. No parent or firmware archive is required, and no ROM data is
-included here.
+Put the standard MAME `galaxian` or `uniwars` ZIP in the ROM folder. No parent
+or firmware archive is required, and no ROM data is included here.
 
 - `5`: insert coin; `1`: start Player 1
 - A/D: move left/right; Z: fire
