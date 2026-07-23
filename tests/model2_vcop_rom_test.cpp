@@ -1,4 +1,4 @@
-#include "model2_rom.h"
+#include "sega/model2/model2_rom.h"
 
 #include <cassert>
 #include <cstddef>

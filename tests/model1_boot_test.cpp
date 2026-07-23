@@ -1,4 +1,4 @@
-#include "model1_machine.h"
+#include "sega/model1/model1_machine.h"
 
 #include <cstdio>
 #include <cstdlib>

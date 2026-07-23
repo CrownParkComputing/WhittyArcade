@@ -2,8 +2,8 @@
 // model1io2 board and checks it reaches and stays in its service loop. The
 // full i960<->Z80 dual-port-RAM handshake needs the live main CPU and is
 // exercised on the device; this guards the board bring-up on the host.
-#include "model1_io_board.h"
-#include "model2_rom.h"
+#include "sega/model1/model1_io_board.h"
+#include "sega/model2/model2_rom.h"
 
 #include <array>
 #include <cassert>

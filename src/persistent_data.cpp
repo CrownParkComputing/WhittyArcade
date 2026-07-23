@@ -1,6 +1,6 @@
 #include "persistent_data.h"
 #include "arcade_catalog.h"
-#include "model1_cabinet.h"
+#include "sega/model1/model1_cabinet.h"
 #include "platform_paths.h"
 
 #include <algorithm>

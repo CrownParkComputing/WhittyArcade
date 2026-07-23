@@ -1,4 +1,4 @@
-#include "model2_geometry.h"
+#include "sega/model2/model2_geometry.h"
 
 #include <cassert>
 #include <cstdint>

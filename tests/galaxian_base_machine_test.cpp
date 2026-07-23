@@ -2,8 +2,8 @@
 // memory/input/sound register contract; an optional legal local archive then
 // drives the real Z80 program through attract mode and a coin/start sequence.
 
-#include "galaxian_audio.h"
-#include "galaxian_machine.h"
+#include "namco/galaxian/galaxian_audio.h"
+#include "namco/galaxian/galaxian_machine.h"
 
 #include <algorithm>
 #include <array>

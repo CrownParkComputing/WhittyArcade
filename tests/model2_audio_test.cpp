@@ -1,4 +1,4 @@
-#include "model2_audio.h"
+#include "sega/model2/model2_audio.h"
 
 #include <algorithm>
 #include <cassert>

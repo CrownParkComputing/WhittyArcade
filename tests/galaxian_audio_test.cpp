@@ -7,7 +7,7 @@
 // audio_test) were structurally identical; consolidating them into one
 // binary makes the symmetry obvious in one read.
 
-#include "galaxian_audio.h"
+#include "namco/galaxian/galaxian_audio.h"
 
 #include <array>
 #include <cassert>

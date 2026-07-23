@@ -5,8 +5,8 @@
 // the produced frames are unique and contain a meaningful number of
 // distinct colors and visible pixels.
 
-#include "galaxian_machine.h"
-#include "galaxian_audio.h"
+#include "namco/galaxian/galaxian_machine.h"
+#include "namco/galaxian/galaxian_audio.h"
 
 #include <algorithm>
 #include <cassert>

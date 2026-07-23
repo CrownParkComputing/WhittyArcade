@@ -19,7 +19,7 @@
 // @ 166 667 cycles each (10 MHz / 60 Hz), with no front-end interaction.
 #include "sega/system16b/system16b_machine.h"
 #include "sega/system16b/system16b_rom.h"
-#include "galaxian_machine.h"
+#include "namco/galaxian/galaxian_machine.h"
 #include "m68000_cpu.h"
 
 #include <cstdio>

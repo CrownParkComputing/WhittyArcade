@@ -5,7 +5,7 @@
 // assert identify_set, load + complete(), and the per-set field
 // population; return 1 on any mismatch.
 
-#include "galaxian_rom.h"
+#include "namco/galaxian/galaxian_rom.h"
 
 #include <array>
 #include <cassert>
