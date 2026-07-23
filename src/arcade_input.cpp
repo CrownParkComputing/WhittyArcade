@@ -43,13 +43,13 @@ arcade_input::~arcade_input() {
     shutdown();
 }
 
-int arcade_input::watch_cabinet_button_events(void* userdata,
+bool arcade_input::watch_cabinet_button_events(void* userdata,
                                                SDL_Event* event) {
     auto* input = static_cast<arcade_input*>(userdata);
-    if (!input || !event) return 0;
+    if (!input || !event) return true;
 
-    if (event->type == SDL_KEYDOWN && !event->key.repeat) {
-        const int code = static_cast<int>(event->key.keysym.scancode);
+    if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat) {
+        const int code = static_cast<int>(event->key.scancode);
         for (std::size_t slot = 0; slot < cabinet_actions.size(); ++slot) {
             if (input->m_watch_keyboard_codes[slot].load(
                     std::memory_order_relaxed) == code) {
@@ -57,10 +57,10 @@ int arcade_input::watch_cabinet_button_events(void* userdata,
                     true, std::memory_order_relaxed);
             }
         }
-    } else if (event->type == SDL_CONTROLLERBUTTONDOWN &&
-               event->cbutton.which == input->m_controller_instance.load(
+    } else if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
+               event->gbutton.which == input->m_controller_instance.load(
                                             std::memory_order_relaxed)) {
-        const int code = static_cast<int>(event->cbutton.button);
+        const int code = static_cast<int>(event->gbutton.button);
         for (std::size_t slot = 0; slot < cabinet_actions.size(); ++slot) {
             if (input->m_watch_controller_buttons[slot].load(
                     std::memory_order_relaxed) == code) {
@@ -69,9 +69,9 @@ int arcade_input::watch_cabinet_button_events(void* userdata,
             }
         }
     } else if (input->m_time_crisis_mouse &&
-               (event->type == SDL_MOUSEMOTION ||
-                event->type == SDL_MOUSEBUTTONDOWN ||
-                event->type == SDL_MOUSEBUTTONUP)) {
+               (event->type == SDL_EVENT_MOUSE_MOTION ||
+                event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                event->type == SDL_EVENT_MOUSE_BUTTON_UP)) {
         input->m_mouse_activity.store(true, std::memory_order_relaxed);
     }
     return 0;
@@ -83,14 +83,20 @@ bool arcade_input::initialize(std::string_view game_short_name) {
     // The persistent video worker owns SDL_INIT_EVENTS and is the only thread
     // that pumps the event queue. This adapter owns controller/joystick
     // references for the lifetime of one emulated board.
-    if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) != 0) {
+    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD | SDL_INIT_JOYSTICK)) {
         std::fprintf(stderr, "SDL controller initialization failed: %s\n",
                      SDL_GetError());
         return false;
     }
 
     m_game_short_name = game_short_name;
-    m_time_crisis_mouse = m_game_short_name == "timecris";
+    // Time Crisis (System 22) and the Model 2 light-gun games (Virtua Cop and
+    // Virtua Cop 2) all drive the crosshair from the mouse; only their ADC
+    // calibration differs. The Model 2 guns use the full 0..255 axis.
+    m_lightgun_full_range = m_game_short_name == "vcop" ||
+                            m_game_short_name == "vcop2";
+    m_time_crisis_mouse = m_game_short_name == "timecris" ||
+                          m_lightgun_full_range;
     m_lightgun_mouse_active = false;
     m_mouse_activity.store(false, std::memory_order_relaxed);
     m_mappings = load_input_mappings();
@@ -108,7 +114,7 @@ bool arcade_input::initialize(std::string_view game_short_name) {
         m_cabinet_events[slot].store(false, std::memory_order_relaxed);
     }
 
-    SDL_GameControllerEventState(SDL_ENABLE);
+    SDL_SetGamepadEventsEnabled(true);
     SDL_AddEventWatch(&arcade_input::watch_cabinet_button_events, this);
     m_event_watch_installed = true;
     m_initialized = true;
@@ -139,9 +145,9 @@ void arcade_input::reload_mappings() {
 
     m_controller_bindings = default_controller_bindings();
     if (m_controller) {
-        SDL_Joystick* joystick = SDL_GameControllerGetJoystick(m_controller);
+        SDL_Joystick* joystick = SDL_GetGamepadJoystick(m_controller);
         std::array<char, sdl_guid_text_size> guid_text{};
-        SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick),
+        SDL_GUIDToString(SDL_GetJoystickGUID(joystick),
                                   guid_text.data(),
                                   static_cast<int>(guid_text.size()));
         m_controller_bindings = controller_bindings_for(
@@ -161,16 +167,16 @@ void arcade_input::reload_mappings() {
 void arcade_input::shutdown() {
     std::lock_guard<std::mutex> sdl_lock(arcade_sdl_mutex());
     if (m_event_watch_installed) {
-        SDL_DelEventWatch(&arcade_input::watch_cabinet_button_events, this);
+        SDL_RemoveEventWatch(&arcade_input::watch_cabinet_button_events, this);
         m_event_watch_installed = false;
     }
     m_controller_instance.store(-1, std::memory_order_relaxed);
     if (m_controller) {
-        SDL_GameControllerClose(m_controller);
+        SDL_CloseGamepad(m_controller);
         m_controller = nullptr;
     }
     if (m_initialized) {
-        SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK);
+        SDL_QuitSubSystem(SDL_INIT_GAMEPAD | SDL_INIT_JOYSTICK);
         m_initialized = false;
     }
     m_time_crisis_mouse = false;
@@ -188,65 +194,73 @@ void arcade_input::set_controller_watch_bindings() {
     }
 }
 
-bool arcade_input::open_controller(int joystick_index) {
-    if (joystick_index < 0 || joystick_index >= SDL_NumJoysticks() ||
-        !SDL_IsGameController(joystick_index))
-        return false;
-    SDL_GameController* controller = SDL_GameControllerOpen(joystick_index);
+bool arcade_input::open_controller(SDL_JoystickID joystick_id) {
+    if (!SDL_IsGamepad(joystick_id)) return false;
+    SDL_Gamepad* controller = SDL_OpenGamepad(joystick_id);
     if (!controller) return false;
 
-    if (m_controller) SDL_GameControllerClose(m_controller);
+    if (m_controller) SDL_CloseGamepad(m_controller);
     m_controller = controller;
-    SDL_Joystick* joystick = SDL_GameControllerGetJoystick(m_controller);
-    m_controller_instance.store(SDL_JoystickInstanceID(joystick),
+    SDL_Joystick* joystick = SDL_GetGamepadJoystick(m_controller);
+    m_controller_instance.store(SDL_GetJoystickID(joystick),
                                 std::memory_order_relaxed);
 
     std::array<char, sdl_guid_text_size> guid_text{};
-    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), guid_text.data(),
+    SDL_GUIDToString(SDL_GetJoystickGUID(joystick), guid_text.data(),
                               static_cast<int>(guid_text.size()));
     m_controller_bindings = controller_bindings_for(
         m_mappings, guid_text.data(), m_game_short_name);
     set_controller_watch_bindings();
-    for (int axis = 0; axis < SDL_CONTROLLER_AXIS_MAX; ++axis) {
+    for (int axis = 0; axis < SDL_GAMEPAD_AXIS_COUNT; ++axis) {
         m_axis_centers[static_cast<std::size_t>(axis)] =
-            SDL_GameControllerGetAxis(
-                m_controller, static_cast<SDL_GameControllerAxis>(axis));
+            SDL_GetGamepadAxis(
+                m_controller, static_cast<SDL_GamepadAxis>(axis));
     }
 
     std::printf("Input controller: %s [%s]\n",
-                SDL_GameControllerName(m_controller) ?
-                    SDL_GameControllerName(m_controller) : "unknown",
+                SDL_GetGamepadName(m_controller) ?
+                    SDL_GetGamepadName(m_controller) : "unknown",
                 guid_text.data());
     return true;
 }
 
 void arcade_input::scan_for_controller() {
     if (m_controller) return;
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetJoysticks(&count);
+    if (!ids) return;
     if (const char* preferred = std::getenv("RRACER_CONTROLLER")) {
         const int index = static_cast<int>(std::strtol(preferred, nullptr, 0));
-        if (open_controller(index)) return;
+        if (index >= 0 && index < count && open_controller(ids[index])) {
+            SDL_free(ids);
+            return;
+        }
     }
-    for (int index = 0; index < SDL_NumJoysticks(); ++index)
-        if (open_controller(index)) return;
+    for (int index = 0; index < count; ++index)
+        if (open_controller(ids[index])) {
+            SDL_free(ids);
+            return;
+        }
+    SDL_free(ids);
 }
 
 float arcade_input::keyboard_value(input_action action,
-                                   const uint8_t* keys) const {
+                                   const bool* keys) const {
     if (!keys) return 0.0f;
     const input_binding& binding =
         m_keyboard_bindings[input_action_index(action)];
     if (binding.type != input_binding_type::keyboard || binding.code < 0 ||
-        binding.code >= SDL_NUM_SCANCODES)
+        binding.code >= SDL_SCANCODE_COUNT)
         return 0.0f;
     return keys[binding.code] ? 1.0f : 0.0f;
 }
 
 float arcade_input::controller_axis_value(int axis) const {
-    if (!m_controller || axis < 0 || axis >= SDL_CONTROLLER_AXIS_MAX)
+    if (!m_controller || axis < 0 || axis >= SDL_GAMEPAD_AXIS_COUNT)
         return 0.0f;
     const int center = m_axis_centers[static_cast<std::size_t>(axis)];
-    const int raw = SDL_GameControllerGetAxis(
-        m_controller, static_cast<SDL_GameControllerAxis>(axis));
+    const int raw = SDL_GetGamepadAxis(
+        m_controller, static_cast<SDL_GamepadAxis>(axis));
     const int delta = raw - center;
     const int available = delta < 0 ? center + 32768 : 32767 - center;
     if (available <= 0) return 0.0f;
@@ -260,26 +274,30 @@ float arcade_input::controller_axis_value(int axis) const {
 
 float arcade_input::controller_value(input_action action) const {
     if (!m_controller) return 0.0f;
-    const input_binding& binding =
-        m_controller_bindings[input_action_index(action)];
-    if (binding.type == input_binding_type::controller_button) {
-        if (binding.code < 0 || binding.code >= SDL_CONTROLLER_BUTTON_MAX)
+    const auto binding_value = [this](const input_binding& binding) {
+      if (binding.type == input_binding_type::controller_button) {
+        if (binding.code < 0 || binding.code >= SDL_GAMEPAD_BUTTON_COUNT)
             return 0.0f;
-        return SDL_GameControllerGetButton(
+        return SDL_GetGamepadButton(
                    m_controller,
-                   static_cast<SDL_GameControllerButton>(binding.code)) ?
+                   static_cast<SDL_GamepadButton>(binding.code)) ?
             1.0f : 0.0f;
-    }
-    if (binding.type == input_binding_type::controller_axis) {
+      }
+      if (binding.type == input_binding_type::controller_axis) {
         const float value = controller_axis_value(binding.code);
         return std::clamp(binding.direction < 0 ? -value : value,
                           0.0f, 1.0f);
-    }
-    return 0.0f;
+      }
+      return 0.0f;
+    };
+    const input_binding& primary =
+        m_controller_bindings[input_action_index(action)];
+    return std::max(binding_value(primary),
+                    binding_value(default_controller_alias(action, primary)));
 }
 
 float arcade_input::action_value(input_action action,
-                                 const uint8_t* keys) const {
+                                 const bool* keys) const {
     return std::max(keyboard_value(action, keys), controller_value(action));
 }
 
@@ -289,10 +307,10 @@ void arcade_input::update() {
     // SDL_PollEvent on the video worker has already pumped host events. Never
     // pump here: doing so concurrently with the renderer corrupted SDL/driver
     // state after several live ROM changes.
-    if (m_controller && !SDL_GameControllerGetAttached(m_controller)) {
+    if (m_controller && !SDL_GamepadConnected(m_controller)) {
         std::printf("Input controller disconnected\n");
         m_controller_instance.store(-1, std::memory_order_relaxed);
-        SDL_GameControllerClose(m_controller);
+        SDL_CloseGamepad(m_controller);
         m_controller = nullptr;
         for (auto& code : m_watch_controller_buttons)
             code.store(-1, std::memory_order_relaxed);
@@ -300,7 +318,7 @@ void arcade_input::update() {
     if (!m_controller && (m_update_count % 60) == 0) scan_for_controller();
     ++m_update_count;
 
-    const uint8_t* keys = SDL_GetKeyboardState(nullptr);
+    const bool* keys = SDL_GetKeyboardState(nullptr);
     // Cabinet lines are edge-latched briefly. Real cabinets sample dedicated
     // I/O continuously, whereas the adapter transfers host state once per
     // frame; the latch prevents a quick tap being lost between board scans.
@@ -405,6 +423,8 @@ void arcade_input::update() {
                          cabinet_press_threshold;
     m_state.p2_buttons[0] = action_value(input_action::p2_action1, keys) >=
                             cabinet_press_threshold;
+    m_state.p2_buttons[1] = action_value(input_action::p2_action2, keys) >=
+                            cabinet_press_threshold;
 
     if (m_time_crisis_mouse) {
         const bool mouse_activity = m_mouse_activity.exchange(
@@ -418,10 +438,12 @@ void arcade_input::update() {
 
         SDL_Window* mouse_window = SDL_GetMouseFocus();
         if (m_lightgun_mouse_active && mouse_window) {
-            int mouse_x = 0;
-            int mouse_y = 0;
+            float mouse_fx = 0.0f;
+            float mouse_fy = 0.0f;
             const uint32_t mouse_buttons = SDL_GetMouseState(
-                &mouse_x, &mouse_y);
+                &mouse_fx, &mouse_fy);
+            const int mouse_x = static_cast<int>(mouse_fx);
+            const int mouse_y = static_cast<int>(mouse_fy);
             int window_width = 0;
             int window_height = 0;
             SDL_GetWindowSize(mouse_window, &window_width, &window_height);
@@ -448,8 +470,17 @@ void arcade_input::update() {
                     static_cast<float>(mouse_y - content_y) /
                         static_cast<float>(std::max(content_height - 1, 1)),
                     0.0f, 1.0f);
-                m_state.left_stick_x = cyber_axis(normalized_x * 2.0f - 1.0f);
-                m_state.left_stick_y = cyber_axis(normalized_y * 2.0f - 1.0f);
+                if (m_lightgun_full_range) {
+                    m_state.left_stick_x = static_cast<uint8_t>(
+                        std::lround(normalized_x * 255.0f));
+                    m_state.left_stick_y = static_cast<uint8_t>(
+                        std::lround(normalized_y * 255.0f));
+                } else {
+                    m_state.left_stick_x =
+                        cyber_axis(normalized_x * 2.0f - 1.0f);
+                    m_state.left_stick_y =
+                        cyber_axis(normalized_y * 2.0f - 1.0f);
+                }
                 m_state.buttons[0] =
                     (mouse_buttons & SDL_BUTTON_LMASK) != 0 ||
                     action1 >= cabinet_press_threshold;

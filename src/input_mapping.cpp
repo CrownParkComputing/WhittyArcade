@@ -1,7 +1,7 @@
 #include "input_mapping.h"
 #include "platform_paths.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <cctype>
@@ -50,18 +50,19 @@ constexpr std::array<input_action_descriptor, input_action_count> actions{{
     {input_action::p2_up, "p2_up", "Player 2 - Up"},
     {input_action::p2_down, "p2_down", "Player 2 - Down"},
     {input_action::p2_action1, "p2_action1", "Player 2 - Action 1"},
+    {input_action::p2_action2, "p2_action2", "Player 2 - Action 2"},
 }};
 
 input_binding key(SDL_Scancode scancode) {
     return {input_binding_type::keyboard, static_cast<int>(scancode), 0};
 }
 
-input_binding controller_button(SDL_GameControllerButton button) {
+input_binding controller_button(SDL_GamepadButton button) {
     return {input_binding_type::controller_button,
             static_cast<int>(button), 0};
 }
 
-input_binding controller_axis(SDL_GameControllerAxis axis, int direction) {
+input_binding controller_axis(SDL_GamepadAxis axis, int direction) {
     return {input_binding_type::controller_axis,
             static_cast<int>(axis), direction < 0 ? -1 : 1};
 }
@@ -126,17 +127,17 @@ std::string serialize_binding(const input_binding& binding) {
 bool valid_keyboard_binding(const input_binding& binding) {
     return binding.type == input_binding_type::none ||
            (binding.type == input_binding_type::keyboard &&
-            binding.code >= 0 && binding.code < SDL_NUM_SCANCODES &&
-            binding.code != SDL_SCANCODE_C);
+            binding.code >= 0 && binding.code < SDL_SCANCODE_COUNT &&
+            reserved_host_key_purpose(binding.code).empty());
 }
 
 bool valid_controller_binding(const input_binding& binding) {
     return binding.type == input_binding_type::none ||
            (binding.type == input_binding_type::controller_button &&
             binding.code >= 0 &&
-            binding.code < SDL_CONTROLLER_BUTTON_MAX) ||
+            binding.code < SDL_GAMEPAD_BUTTON_COUNT) ||
            (binding.type == input_binding_type::controller_axis &&
-            binding.code >= 0 && binding.code < SDL_CONTROLLER_AXIS_MAX &&
+            binding.code >= 0 && binding.code < SDL_GAMEPAD_AXIS_COUNT &&
             (binding.direction == -1 || binding.direction == 1));
 }
 
@@ -201,6 +202,14 @@ std::size_t input_action_index(input_action action) noexcept {
     return static_cast<std::size_t>(action);
 }
 
+std::string_view reserved_host_key_purpose(int scancode) noexcept {
+    switch (scancode) {
+    case SDL_SCANCODE_P: return "pause or resume emulation";
+    case SDL_SCANCODE_ESCAPE: return "return to the arcade selector";
+    default: return {};
+    }
+}
+
 input_binding_table default_keyboard_bindings() {
     input_binding_table bindings{};
     const auto set = [&](input_action action, input_binding binding) {
@@ -222,14 +231,15 @@ input_binding_table default_keyboard_bindings() {
     set(input_action::view2, key(SDL_SCANCODE_B));
     set(input_action::view3, key(SDL_SCANCODE_N));
     set(input_action::view4, key(SDL_SCANCODE_G));
+    // Menu shortcuts only take over while paused, so the conventional WASD
+    // cluster remains available to games during normal play.
     set(input_action::p1_left, key(SDL_SCANCODE_A));
     set(input_action::p1_right, key(SDL_SCANCODE_D));
     set(input_action::p1_up, key(SDL_SCANCODE_W));
     set(input_action::p1_down, key(SDL_SCANCODE_S));
     set(input_action::p1_action1, key(SDL_SCANCODE_Z));
     set(input_action::p1_action2, key(SDL_SCANCODE_X));
-    // C opens the current game's controller mapper while a cabinet runs.
-    set(input_action::p1_action3, key(SDL_SCANCODE_V));
+    set(input_action::p1_action3, key(SDL_SCANCODE_C));
     set(input_action::right_left, key(SDL_SCANCODE_LEFT));
     set(input_action::right_right, key(SDL_SCANCODE_RIGHT));
     set(input_action::right_up, key(SDL_SCANCODE_UP));
@@ -239,6 +249,7 @@ input_binding_table default_keyboard_bindings() {
     set(input_action::p2_up, key(SDL_SCANCODE_I));
     set(input_action::p2_down, key(SDL_SCANCODE_K));
     set(input_action::p2_action1, key(SDL_SCANCODE_U));
+    set(input_action::p2_action2, key(SDL_SCANCODE_O));
     return bindings;
 }
 
@@ -248,52 +259,89 @@ input_binding_table default_controller_bindings() {
         bindings[input_action_index(action)] = binding;
     };
     set(input_action::coin1,
-        controller_button(SDL_CONTROLLER_BUTTON_BACK));
+        controller_button(SDL_GAMEPAD_BUTTON_BACK));
     set(input_action::start1,
-        controller_button(SDL_CONTROLLER_BUTTON_START));
+        controller_button(SDL_GAMEPAD_BUTTON_START));
     set(input_action::steer_left,
-        controller_axis(SDL_CONTROLLER_AXIS_LEFTX, -1));
+        controller_axis(SDL_GAMEPAD_AXIS_LEFTX, -1));
     set(input_action::steer_right,
-        controller_axis(SDL_CONTROLLER_AXIS_LEFTX, 1));
+        controller_axis(SDL_GAMEPAD_AXIS_LEFTX, 1));
     set(input_action::gas,
-        controller_axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 1));
+        controller_axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1));
     set(input_action::brake,
-        controller_axis(SDL_CONTROLLER_AXIS_TRIGGERLEFT, 1));
+        controller_axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 1));
     set(input_action::shift_down,
-        controller_button(SDL_CONTROLLER_BUTTON_LEFTSHOULDER));
+        controller_button(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER));
     set(input_action::shift_up,
-        controller_button(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER));
+        controller_button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER));
     set(input_action::view1,
-        controller_button(SDL_CONTROLLER_BUTTON_B));
+        controller_button(SDL_GAMEPAD_BUTTON_EAST));
     set(input_action::view2,
-        controller_button(SDL_CONTROLLER_BUTTON_X));
+        controller_button(SDL_GAMEPAD_BUTTON_WEST));
     set(input_action::view3,
-        controller_button(SDL_CONTROLLER_BUTTON_Y));
+        controller_button(SDL_GAMEPAD_BUTTON_NORTH));
     set(input_action::view4,
-        controller_button(SDL_CONTROLLER_BUTTON_A));
+        controller_button(SDL_GAMEPAD_BUTTON_SOUTH));
     set(input_action::p1_left,
-        controller_axis(SDL_CONTROLLER_AXIS_LEFTX, -1));
+        controller_axis(SDL_GAMEPAD_AXIS_LEFTX, -1));
     set(input_action::p1_right,
-        controller_axis(SDL_CONTROLLER_AXIS_LEFTX, 1));
+        controller_axis(SDL_GAMEPAD_AXIS_LEFTX, 1));
     set(input_action::p1_up,
-        controller_axis(SDL_CONTROLLER_AXIS_LEFTY, -1));
+        controller_axis(SDL_GAMEPAD_AXIS_LEFTY, -1));
     set(input_action::p1_down,
-        controller_axis(SDL_CONTROLLER_AXIS_LEFTY, 1));
+        controller_axis(SDL_GAMEPAD_AXIS_LEFTY, 1));
     set(input_action::p1_action1,
-        controller_button(SDL_CONTROLLER_BUTTON_A));
+        controller_button(SDL_GAMEPAD_BUTTON_SOUTH));
     set(input_action::p1_action2,
-        controller_button(SDL_CONTROLLER_BUTTON_B));
+        controller_button(SDL_GAMEPAD_BUTTON_EAST));
     set(input_action::p1_action3,
-        controller_button(SDL_CONTROLLER_BUTTON_X));
+        controller_button(SDL_GAMEPAD_BUTTON_WEST));
     set(input_action::right_left,
-        controller_axis(SDL_CONTROLLER_AXIS_RIGHTX, -1));
+        controller_axis(SDL_GAMEPAD_AXIS_RIGHTX, -1));
     set(input_action::right_right,
-        controller_axis(SDL_CONTROLLER_AXIS_RIGHTX, 1));
+        controller_axis(SDL_GAMEPAD_AXIS_RIGHTX, 1));
     set(input_action::right_up,
-        controller_axis(SDL_CONTROLLER_AXIS_RIGHTY, -1));
+        controller_axis(SDL_GAMEPAD_AXIS_RIGHTY, -1));
     set(input_action::right_down,
-        controller_axis(SDL_CONTROLLER_AXIS_RIGHTY, 1));
+        controller_axis(SDL_GAMEPAD_AXIS_RIGHTY, 1));
     return bindings;
+}
+
+input_binding default_controller_alias(input_action action,
+                                       const input_binding& primary) {
+    SDL_GamepadAxis expected_axis = SDL_GAMEPAD_AXIS_INVALID;
+    int expected_direction = 0;
+    SDL_GamepadButton alias_button = SDL_GAMEPAD_BUTTON_INVALID;
+    switch (action) {
+    case input_action::steer_left:
+    case input_action::p1_left:
+        expected_axis = SDL_GAMEPAD_AXIS_LEFTX;
+        expected_direction = -1;
+        alias_button = SDL_GAMEPAD_BUTTON_DPAD_LEFT;
+        break;
+    case input_action::steer_right:
+    case input_action::p1_right:
+        expected_axis = SDL_GAMEPAD_AXIS_LEFTX;
+        expected_direction = 1;
+        alias_button = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+        break;
+    case input_action::p1_up:
+        expected_axis = SDL_GAMEPAD_AXIS_LEFTY;
+        expected_direction = -1;
+        alias_button = SDL_GAMEPAD_BUTTON_DPAD_UP;
+        break;
+    case input_action::p1_down:
+        expected_axis = SDL_GAMEPAD_AXIS_LEFTY;
+        expected_direction = 1;
+        alias_button = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+        break;
+    default:
+        return {};
+    }
+
+    if (primary != controller_axis(expected_axis, expected_direction))
+        return {};
+    return controller_button(alias_button);
 }
 
 input_binding_table inherited_input_bindings() {
@@ -634,24 +682,24 @@ std::string input_binding_name(const input_binding& binding) {
     case input_binding_type::none:
         return "Not mapped";
     case input_binding_type::keyboard: {
-        if (binding.code < 0 || binding.code >= SDL_NUM_SCANCODES)
+        if (binding.code < 0 || binding.code >= SDL_SCANCODE_COUNT)
             return "Unknown key";
         const char* name = SDL_GetScancodeName(
             static_cast<SDL_Scancode>(binding.code));
         return std::string("Key ") + (name && *name ? name : "Unknown");
     }
     case input_binding_type::controller_button: {
-        if (binding.code < 0 || binding.code >= SDL_CONTROLLER_BUTTON_MAX)
+        if (binding.code < 0 || binding.code >= SDL_GAMEPAD_BUTTON_COUNT)
             return "Unknown button";
-        const char* name = SDL_GameControllerGetStringForButton(
-            static_cast<SDL_GameControllerButton>(binding.code));
+        const char* name = SDL_GetGamepadStringForButton(
+            static_cast<SDL_GamepadButton>(binding.code));
         return std::string("Button ") + (name && *name ? name : "Unknown");
     }
     case input_binding_type::controller_axis: {
-        if (binding.code < 0 || binding.code >= SDL_CONTROLLER_AXIS_MAX)
+        if (binding.code < 0 || binding.code >= SDL_GAMEPAD_AXIS_COUNT)
             return "Unknown axis";
-        const char* name = SDL_GameControllerGetStringForAxis(
-            static_cast<SDL_GameControllerAxis>(binding.code));
+        const char* name = SDL_GetGamepadStringForAxis(
+            static_cast<SDL_GamepadAxis>(binding.code));
         return std::string("Axis ") + (name && *name ? name : "Unknown") +
                (binding.direction < 0 ? " -" : " +");
     }

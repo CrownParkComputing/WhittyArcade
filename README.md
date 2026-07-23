@@ -120,7 +120,7 @@ synchronisation before CPU parallelism is safe.
 
 ## Build
 
-Dependencies: CMake 3.16+, SDL2, SDL2_ttf, OpenGL 4.3, Vulkan, GLEW, GLM,
+Dependencies: CMake 3.18+, SDL3, SDL3_ttf, OpenGL 4.3, Vulkan, GLEW, GLM,
 OpenAL, zlib, MiniZip, libmpg123 and a C/C++17 compiler.
 
 ### Linux
@@ -131,7 +131,26 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-GitHub Actions builds and tests native x86-64 artifacts for Ubuntu 24.04,
+For fast System 246 iteration without launching a game or opening a window,
+build and run only the ROM, controls, CD-stream, RRV music-decoder and SPU2
+audio regressions:
+
+```bash
+cmake --build build --target check_system246
+```
+
+The RRV music regression reads the logical payload directly from either the
+original CHD or the generated ISO. It can validate, export, or audibly play one
+disc track at a time without booting the emulator:
+
+```bash
+./build/system246_music_test --list
+./build/system246_music_test --verify /path/to/rrv1-a.chd 0
+./build/system246_music_test --play /path/to/rrv1-a.chd 0
+./build/system246_music_test --wav /path/to/rrv1-a.chd 0 rrv-bgm01.wav
+```
+
+GitHub Actions builds and tests native x86-64 artifacts for Ubuntu 26.04,
 Debian 13, Fedora 43, openSUSE Tumbleweed and CachyOS/Arch on every push and
 pull request. Each artifact contains the executable, licence, runtime notes
 and a SHA-256 checksum. See `docs/building_windows_linux.md` for the package
@@ -206,23 +225,32 @@ Required MAME short names for this build:
 
 | Board | Games | Additional archives |
 |---|---|---|
-| Namco System 22 | `ridgerac`, `ridgera2`, `raverace`, `acedrive`, `victlap`, `cybrcomm` | `namcoc71.zip`, `namcoc74.zip` |
+| Namco System 22 | `ridgerac`, `ridgera2`, `raverace`, `acedrive`, `victlap`, `cybrcomm`, `ridgeracf` (not working) | `namcoc71.zip`, `namcoc74.zip` |
 | Namco Super System 22 | `timecris` (World, TS2 Ver.B), `dirtdash` (World, DT2 Ver.C), `aquajet` (World, AJ2 Ver.B) | `namcoc71.zip`; each set carries its M37710 firmware data |
+| Namco System 246 | `rrvac` (Ridge Racer V: Arcade Battle) | `rrv1-a.chd` |
+| Xbox 360 offline | `robotron` (Robotron: 2084) | Extracted `default.xex` with `classic/` and `media/` data |
 | Sega Model 1 | `vformula`, `vf`, `swa`, `wingwar` | Split `vformula` also needs `vr.zip`; merged `vr.zip` works directly |
-| Sega Model 2 | `srallyc` | None (`segabill.zip` is optional) |
+| Sega Model 2 | `srallyc`, `vcop2`, `vcop` | None (`segabill.zip` is optional for `srallyc`) |
 | Phoenix hardware | `phoenix` | None |
 | Galaxian hardware | `galaxian`, `mooncrst`, `uniwars` | None |
 | Sega System 16B | `shinobi4` | Split collections also need `shinobi6.zip` for the unencrypted sound program; merged `shinobi.zip` works directly |
+| Capcom Ghosts'n Goblins | `gng` | World parent set; ZIP or extracted directory, validated by exact MAME sizes and CRC-32 values |
 
-`ridgeracf` (Ridge Racer Full Scale) is detected and shown as not working; its
-incomplete video/linked-cabinet dump is not launchable. Clone revisions not
-listed above are not silently substituted for the supported program revision.
+`vcop` (Virtua Cop, Revision B) is the original Sega Model 2 light-gun game.
+Unlike the Model 2A sets it drives a Sega Model 1 sound board (68000 + YM3438 +
+dual MultiPCM) and reads its guns and switches through a model1io2 cabinet-I/O
+board (a TMPZ84C015 running the `epr-17181` firmware carried inside `vcop.zip`)
+over dual-port RAM. Aim with the mouse, left click fires, right click reloads
+(shoots off-screen); Player 2 shares the same controls. `ridgeracf` (Ridge
+Racer Full Scale) is still detected and shown as not working. Clone revisions
+not listed above are not silently substituted for the supported program
+revision.
 
 Besides the durable library, discovery checks the explicitly selected path,
-its directory, the legacy `~/Downloads/WhittyArcade-Roms` tree and ZIPs placed
-directly in `~/Downloads`. Extra read-only library roots can be supplied as a
-colon-separated `WHITTYARCADE_ROM_PATH` on Linux, or a semicolon-separated
-value on Windows.
+its directory, the legacy `~/Downloads/WhittyArcade-Roms` tree, supported ZIPs
+below `~/Downloads`, and the common `~/roms`, `~/Roms`, and `~/.mame/roms`
+roots. Extra read-only library roots can be supplied as a colon-separated
+`WHITTYARCADE_ROM_PATH` on Linux, or a semicolon-separated value on Windows.
 
 Expected firmware:
 
@@ -256,17 +284,19 @@ Default Xbox-style controller map:
 Default keyboard map:
 
 - Left/Right: steering; Up: accelerator; Down: brake
-- WASD: Player 1 directions; Z/X/C: Player 1 actions
+- W/A/S/D: Player 1 up/left/down/right; Z/X/C: Player 1 actions
 - Arrow keys: twin-stick secondary directions
 - I/J/K/L: Player 2 directions; U: Player 2 action 1
 - `5`: coin 1; `6`: coin 2; `9`: service credit; `F2`: test switch
 - `1`: start 1; `2`: start 2; Z/X: shift down/up; V/B/N/G: views 1-4
-- `Esc`: return from gameplay to the main menu; from the main menu, exit
-- `R`: open/close the board-grouped ROM selector; choosing a
-  recognized ZIP performs a clean machine reset
-- `F8`: edit all 16 cabinet DIP switches (SW2:1-8 and SW3:1-8)
-- `S`: open/close emulator settings: master/music/effects volume, fullscreen,
-  window size, VSync, integer scaling, filtering, and ROM selection
+- `Esc`: return from gameplay to the arcade selector; from there, exit
+- `P`: pause/resume every game; pausing also silences its audio and opens the
+  shared in-game menu. That menu contains Play/Resume, DIP/operator settings,
+  emulator settings, controls, game/ROM selection, and return to selector.
+  Arrow keys or the controller D-pad/left stick navigate; Enter/A selects and
+  Backspace/B returns to the pause menu.
+- Letter keys, including `C`, `D`, `R`, and `S`, are normal mappable gameplay
+  keys and are not bound to host menus
 - Ctrl+Plus/Ctrl+Minus: resize the window from 1x to 4x; Alt+Enter toggles
   borderless fullscreen
 
@@ -372,7 +402,7 @@ belong to the in-game service menu rather than the physical DIP banks.
 
 Ace Driver, Victory Lap and Dirt Dash use the same steering controls, with
 their cabinet-specific wheel and pedal ranges calibrated automatically. Cyber
-Commando uses both controller sticks; on keyboard, WASD controls the left
+Commando uses both controller sticks; on keyboard, W/A/S/D controls the left
 stick and the arrow keys control the right stick. Z/X operate gun
 trigger/missile and V changes view.
 
@@ -417,12 +447,16 @@ switch word, three calibrated ADC values and credit counters once per second.
 - `src/arcade_settings.cpp` — persistent audio/display settings
 - `src/model1_rom.cpp` — validated Model 1 ROM loading/interleave
 - `src/model1_machine.cpp` — V60 bus, interrupts, I/O mailbox and frame timing
+- `src/gng_machine.cpp` — Capcom MC6809 board, graphics decode and compositor
+- `src/gng_audio.cpp` — Ghosts'n Goblins Z80 and dual-YM2203 audio worker
+- `src/gng_rom.cpp` — exact parent-set ROM validation and region assembly
 - `third_party/model1` — standalone Model 1 geometry-board integration and
   Model 1/System 24 video
 - `third_party/mb86233` — standalone Fujitsu geometry-processor core
 - `third_party/musashi` — Musashi MC68020 core
 - `third_party/m37710` — standalone M37702/M37710 CPU core
 - `third_party/v60` — standalone NEC V60 CPU core
+- `third_party/m6809f` — MIT-licensed instance-based MC6809 core
 - `tests` — catalog/lifecycle, ROM, CPU/bus, audio, video and boot regressions
 
 See [architecture](docs/architecture.md),
@@ -431,6 +465,9 @@ See [architecture](docs/architecture.md),
 contracts, the required test path, and the Android-first release plan. The
 separate [Google Play paid-distribution assessment](docs/google_play_sale_feasibility.md)
 records the commercial licence, policy, privacy and store-release gates.
+The ROM-backed [Namco System 246/256 plan](docs/system246_256_board_plan.md)
+selects Ridge Racer V: Arcade Battle as the first target and records its
+backend, media, licensing and validation gates.
 
 ## Credits and licensing
 

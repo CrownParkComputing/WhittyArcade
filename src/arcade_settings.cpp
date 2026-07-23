@@ -85,6 +85,10 @@ emulator_settings load_settings() {
                 settings.renderer = renderer_backend::software;
             else settings.renderer = renderer_backend::opengl;
         }
+        else if (key == "output") {
+            settings.output = value == "dual" ? output_mode::dual :
+                                                output_mode::single;
+        }
     }
     settings.master_volume = std::clamp(settings.master_volume, 0, 200);
     settings.music_volume = std::clamp(settings.music_volume, 0, 100);
@@ -110,7 +114,8 @@ bool save_settings(const emulator_settings& settings) {
            << "linear_filtering=" << settings.linear_filtering << '\n'
            << "show_fps=" << settings.show_fps << '\n'
            << "show_renderer=" << settings.show_renderer << '\n'
-           << "renderer=" << renderer_backend_name(settings.renderer) << '\n';
+           << "renderer=" << renderer_backend_name(settings.renderer) << '\n'
+           << "output=" << output_mode_name(settings.output) << '\n';
     return output.good();
 }
 
@@ -121,4 +126,12 @@ const char* renderer_backend_name(renderer_backend backend) {
     case renderer_backend::opengl: return "opengl";
     }
     return "opengl";
+}
+
+const char* output_mode_name(output_mode mode) {
+    switch (mode) {
+    case output_mode::dual: return "dual";
+    case output_mode::single: return "single";
+    }
+    return "single";
 }

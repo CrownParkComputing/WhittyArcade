@@ -1,0 +1,21 @@
+file(MAKE_DIRECTORY "@WHITTY_OUTPUT_DIR@")
+
+foreach(library IN ITEMS
+        librexruntime.so
+        librexgpu-xenos.so
+        libTracyClient.so
+        libSPIRV-Tools-shared.so)
+    set(source "@WHITTY_REXGLUE_RUNTIME_DIR@/${library}")
+    if(EXISTS "${source}")
+        file(COPY_FILE "${source}" "@WHITTY_OUTPUT_DIR@/${library}"
+             ONLY_IF_DIFFERENT)
+        if(library STREQUAL "librexruntime.so" OR
+           library STREQUAL "librexgpu-xenos.so")
+            file(RPATH_CHANGE
+                FILE "@WHITTY_OUTPUT_DIR@/${library}"
+                OLD_RPATH "@WHITTY_REXGLUE_RUNTIME_DIR@"
+                NEW_RPATH "$ORIGIN")
+        endif()
+    endif()
+endforeach()
+

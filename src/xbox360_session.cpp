@@ -1,0 +1,160 @@
+#include "arcade_session_internal.h"
+#include "platform_paths.h"
+#include "xbox360_audio.h"
+#include "xbox360_rom.h"
+#include "xbox360_runtime_loader.h"
+
+#include <algorithm>
+#include <array>
+#include <cstdio>
+#include <filesystem>
+#include <utility>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+std::int16_t xbox_axis(std::uint8_t value, bool invert) {
+    const int centered = static_cast<int>(value) - 0x7f;
+    int scaled = centered < 0 ? centered * 32768 / 127 :
+                               centered * 32767 / 128;
+    scaled = std::clamp(scaled, -32768, 32767);
+    return static_cast<std::int16_t>(invert ? -scaled : scaled);
+}
+
+class xbox360_emulator final : public video_emulator_session {
+public:
+    xbox360_emulator(std::shared_ptr<arcade_video_worker> video,
+                     std::shared_ptr<arcade_cabinet_state> cabinet)
+        : video_emulator_session(arcade_board_type::xbox360,
+                                 std::move(video), std::move(cabinet)) {}
+
+    ~xbox360_emulator() override {
+        m_runtime.shutdown();
+        m_audio.shutdown();
+        if (m_gpu_renderer) m_gpu_renderer->reset_session();
+        if (m_input) m_input->shutdown();
+    }
+
+    bool initialize(const std::string& rom_path, const std::string&,
+                    const emulator_settings& settings) override {
+        const xbox360_rom_info game = xbox360_rom_loader::inspect(rom_path);
+        if (!game) {
+            std::fprintf(stderr, "%s\n", game.error.c_str());
+            return false;
+        }
+        if (!m_gpu_renderer->initialize(settings)) {
+            std::fprintf(stderr, "Failed to initialize WhittyArcade video\n");
+            return false;
+        }
+        m_input = std::make_unique<arcade_input>();
+        if (!m_input->initialize("robotron"))
+            std::fprintf(stderr,
+                         "Robotron input failed; controls remain neutral\n");
+
+        fs::path config = whitty_platform::config_root();
+        fs::path data = whitty_platform::data_root();
+        if (config.empty()) config = fs::current_path();
+        if (data.empty()) data = config;
+        const fs::path user_root = config / "WhittyArcade" / "xbox360";
+        const fs::path cache_root = data / "WhittyArcade" / "cache" /
+                                    "xbox360";
+        std::error_code directory_error;
+        fs::create_directories(user_root, directory_error);
+        directory_error.clear();
+        fs::create_directories(cache_root, directory_error);
+
+        std::string runtime_error;
+        if (!m_runtime.initialize(game.game_root, user_root.string(),
+                                  cache_root.string(), runtime_error)) {
+            std::fprintf(stderr, "%s\n", runtime_error.c_str());
+            return false;
+        }
+        m_audio.set_master_volume(settings.master_volume);
+        if (!m_audio.initialize())
+            std::fprintf(stderr,
+                         "Robotron audio output unavailable; video will continue\n");
+        std::printf("Robotron: 2084 started offline through the WhittyArcade "
+                    "renderer\n");
+        return true;
+    }
+
+    void run_frame() override {
+        if (!m_input || !m_runtime.running()) return;
+        m_input->set_suppressed(m_gpu_renderer->settings_visible());
+        m_input->update();
+        const input_state& state = m_input->state();
+        whitty_xbox360_input input{};
+        input.struct_size = sizeof(input);
+        input.packet_number = ++m_input_packet;
+        input.left_x = xbox_axis(state.left_stick_x, false);
+        input.left_y = xbox_axis(state.left_stick_y, true);
+        input.right_x = xbox_axis(state.right_stick_x, false);
+        input.right_y = xbox_axis(state.right_stick_y, true);
+        if (state.start) input.buttons |= WHITTY_X360_START;
+        if (state.coin1 || state.view) input.buttons |= WHITTY_X360_BACK;
+        if (state.buttons[0]) input.buttons |= WHITTY_X360_A;
+        if (state.buttons[1]) input.buttons |= WHITTY_X360_B;
+        if (state.buttons[2]) input.buttons |= WHITTY_X360_X;
+        if (state.buttons[3]) input.buttons |= WHITTY_X360_Y;
+        if (state.shift_down) input.buttons |= WHITTY_X360_LEFT_SHOULDER;
+        if (state.shift_up) input.buttons |= WHITTY_X360_RIGHT_SHOULDER;
+        m_runtime.set_input(input);
+
+        int width = 0;
+        int height = 0;
+        std::uint64_t sequence = 0;
+        if (m_runtime.capture_frame(m_frame_rgba, width, height, sequence) &&
+            sequence != m_presented_sequence) {
+            m_gpu_renderer->present_rgba_frame(m_frame_rgba.data(), width,
+                                               height, 1280, 720);
+            m_presented_sequence = sequence;
+        }
+
+        for (;;) {
+            const std::size_t frames = m_runtime.read_audio(
+                m_audio_scratch.data(), m_audio_scratch.size() / 2);
+            if (frames == 0) break;
+            m_audio.enqueue(m_audio_scratch.data(), frames);
+        }
+
+        xbox360_runtime_achievement unlocked;
+        while (m_runtime.take_unlocked_achievement(unlocked)) {
+            std::printf("Achievement unlocked: %s (%uG)\n",
+                        unlocked.label.c_str(), unlocked.gamerscore);
+        }
+    }
+
+    void reload_input_mappings() override {
+        if (m_input) m_input->reload_mappings();
+    }
+    double frame_seconds() const override { return 1.0 / 60.0; }
+
+protected:
+    void apply_audio_settings(const emulator_settings& settings) override {
+        m_audio.set_master_volume(settings.master_volume);
+    }
+    void set_audio_paused(bool paused) override {
+        m_audio.set_paused(paused);
+        m_runtime.set_paused(paused);
+    }
+
+private:
+    std::unique_ptr<arcade_input> m_input;
+    xbox360_runtime_loader m_runtime;
+    xbox360_audio_output m_audio;
+    std::vector<std::uint8_t> m_frame_rgba;
+    std::array<std::int16_t, 8192> m_audio_scratch{};
+    std::uint64_t m_presented_sequence{};
+    std::uint32_t m_input_packet{};
+};
+
+} // namespace
+
+std::unique_ptr<emulator_session> make_xbox360_session(
+        std::shared_ptr<arcade_video_worker> video,
+        std::shared_ptr<arcade_cabinet_state> cabinet) {
+    return std::make_unique<xbox360_emulator>(
+        std::move(video), std::move(cabinet));
+}

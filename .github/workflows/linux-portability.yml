@@ -20,9 +20,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - distro: ubuntu-24.04
+          - distro: ubuntu-26.04
             family: apt
-            image: ubuntu:24.04
+            image: ubuntu:26.04
           - distro: debian-13
             family: apt
             image: debian:13
@@ -46,7 +46,7 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends \
                 build-essential ca-certificates cmake git ninja-build \
-                pkg-config libgl1-mesa-dev libsdl2-dev libsdl2-ttf-dev \
+                pkg-config libgl1-mesa-dev libsdl3-dev libsdl3-ttf-dev \
                 libopenal-dev libglew-dev libglm-dev zlib1g-dev \
                 libminizip-dev libvulkan-dev libmpg123-dev \
                 fonts-dejavu-core
@@ -55,7 +55,7 @@ jobs:
               dnf -y --setopt=install_weak_deps=False install \
                 ca-certificates gcc gcc-c++ cmake git ninja-build \
                 pkgconf-pkg-config libglvnd-devel mesa-libGL-devel \
-                SDL2-devel SDL2_ttf-devel openal-soft-devel glew-devel \
+                SDL3-devel SDL3_ttf-devel openal-soft-devel glew-devel \
                 glm-devel zlib-ng-compat-devel minizip-ng-compat-devel \
                 vulkan-loader-devel mpg123-devel dejavu-sans-fonts
               ;;
@@ -63,7 +63,7 @@ jobs:
               zypper --non-interactive refresh
               zypper --non-interactive install --no-recommends \
                 ca-certificates gcc gcc-c++ cmake git ninja pkgconf-pkg-config \
-                Mesa-libGL-devel sdl2-compat-devel SDL2_ttf-devel \
+                Mesa-libGL-devel SDL3-devel SDL3_ttf-devel \
                 openal-soft-devel glew-devel glm-devel zlib-devel \
                 minizip-devel vulkan-devel mpg123-devel dejavu-fonts
               ;;

@@ -34,6 +34,8 @@ void arcade_video_worker::shutdown() {
     if (m_thread.joinable()) m_thread.join();
     std::lock_guard<std::mutex> lock(m_task_mutex);
     m_tasks.clear();
+    m_pending_rgba_frame.reset();
+    m_rgba_task_queued = false;
     m_pending_model2_frame.reset();
     m_model2_task_queued = false;
 }
@@ -52,10 +54,14 @@ void arcade_video_worker::reset_session() {
     {
         std::lock_guard<std::mutex> lock(m_task_mutex);
         m_tasks.clear();
+        m_pending_rgba_frame.reset();
+        m_rgba_task_queued = false;
         m_pending_model2_frame.reset();
         m_model2_task_queued = false;
         m_tasks.emplace_back([completed](polygon_renderer_gpu& renderer) {
             renderer.set_lightgun_cursor(false);
+            renderer.set_single_screen_only(false);
+            renderer.reset_session_ui();
             completed->set_value();
         });
     }
@@ -63,6 +69,11 @@ void arcade_video_worker::reset_session() {
     // The window may have been closed between the alive check and the fence.
     // Do not deadlock teardown if the worker exits without consuming it.
     result.wait_for(std::chrono::seconds(2));
+    {
+        std::lock_guard<std::mutex> lock(m_frontend_mutex);
+        m_operator_actions.clear();
+        m_controls_pending = false;
+    }
     m_settings_visible.store(false, std::memory_order_release);
     m_paused.store(false, std::memory_order_release);
 }
@@ -143,17 +154,18 @@ void arcade_video_worker::harvest_frontend(polygon_renderer_gpu& renderer) {
     m_paused.store(renderer.paused());
     std::string selected;
     emulator_settings changed;
+    operator_menu_action operator_action;
     const bool has_rom = renderer.take_rom_selection(selected);
-    const bool has_dip = renderer.take_dip_request();
+    const bool has_operator = renderer.take_operator_action(operator_action);
     const bool has_controls = renderer.take_controls_request();
     const bool has_settings = renderer.take_settings_change(changed);
-    if (!has_rom && !has_dip && !has_controls && !has_settings) return;
+    if (!has_rom && !has_operator && !has_controls && !has_settings) return;
     std::lock_guard<std::mutex> lock(m_frontend_mutex);
     if (has_rom) {
         m_selected_rom = std::move(selected);
         m_rom_pending = true;
     }
-    if (has_dip) m_dip_pending = true;
+    if (has_operator) m_operator_actions.push_back(operator_action);
     if (has_controls) m_controls_pending = true;
     if (has_settings) {
         m_changed_settings = changed;
@@ -167,10 +179,22 @@ void arcade_video_worker::refresh_output() {
     });
 }
 
+void arcade_video_worker::set_single_screen_only(bool enabled) {
+    enqueue([enabled](polygon_renderer_gpu& renderer) {
+        renderer.set_single_screen_only(enabled);
+    });
+}
+
 void arcade_video_worker::set_rom_choices(
     std::vector<rom_choice> choices) {
     enqueue([choices = std::move(choices)](polygon_renderer_gpu& renderer) mutable {
         renderer.set_rom_choices(std::move(choices));
+    });
+}
+
+void arcade_video_worker::set_operator_menu(operator_menu_definition menu) {
+    enqueue([menu = std::move(menu)](polygon_renderer_gpu& renderer) mutable {
+        renderer.set_operator_menu(std::move(menu));
     });
 }
 
@@ -182,11 +206,12 @@ bool arcade_video_worker::take_rom_selection(std::string& path) {
     return true;
 }
 
-bool arcade_video_worker::take_dip_request() {
+bool arcade_video_worker::take_operator_action(operator_menu_action& action) {
     std::lock_guard<std::mutex> lock(m_frontend_mutex);
-    const bool pending = m_dip_pending;
-    m_dip_pending = false;
-    return pending;
+    if (m_operator_actions.empty()) return false;
+    action = m_operator_actions.front();
+    m_operator_actions.pop_front();
+    return true;
 }
 
 bool arcade_video_worker::take_controls_request() {
@@ -194,12 +219,6 @@ bool arcade_video_worker::take_controls_request() {
     const bool pending = m_controls_pending;
     m_controls_pending = false;
     return pending;
-}
-
-void arcade_video_worker::set_f2_opens_dip(bool enabled) {
-    enqueue([enabled](polygon_renderer_gpu& renderer) {
-        renderer.set_f2_opens_dip(enabled);
-    });
 }
 
 void arcade_video_worker::set_lightgun_cursor(bool enabled, uint8_t player) {
@@ -313,14 +332,40 @@ void arcade_video_worker::render_scene(const view_matrix& view,
 }
 
 void arcade_video_worker::present_rgba_frame(const uint8_t* pixels,
-                                             int width, int height) {
+                                             int width, int height,
+                                             int display_width,
+                                             int display_height) {
     if (!pixels || width <= 0 || height <= 0) return;
     const std::size_t size = static_cast<std::size_t>(width) * height * 4;
-    std::vector<uint8_t> copy(pixels, pixels + size);
-    enqueue([copy = std::move(copy), width, height]
-            (polygon_renderer_gpu& renderer) {
-        renderer.present_rgba_frame(copy.data(), width, height);
-    });
+    rgba_frame frame{{pixels, pixels + size}, width, height,
+                     display_width, display_height};
+    {
+        std::lock_guard<std::mutex> lock(m_task_mutex);
+        if (!m_alive.load()) return;
+        // A board may produce frames faster than the host can present them.
+        // Keep only the newest complete RGBA frame so latency remains bounded
+        // instead of turning a temporary slowdown into a growing input queue.
+        m_pending_rgba_frame = std::move(frame);
+        if (m_rgba_task_queued) return;
+        m_rgba_task_queued = true;
+        m_tasks.emplace_back([this](polygon_renderer_gpu& renderer) {
+            rgba_frame newest;
+            {
+                std::lock_guard<std::mutex> pending_lock(m_task_mutex);
+                if (!m_pending_rgba_frame) {
+                    m_rgba_task_queued = false;
+                    return;
+                }
+                newest = std::move(*m_pending_rgba_frame);
+                m_pending_rgba_frame.reset();
+                m_rgba_task_queued = false;
+            }
+            renderer.present_rgba_frame(newest.pixels.data(), newest.width,
+                                        newest.height, newest.display_width,
+                                        newest.display_height);
+        });
+    }
+    m_task_ready.notify_one();
 }
 
 void arcade_video_worker::present_model2_frame(model2_gpu_frame frame) {

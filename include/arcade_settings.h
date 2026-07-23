@@ -9,6 +9,14 @@ enum class renderer_backend {
     software,
 };
 
+// Single: one letterboxed image on the host window. Dual: the drawable is
+// split into one pane per physical screen (side by side on an ultrawide or a
+// spanned desktop) so two players each get their own aspect-correct view.
+enum class output_mode {
+    single,
+    dual,
+};
+
 struct emulator_settings {
     int master_volume{100};
     int music_volume{100};
@@ -21,9 +29,11 @@ struct emulator_settings {
     bool show_fps{false};
     bool show_renderer{true};
     renderer_backend renderer{renderer_backend::opengl};
+    output_mode output{output_mode::single};
 };
 
 const char* renderer_backend_name(renderer_backend backend);
+const char* output_mode_name(output_mode mode);
 
 emulator_settings load_settings();
 bool save_settings(const emulator_settings& settings);

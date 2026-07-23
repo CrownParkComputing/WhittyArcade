@@ -12,7 +12,7 @@ On an up-to-date CachyOS or Arch Linux system:
 
 ```bash
 sudo pacman -S --needed \
-  libglvnd mesa glu sdl2-compat sdl2_ttf openal glew \
+  libglvnd mesa glu sdl3 sdl3_ttf openal glew \
   vulkan-icd-loader mpg123 zlib minizip freetype2 harfbuzz
 ```
 
@@ -83,6 +83,36 @@ included in this archive.
 The player is hidden by default, matching the cabinet pedal. Alternative gun,
 pedal and trigger controls can be assigned in the game-specific controller
 profile.
+
+## Virtua Cop mouse gun
+
+Use the Revision B `vcop` set. Everything the game needs — including the
+`epr-17181` cabinet-I/O board firmware and the MultiPCM sound ROMs — is part of
+`vcop.zip`; no extra archive is required. No ROM or firmware is included in this
+archive.
+
+- Move the mouse to aim.
+- Left click: fire
+- Right click: reload (shoots off-screen, the cabinet's reload gesture)
+- `5`: insert coin; `1`: start
+
+Sound runs on the emulated Sega Model 1 board (68000 + YM3438 + dual MultiPCM),
+and the guns and switches are served by the emulated model1io2 I/O board. Gun
+and trigger controls can be reassigned in the game-specific controller profile.
+
+## Virtua Cop 2 mouse gun
+
+Use the `vcop2` set. It is a Model 2A light-gun game with SCSP sound; no extra
+archive is required. No ROM or firmware is included in this archive.
+
+- Move the mouse to aim.
+- Left click: fire
+- Right click: reload (shoots off-screen)
+- `5`: insert coin; `1`: start
+
+Virtua Cop 2 reads its guns through the 315-5649 I/O chip's serial channel,
+so its aiming is calibrated independently of the original Virtua Cop. Gun and
+trigger controls can be reassigned in the game-specific controller profile.
 
 ## Dirt Dash
 

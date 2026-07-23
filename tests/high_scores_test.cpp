@@ -63,6 +63,30 @@ int main() {
     assert(table.entries[0].score == 100000);
     assert(table.entries[0].name == "AAA");
 
+    std::vector<std::uint8_t> gng(0x5e, 0);
+    for (std::size_t rank = 0; rank < 10; ++rank) {
+        // Reverse record storage to prove that the rank-pointer table is used.
+        gng[rank * 2] = 0x15;
+        gng[rank * 2 + 1] =
+            static_cast<std::uint8_t>(44 + (9 - rank) * 7);
+        const std::size_t record = 20 + rank * 7;
+        gng[record + 0] = 0x00;
+        gng[record + 1] = static_cast<std::uint8_t>(rank);
+        gng[record + 2] = 0x00;
+        gng[record + 3] = 0x00;
+        gng[record + 4] = 'A' + static_cast<std::uint8_t>(rank);
+        gng[record + 5] = 0x1d;
+        gng[record + 6] = 'Z';
+    }
+    gng[0x5a] = 0x00;
+    gng[0x5b] = 0x09;
+    assert(decode_high_score_table("gng", gng, table, &error));
+    assert(table.entries.size() == 10);
+    assert(table.entries[0].score == 90000);
+    assert(table.entries[0].name == "J.Z");
+    assert(table.entries[9].score == 0);
+    assert(table.extra_scores[0].second == 90000);
+
     std::vector<std::uint8_t> invalid = phoenix;
     invalid[1] = 0xfa;
     assert(!decode_high_score_table("phoenix", invalid, table, &error));

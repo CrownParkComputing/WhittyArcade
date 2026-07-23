@@ -17,7 +17,11 @@ struct arcade_cabinet_state {
     uint16_t system22_dip_switches{0xffff};
     // SW1: 1C/1C. SW2: upright, demo sound on, 3 lives, normal difficulty,
     // slow bullets and English.
-    uint16_t shinobi_dip_switches{0x7cff};
+    uint16_t system16b_dip_switches{0x7cff};
+    // SW1 low, SW2 high: 1C/1C, demo sound on, upright, 3 lives, normal.
+    uint16_t gng_dip_switches{0xfbdf};
+    // Namco System 1: service, freeze, watchdog/diagnostic options all off.
+    uint8_t system1_dip_switches{0xff};
 };
 
 class emulator_session {
@@ -42,6 +46,9 @@ public:
     virtual void set_paused(bool paused) = 0;
     virtual void refresh_output() = 0;
     virtual double frame_seconds() const = 0;
+    // True when run_frame waits for the emulated display producer. Such a
+    // session must not also be throttled by main()'s independent host timer.
+    virtual bool producer_paced() const { return false; }
 };
 
 // The sole board-to-runtime registration point. A new hardware platform adds

@@ -1,8 +1,50 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
 project(WhittyArcade LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(WHITTY_ENABLE_SYSTEM246
+    "Build the Play!-backed Namco System 246/RRV runtime" ON)
+set(WHITTY_PLAY_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/play"
+    CACHE PATH "Pinned Play! source tree used by the System 246 runtime")
+
+option(WHITTY_ENABLE_XBOX360
+    "Build the isolated ReXGlue Robotron: 2084 runtime module" OFF)
+set(WHITTY_REXGLUE_SDK_DIR "$ENV{REXSDK_DIR}" CACHE PATH
+    "ReXGlue SDK source directory used for the Xbox 360 runtime")
+set(WHITTY_REXGLUE_RUNTIME_DIR "" CACHE PATH
+    "Directory containing the ReXGlue Release shared libraries")
+set(WHITTY_ROBOTRON_GENERATED_DIR "" CACHE PATH
+    "Directory containing Robotron ReXGlue-generated sources.cmake")
+set(WHITTY_REXGLUE_CXX_COMPILER "" CACHE FILEPATH
+    "Clang 20+ compiler used for the generated Xbox 360 code")
+
+if(WHITTY_ENABLE_XBOX360)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR
+            "The isolated WhittyArcade/ReXGlue bridge currently supports Linux")
+    endif()
+    if(NOT WHITTY_REXGLUE_SDK_DIR)
+        message(FATAL_ERROR
+            "WHITTY_ENABLE_XBOX360 requires WHITTY_REXGLUE_SDK_DIR")
+    endif()
+    if(NOT WHITTY_REXGLUE_RUNTIME_DIR)
+        set(WHITTY_REXGLUE_RUNTIME_DIR
+            "${WHITTY_REXGLUE_SDK_DIR}/out/linux-amd64/Release"
+            CACHE PATH "Directory containing ReXGlue Release libraries" FORCE)
+    endif()
+    if(NOT EXISTS "${WHITTY_ROBOTRON_GENERATED_DIR}/sources.cmake")
+        message(FATAL_ERROR
+            "WHITTY_ENABLE_XBOX360 requires WHITTY_ROBOTRON_GENERATED_DIR "
+            "to contain Robotron's generated sources.cmake")
+    endif()
+    if(NOT WHITTY_REXGLUE_CXX_COMPILER)
+        find_program(WHITTY_REXGLUE_CXX_COMPILER
+            NAMES clang++-22 clang++
+            REQUIRED)
+    endif()
+endif()
 
 if(NOT WIN32)
     set(WHITTY_MATH_LIB m)
@@ -10,7 +52,7 @@ endif()
 
 # Find required libraries
 find_package(OpenGL REQUIRED)
-find_package(SDL2 REQUIRED)
+find_package(SDL3 REQUIRED)
 find_package(OpenAL REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(glm CONFIG REQUIRED)
@@ -19,8 +61,75 @@ find_package(ZLIB REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MINIZIP REQUIRED IMPORTED_TARGET minizip)
-pkg_check_modules(SDL2_TTF REQUIRED IMPORTED_TARGET SDL2_ttf)
+pkg_check_modules(SDL3_TTF REQUIRED IMPORTED_TARGET sdl3-ttf)
 pkg_check_modules(MPG123 REQUIRED IMPORTED_TARGET libmpg123)
+
+if(WHITTY_ENABLE_SYSTEM246)
+    if(NOT EXISTS "${WHITTY_PLAY_SOURCE_DIR}/Source/CMakeLists.txt")
+        message(FATAL_ERROR
+            "WHITTY_ENABLE_SYSTEM246=ON requires the pinned Play! submodule. "
+            "Run: git submodule update --init --recursive")
+    endif()
+
+    # Play!'s platform header only sets these variables when Play! itself is
+    # the top-level project. Set the same narrow platform contract here before
+    # adding its core, headless Vulkan GS and OpenAL output targets.
+    if(WIN32)
+        set(TARGET_PLATFORM_WIN32 TRUE)
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            set(TARGET_PLATFORM_WIN32_X64 TRUE)
+        else()
+            set(TARGET_PLATFORM_WIN32_X86 TRUE)
+        endif()
+    elseif(APPLE)
+        set(TARGET_PLATFORM_MACOS TRUE)
+    else()
+        set(TARGET_PLATFORM_UNIX TRUE)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64.*|AARCH64.*)")
+            set(TARGET_PLATFORM_UNIX_AARCH64 TRUE)
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
+            set(TARGET_PLATFORM_UNIX_ARM TRUE)
+        endif()
+    endif()
+    list(PREPEND CMAKE_MODULE_PATH
+        "${WHITTY_PLAY_SOURCE_DIR}/deps/Dependencies/cmake-modules")
+    set(ENABLE_AMAZON_S3 OFF CACHE BOOL
+        "Disable Play! network-backed disc loading" FORCE)
+    # Avoid libchdr's bundled zlib CMake renaming a tracked source header.
+    set(WITH_SYSTEM_ZLIB ON CACHE BOOL
+        "Use WhittyArcade's system zlib for Play!/libchdr" FORCE)
+
+    add_subdirectory("${WHITTY_PLAY_SOURCE_DIR}/Source"
+        "${CMAKE_BINARY_DIR}/play-core" EXCLUDE_FROM_ALL)
+    # Recent system zlib headers no longer define the legacy STDC macros used
+    # by zstd's compatibility wrapper. The wrapper is C99 and safe to mark so.
+    if(TARGET libzstd_zlibwrapper_static AND NOT MSVC)
+        target_compile_definitions(libzstd_zlibwrapper_static PRIVATE
+            STDC=1 STDC99=1 Z_HAVE_STDARG_H=1)
+    endif()
+    add_subdirectory("${WHITTY_PLAY_SOURCE_DIR}/Source/gs/GSH_Vulkan"
+        "${CMAKE_BINARY_DIR}/play-gsh-vulkan" EXCLUDE_FROM_ALL)
+    add_subdirectory("${WHITTY_PLAY_SOURCE_DIR}/Source/sound/SH_OpenAL"
+        "${CMAKE_BINARY_DIR}/play-sh-openal" EXCLUDE_FROM_ALL)
+
+    add_library(system246_rrv_music STATIC
+        src/system246/rrv_music.cpp)
+    target_include_directories(system246_rrv_music PUBLIC
+        ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(system246_rrv_music SYSTEM PRIVATE
+        ${WHITTY_PLAY_SOURCE_DIR}/deps/libchdr/include)
+    target_link_libraries(system246_rrv_music PUBLIC
+        chdr-static Threads::Threads)
+    target_compile_options(system246_rrv_music PRIVATE
+        -Wall -Wextra -Wpedantic)
+
+    add_library(system246_video_geometry STATIC
+        src/system246/video_deinterlace.cpp)
+    target_include_directories(system246_video_geometry PUBLIC
+        ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(system246_video_geometry PRIVATE
+        -Wall -Wextra -Wpedantic)
+endif()
 
 # FindGLEW can be backed by either CMake's module or a distribution-provided
 # config package. Prefer its imported target because openSUSE's config does
@@ -164,6 +273,31 @@ add_library(chips_z80 STATIC third_party/chips/z80_impl.cpp)
 target_include_directories(chips_z80 SYSTEM PUBLIC third_party/chips)
 target_compile_options(chips_z80 PRIVATE -w)
 
+# Portable Namco System 1 core, adapted from the user's Galaga '88 host port.
+add_library(namcos1_core STATIC
+    third_party/namcos1/namcos1_machine.c
+    third_party/namcos1/namcos1_render.c
+    third_party/namcos1/mc6809.c
+    third_party/namcos1/m6801.c)
+target_include_directories(namcos1_core PUBLIC third_party/namcos1)
+target_compile_options(namcos1_core PRIVATE -w)
+
+# Instance-based MC6809 interpreter imported from the MIT-licensed GnG
+# Amiga prototype and adapted to use a per-machine I/O context.
+add_library(m6809f STATIC
+    third_party/m6809f/m6809f.c
+    third_party/m6809f/m6809f_ops_alu16.c
+    third_party/m6809f/m6809f_ops_alu8.c
+    third_party/m6809f/m6809f_ops_branch.c
+    third_party/m6809f/m6809f_ops_load.c
+    third_party/m6809f/m6809f_ops_misc.c
+    third_party/m6809f/m6809f_ops_page2.c
+    third_party/m6809f/m6809f_ops_page3.c
+    third_party/m6809f/m6809f_ops_rmw.c
+    third_party/m6809f/m6809f_ops_stack.c)
+target_include_directories(m6809f PUBLIC third_party/m6809f)
+target_compile_options(m6809f PRIVATE -O2 -w)
+
 add_library(model1_io STATIC src/model1_io_board.cpp)
 target_include_directories(model1_io PUBLIC
     ${CMAKE_SOURCE_DIR}/include)
@@ -189,7 +323,7 @@ target_compile_options(model1_dsb PRIVATE -Wall -Wextra -Wpedantic)
 
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
-include_directories(${SDL2_INCLUDE_DIRS})
+include_directories(${SDL3_INCLUDE_DIRS})
 include_directories(${GLEW_INCLUDE_DIRS})
 
 add_library(arcade_audio_output STATIC src/arcade_audio_output.cpp)
@@ -206,7 +340,9 @@ set(SOURCES
     src/model1_session.cpp
     src/model2_session.cpp
     src/galaxian_session.cpp
-    src/shinobi_session.cpp
+    src/system16b_session.cpp
+    src/gng_session.cpp
+    src/namco_session.cpp
     src/arcade_renderer.cpp
     src/arcade_input.cpp
     src/input_mapping.cpp
@@ -229,6 +365,12 @@ set(SOURCES
     src/system22_sprites.cpp
     src/system22_tms320c25.cpp
     src/system22_rom.cpp
+    src/system246_rom.cpp
+    src/system246_controls.cpp
+    src/xbox360_rom.cpp
+    src/xbox360_runtime_loader.cpp
+    src/xbox360_audio.cpp
+    src/xbox360_session.cpp
     src/model1_rom.cpp
     src/model1_machine.cpp
     src/model1_audio.cpp
@@ -246,11 +388,33 @@ set(SOURCES
     src/galaxian_machine.cpp
     src/galaxian_machine_mooncrst.cpp
     src/galaxian_machine_phoenix.cpp
-    src/shinobi_rom.cpp
-    src/shinobi_audio.cpp
-    src/shinobi_machine.cpp
-    src/shinobi_machine_shinobi.cpp
+    src/system16b_rom.cpp
+    src/system16b_audio.cpp
+    src/system16b_machine.cpp
+    src/system16b_machine_shinobi.cpp
+    src/gng_rom.cpp
+    src/gng_machine.cpp
+    src/gng_audio.cpp
+    src/namco_rom.cpp
+    src/galaga_machine.cpp
+    src/galaga_audio.cpp
+    src/system1_machine.cpp
+    src/system1_audio.cpp
+    src/system1_ym2151.cpp
 )
+
+if(WHITTY_ENABLE_SYSTEM246)
+    list(APPEND SOURCES
+        src/system246_session.cpp
+        src/system246/play_audio.cpp
+        src/system246/play_core.cpp
+        src/system246/play_input.cpp
+        src/system246/play_media_cache.cpp
+        src/system246/play_video.cpp
+    )
+else()
+    list(APPEND SOURCES src/system246_session_stub.cpp)
+endif()
 
 if(WIN32)
     enable_language(RC)
@@ -270,12 +434,21 @@ else()
 endif()
 target_include_directories(WhittyArcade PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/moira/Moira)
+if(WHITTY_ENABLE_SYSTEM246)
+    target_include_directories(WhittyArcade SYSTEM PRIVATE
+        ${WHITTY_PLAY_SOURCE_DIR}/Source
+        ${WHITTY_PLAY_SOURCE_DIR}/deps/CodeGen/include
+        ${WHITTY_PLAY_SOURCE_DIR}/deps/Framework/include
+        ${WHITTY_PLAY_SOURCE_DIR}/deps/libchdr/include)
+    target_compile_definitions(WhittyArcade PRIVATE
+        WHITTY_ENABLE_SYSTEM246=1)
+endif()
 
 # Link libraries
 target_link_libraries(WhittyArcade
     PRIVATE
     ${OPENGL_LIBRARIES}
-    ${SDL2_LIBRARIES}
+    SDL3::SDL3
     ${OPENAL_LIBRARY}
     ${WHITTY_GLEW_TARGET}
     musashi
@@ -292,24 +465,58 @@ target_link_libraries(WhittyArcade
     m68000_cpu
     ymfm
     segapcm
+    m6809f
+    namcos1_core
+    chips_z80
     Threads::Threads
     PkgConfig::MINIZIP
-    PkgConfig::SDL2_TTF
+    PkgConfig::SDL3_TTF
     ZLIB::ZLIB
     Vulkan::Vulkan
     ${WHITTY_MATH_LIB}
+    ${CMAKE_DL_LIBS}
 )
+if(WHITTY_ENABLE_SYSTEM246)
+    # Static-library order matters: the Vulkan backend consumes GS symbols
+    # implemented by PlayCore, so PlayCore must follow the backend targets.
+    target_link_libraries(WhittyArcade PRIVATE
+        gsh_vulkan sh_openal PlayCore system246_rrv_music
+        system246_video_geometry chdr-static)
+endif()
 if(WIN32)
     target_link_libraries(WhittyArcade PRIVATE ole32 shell32 uuid)
-    if(TARGET SDL2::SDL2main)
-        target_link_libraries(WhittyArcade PRIVATE SDL2::SDL2main)
-    endif()
 endif()
 
 # Compiler flags
 target_compile_options(WhittyArcade PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:-O2;-Wall;-Wextra;-Wpedantic>"
 )
+
+if(WHITTY_ENABLE_XBOX360)
+    include(ExternalProject)
+    ExternalProject_Add(whitty_robotron_runtime_project
+        SOURCE_DIR "${CMAKE_SOURCE_DIR}/src/xbox360/bridge"
+        BINARY_DIR "${CMAKE_BINARY_DIR}/xbox360-bridge"
+        CMAKE_ARGS
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_CXX_COMPILER=${WHITTY_REXGLUE_CXX_COMPILER}
+            -DWHITTY_HOST_INCLUDE_DIR=${CMAKE_SOURCE_DIR}/include
+            -DWHITTY_REXGLUE_SDK_DIR=${WHITTY_REXGLUE_SDK_DIR}
+            -DWHITTY_REXGLUE_RUNTIME_DIR=${WHITTY_REXGLUE_RUNTIME_DIR}
+            -DWHITTY_ROBOTRON_GENERATED_DIR=${WHITTY_ROBOTRON_GENERATED_DIR}
+            -DWHITTY_OUTPUT_DIR=${CMAKE_BINARY_DIR}
+        BUILD_BYPRODUCTS
+            "${CMAKE_BINARY_DIR}/libwhitty_robotron_runtime.so"
+            "${CMAKE_BINARY_DIR}/librexruntime.so"
+            "${CMAKE_BINARY_DIR}/librexgpu-xenos.so"
+            "${CMAKE_BINARY_DIR}/libTracyClient.so"
+            "${CMAKE_BINARY_DIR}/librenderdoc.so"
+        UPDATE_COMMAND ""
+        INSTALL_COMMAND ""
+        BUILD_ALWAYS TRUE
+        USES_TERMINAL_BUILD TRUE)
+    add_dependencies(WhittyArcade whitty_robotron_runtime_project)
+endif()
 
 enable_testing()
 add_test(NAME video_session_lifecycle_test
@@ -347,11 +554,7 @@ add_executable(input_mapping_test
 )
 target_include_directories(input_mapping_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
-if(TARGET SDL2::SDL2)
-    target_link_libraries(input_mapping_test PRIVATE SDL2::SDL2)
-else()
-    target_link_libraries(input_mapping_test PRIVATE ${SDL2_LIBRARIES})
-endif()
+target_link_libraries(input_mapping_test PRIVATE SDL3::SDL3)
 target_compile_options(input_mapping_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 target_compile_definitions(input_mapping_test PRIVATE SDL_MAIN_HANDLED)
@@ -362,10 +565,14 @@ add_executable(arcade_catalog_test
     src/arcade_catalog.cpp
     src/arcade_game_probe.cpp
     src/system22_rom.cpp
+    src/system246_rom.cpp
+    src/xbox360_rom.cpp
     src/model1_rom.cpp
     src/model2_rom.cpp
     src/galaxian_rom.cpp
-    src/shinobi_rom.cpp
+    src/system16b_rom.cpp
+    src/gng_rom.cpp
+    src/namco_rom.cpp
 )
 target_include_directories(arcade_catalog_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
@@ -381,16 +588,211 @@ add_executable(rom_library_test
     src/arcade_game_probe.cpp
     src/rom_library.cpp
     src/system22_rom.cpp
+    src/system246_rom.cpp
+    src/xbox360_rom.cpp
     src/model1_rom.cpp
     src/model2_rom.cpp
     src/galaxian_rom.cpp
-    src/shinobi_rom.cpp
+    src/system16b_rom.cpp
+    src/gng_rom.cpp
+    src/namco_rom.cpp
 )
 target_include_directories(rom_library_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(rom_library_test PRIVATE PkgConfig::MINIZIP ZLIB::ZLIB)
 target_compile_options(rom_library_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME rom_library_test COMMAND rom_library_test)
+
+add_executable(namco_rom_test
+    tests/namco_rom_test.cpp
+    src/namco_rom.cpp)
+target_include_directories(namco_rom_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(namco_rom_test PRIVATE PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(namco_rom_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+set(NAMCO_GALAGA_TEST_ROM "" CACHE FILEPATH
+    "Optional galaga.zip used by the Namco ROM integration test")
+set(NAMCO_PACMANIA_TEST_ROM "" CACHE FILEPATH
+    "Optional pacmania.zip used by the Namco ROM integration test")
+if(NAMCO_GALAGA_TEST_ROM AND NAMCO_PACMANIA_TEST_ROM)
+    add_test(NAME namco_rom_test COMMAND namco_rom_test
+        "${NAMCO_GALAGA_TEST_ROM}" "${NAMCO_PACMANIA_TEST_ROM}")
+else()
+    add_test(NAME namco_rom_test COMMAND namco_rom_test)
+endif()
+
+add_executable(gng_machine_test
+    tests/gng_machine_test.cpp
+    src/gng_rom.cpp
+    src/gng_machine.cpp
+    src/high_scores.cpp)
+target_include_directories(gng_machine_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(gng_machine_test PRIVATE
+    m6809f PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(gng_machine_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+add_test(NAME gng_machine_test COMMAND gng_machine_test)
+set(GNG_TEST_ROM "" CACHE FILEPATH
+    "Optional gng.zip used by the Ghosts'n Goblins boot/gameplay test")
+if(GNG_TEST_ROM)
+    add_test(NAME gng_rom_integration_test
+        COMMAND gng_machine_test "${GNG_TEST_ROM}")
+    set_tests_properties(gng_rom_integration_test PROPERTIES
+        LABELS "gng;rom;integration")
+endif()
+
+add_executable(system246_rom_test
+    tests/system246_rom_test.cpp
+    src/system246_rom.cpp
+)
+target_include_directories(system246_rom_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(system246_rom_test PRIVATE
+    PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(system246_rom_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+set(SYSTEM246_TEST_ROM "" CACHE FILEPATH
+    "Optional rrvac.zip used by the System 246 ROM/media integration test")
+set(SYSTEM246_TEST_CHD "" CACHE FILEPATH
+    "Optional rrv1-a.chd used by the System 246 ROM/media integration test")
+if(SYSTEM246_TEST_ROM AND SYSTEM246_TEST_CHD)
+    add_test(NAME system246_rom_test
+        COMMAND system246_rom_test ${SYSTEM246_TEST_ROM} ${SYSTEM246_TEST_CHD})
+else()
+add_test(NAME system246_rom_test COMMAND system246_rom_test)
+endif()
+
+add_executable(system246_controls_test
+    tests/system246_controls_test.cpp
+    src/system246_controls.cpp
+)
+target_include_directories(system246_controls_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(system246_controls_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+add_test(NAME system246_controls_test COMMAND system246_controls_test)
+
+set_tests_properties(system246_rom_test system246_controls_test PROPERTIES
+    LABELS system246)
+
+add_executable(xbox360_rom_test
+    tests/xbox360_rom_test.cpp
+    src/xbox360_rom.cpp
+)
+target_include_directories(xbox360_rom_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(xbox360_rom_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+set(XBOX360_TEST_GAME "" CACHE PATH
+    "Optional extracted Robotron: 2084 directory used by the XEX test")
+if(XBOX360_TEST_GAME)
+    add_test(NAME xbox360_rom_test
+        COMMAND xbox360_rom_test "${XBOX360_TEST_GAME}")
+else()
+    add_test(NAME xbox360_rom_test COMMAND xbox360_rom_test)
+endif()
+set_tests_properties(xbox360_rom_test PROPERTIES LABELS xbox360)
+
+if(WHITTY_ENABLE_XBOX360)
+    add_executable(xbox360_runtime_smoke_test
+        tests/xbox360_runtime_smoke_test.cpp
+        src/xbox360_runtime_loader.cpp)
+    target_include_directories(xbox360_runtime_smoke_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(xbox360_runtime_smoke_test PRIVATE
+        Threads::Threads ${CMAKE_DL_LIBS})
+    target_compile_options(xbox360_runtime_smoke_test PRIVATE
+        -Wall -Wextra -Wpedantic -UNDEBUG)
+    add_dependencies(xbox360_runtime_smoke_test
+        whitty_robotron_runtime_project)
+    if(XBOX360_TEST_GAME)
+        add_test(NAME xbox360_runtime_smoke_test
+            COMMAND xbox360_runtime_smoke_test
+                "${XBOX360_TEST_GAME}"
+                "${CMAKE_BINARY_DIR}/xbox360-test-user"
+                "${CMAKE_BINARY_DIR}/xbox360-test-cache")
+        set_tests_properties(xbox360_runtime_smoke_test PROPERTIES
+            LABELS "xbox360;runtime"
+            TIMEOUT 45)
+    endif()
+endif()
+
+if(WHITTY_ENABLE_SYSTEM246)
+    add_executable(system246_video_test tests/system246_video_test.cpp)
+    target_include_directories(system246_video_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/third_party/play/Source)
+    target_link_libraries(system246_video_test PRIVATE
+        system246_video_geometry)
+    target_compile_options(system246_video_test PRIVATE
+        -Wall -Wextra -Wpedantic -UNDEBUG)
+    add_test(NAME system246_video_test COMMAND system246_video_test)
+    set_tests_properties(system246_video_test PROPERTIES
+        LABELS "system246;video")
+
+    add_executable(system246_music_test tests/system246_music_test.cpp)
+    target_include_directories(system246_music_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${SDL3_INCLUDE_DIRS})
+    target_link_libraries(system246_music_test PRIVATE
+        system246_rrv_music SDL3::SDL3)
+    target_compile_options(system246_music_test PRIVATE
+        -Wall -Wextra -Wpedantic -UNDEBUG)
+    if(SYSTEM246_TEST_CHD)
+        add_test(NAME system246_music_test
+            COMMAND system246_music_test --verify "${SYSTEM246_TEST_CHD}")
+    else()
+        add_test(NAME system246_music_test COMMAND system246_music_test)
+    endif()
+    set_tests_properties(system246_music_test PROPERTIES
+        LABELS "system246;audio;media"
+        TIMEOUT 30)
+
+    add_executable(system246_cd_test tests/system246_cd_test.cpp)
+    target_include_directories(system246_cd_test PRIVATE
+        ${WHITTY_PLAY_SOURCE_DIR}/Source)
+    target_compile_options(system246_cd_test PRIVATE
+        -Wall -Wextra -Wpedantic -UNDEBUG)
+    set(SYSTEM246_TEST_ISO "" CACHE FILEPATH
+        "Optional generated RRV1_A ISO used by the CD/audio integration test")
+    if(SYSTEM246_TEST_ISO)
+        add_test(NAME system246_cd_test
+            COMMAND system246_cd_test "${SYSTEM246_TEST_ISO}")
+    else()
+        add_test(NAME system246_cd_test COMMAND system246_cd_test)
+    endif()
+    set_tests_properties(system246_cd_test PROPERTIES
+        LABELS "system246;media")
+
+    add_executable(system246_spu2_test tests/system246_spu2_test.cpp)
+    target_include_directories(system246_spu2_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(system246_spu2_test SYSTEM PRIVATE
+        ${WHITTY_PLAY_SOURCE_DIR}/Source
+        ${WHITTY_PLAY_SOURCE_DIR}/deps/Framework/include)
+    target_link_libraries(system246_spu2_test PRIVATE
+        PlayCore arcade_audio_output)
+    target_compile_options(system246_spu2_test PRIVATE
+        -Wall -Wextra -Wpedantic -UNDEBUG)
+    add_test(NAME system246_spu2_test COMMAND system246_spu2_test)
+    set_tests_properties(system246_spu2_test PROPERTIES
+        LABELS "system246;audio")
+
+    # Builds and runs only the quick, headless System 246 checks. This avoids
+    # starting the emulator or requiring the RRV ROM/CHD for normal iteration.
+    add_custom_target(check_system246
+        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L system246
+        DEPENDS
+            system246_rom_test
+            system246_controls_test
+            system246_cd_test
+            system246_music_test
+            system246_spu2_test
+            system246_video_test
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        USES_TERMINAL)
+endif()
 
 add_executable(persistent_data_test
     tests/persistent_data_test.cpp
@@ -516,6 +918,29 @@ target_link_libraries(model2_rom_test PRIVATE PkgConfig::MINIZIP ZLIB::ZLIB)
 target_compile_options(model2_rom_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 
+add_executable(model2_vcop_rom_test
+    tests/model2_vcop_rom_test.cpp
+    src/model2_rom.cpp
+)
+target_include_directories(model2_vcop_rom_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(model2_vcop_rom_test PRIVATE
+    PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(model2_vcop_rom_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+
+add_executable(model1io2_board_test
+    tests/model1io2_board_test.cpp
+    src/model1_io_board.cpp
+    src/model2_rom.cpp
+)
+target_include_directories(model1io2_board_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/third_party/chips)
+target_link_libraries(model1io2_board_test PRIVATE
+    chips_z80 PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(model1io2_board_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+
 add_executable(model2_boot_test
     tests/model2_boot_test.cpp
     src/model2_rom.cpp
@@ -529,7 +954,7 @@ target_include_directories(model2_boot_test PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/i960
 )
 target_link_libraries(model2_boot_test PRIVATE
-    i960 mb86233 system24_video PkgConfig::MINIZIP ZLIB::ZLIB
+    i960 mb86233 system24_video model1_io PkgConfig::MINIZIP ZLIB::ZLIB
     ${WHITTY_MATH_LIB})
 target_compile_options(model2_boot_test PRIVATE
     -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
@@ -562,6 +987,7 @@ add_executable(model2_io_test
     src/model2_bus.cpp
 )
 target_include_directories(model2_io_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(model2_io_test PRIVATE model1_io)
 target_compile_options(model2_io_test PRIVATE
     -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME model2_io_test COMMAND model2_io_test)
@@ -760,6 +1186,24 @@ if(MODEL2_TEST_ROM)
         ENVIRONMENT "MODEL2_AUTO_RACE=1;MODEL2_HELD_GAS_FRAME=1600")
 endif()
 
+set(MODEL2_VCOP_TEST_ROM "" CACHE FILEPATH
+    "Optional Virtua Cop archive used by the Model 2 ROM loader test")
+if(MODEL2_VCOP_TEST_ROM)
+    add_test(NAME model2_vcop_rom_test
+        COMMAND model2_vcop_rom_test ${MODEL2_VCOP_TEST_ROM})
+    add_test(NAME model1io2_board_test
+        COMMAND model1io2_board_test ${MODEL2_VCOP_TEST_ROM})
+    add_test(NAME model2_vcop_boot_test
+        COMMAND model2_boot_test ${MODEL2_VCOP_TEST_ROM} 1600)
+endif()
+
+set(MODEL2_VCOP2_TEST_ROM "" CACHE FILEPATH
+    "Optional Virtua Cop 2 archive used by the Model 2 boot render test")
+if(MODEL2_VCOP2_TEST_ROM)
+    add_test(NAME model2_vcop2_boot_test
+        COMMAND model2_boot_test ${MODEL2_VCOP2_TEST_ROM} 1600)
+endif()
+
 set(MODEL1_VF_TEST_ROM "" CACHE FILEPATH
     "Optional Virtua Fighter archive used by native Model 1 ROM tests")
 if(MODEL1_VF_TEST_ROM)
@@ -789,51 +1233,51 @@ endif()
 
 # Shinobi (Sega System 16-B) host boot test. Loads a Shinobi US ROM
 # image, runs N virtual frames, and dumps the rendered RGBA frame to
-# /tmp/shinobi_frame.rgba. Used to verify the board's renderer and
+# /tmp/system16b_frame.rgba. Used to verify the board's renderer and
 # memory map end-to-end without needing display capture.
-add_executable(shinobi_boot_test
-    tests/shinobi_boot_test.cpp
+add_executable(system16b_boot_test
+    tests/system16b_boot_test.cpp
     src/high_scores.cpp
-    src/shinobi_rom.cpp
-    src/shinobi_machine_shinobi.cpp
+    src/system16b_rom.cpp
+    src/system16b_machine_shinobi.cpp
 )
-target_include_directories(shinobi_boot_test PRIVATE
+target_include_directories(system16b_boot_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
-target_link_libraries(shinobi_boot_test PRIVATE m68000_cpu PkgConfig::MINIZIP)
-add_test(NAME shinobi_input_test COMMAND shinobi_boot_test --input-test)
+target_link_libraries(system16b_boot_test PRIVATE m68000_cpu PkgConfig::MINIZIP)
+add_test(NAME system16b_input_test COMMAND system16b_boot_test --input-test)
 
-add_executable(shinobi_audio_test
-    tests/shinobi_audio_test.cpp
-    src/shinobi_audio.cpp
+add_executable(system16b_audio_test
+    tests/system16b_audio_test.cpp
+    src/system16b_audio.cpp
 )
-target_include_directories(shinobi_audio_test PRIVATE
+target_include_directories(system16b_audio_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(shinobi_audio_test PRIVATE
+target_link_libraries(system16b_audio_test PRIVATE
     arcade_audio_output ymfm segapcm OpenAL::OpenAL Threads::Threads)
-add_test(NAME shinobi_audio_test COMMAND shinobi_audio_test)
+add_test(NAME system16b_audio_test COMMAND system16b_audio_test)
 
-add_executable(shinobi_audio_integration_test
-    tests/shinobi_audio_integration_test.cpp
+add_executable(system16b_audio_integration_test
+    tests/system16b_audio_integration_test.cpp
     src/high_scores.cpp
-    src/shinobi_rom.cpp
-    src/shinobi_audio.cpp
-    src/shinobi_machine.cpp
-    src/shinobi_machine_shinobi.cpp
+    src/system16b_rom.cpp
+    src/system16b_audio.cpp
+    src/system16b_machine.cpp
+    src/system16b_machine_shinobi.cpp
 )
-target_include_directories(shinobi_audio_integration_test PRIVATE
+target_include_directories(system16b_audio_integration_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
-target_include_directories(shinobi_audio_integration_test SYSTEM PRIVATE
+target_include_directories(system16b_audio_integration_test SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/chips)
-target_link_libraries(shinobi_audio_integration_test PRIVATE
+target_link_libraries(system16b_audio_integration_test PRIVATE
     arcade_audio_output m68000_cpu chips_z80 ymfm segapcm OpenAL::OpenAL
     Threads::Threads PkgConfig::MINIZIP)
 
 set(SHINOBI_TEST_ROM "" CACHE FILEPATH
     "Optional Shinobi archive used by the native sound integration test")
 if(SHINOBI_TEST_ROM)
-    add_test(NAME shinobi_audio_integration_test
-        COMMAND shinobi_audio_integration_test ${SHINOBI_TEST_ROM} 900)
+    add_test(NAME system16b_audio_integration_test
+        COMMAND system16b_audio_integration_test ${SHINOBI_TEST_ROM} 900)
 endif()
 
 # Dual-instance 68000 core test: two m68000_cpu objects must not share any

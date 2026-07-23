@@ -31,10 +31,10 @@ struct rom_set_manifest {
     bool working;
 };
 
-constexpr std::size_t arcade_board_count = 6;
+constexpr std::size_t arcade_board_count = 11;
 using arcade_board_list =
     std::array<arcade_board_descriptor, arcade_board_count>;
-constexpr std::size_t arcade_game_count = 20;
+constexpr std::size_t arcade_game_count = 27;
 using arcade_game_list =
     std::array<rom_set_manifest, arcade_game_count>;
 

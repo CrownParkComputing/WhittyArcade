@@ -4,6 +4,7 @@
 #include "arcade_settings.h"
 #include "system22_types.h"
 #include "model2_gpu_frame.h"
+#include "operator_menu.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -44,13 +45,16 @@ public:
     bool settings_visible() const { return m_settings_visible.load(); }
     bool paused() const { return m_paused.load(); }
     void refresh_output();
+    // Some cabinets expose exactly one video output. Keep the user's global
+    // dual-screen preference intact while constraining only that session.
+    void set_single_screen_only(bool enabled);
 
     void set_rom_choices(std::vector<rom_choice> choices);
+    void set_operator_menu(operator_menu_definition menu);
     bool take_rom_selection(std::string& path);
-    bool take_dip_request();
+    bool take_operator_action(operator_menu_action& action);
     bool take_controls_request();
     bool take_settings_change(emulator_settings& settings);
-    void set_f2_opens_dip(bool enabled);
     void set_lightgun_cursor(bool enabled, uint8_t player = 0);
     void apply_display_settings(const emulator_settings& settings);
 
@@ -71,12 +75,24 @@ public:
                            const uint8_t* mixer, std::size_t mixer_size,
                            bool super_system22);
     void render_scene(const view_matrix& view, const rgba_color& fog_color);
-    void present_rgba_frame(const uint8_t* pixels, int width, int height);
+    // display_width/height describe the intended monitor aspect independently
+    // of the framebuffer's pixel geometry (PS2 modes use non-square pixels).
+    void present_rgba_frame(const uint8_t* pixels, int width, int height,
+                            int display_width = 0,
+                            int display_height = 0);
     void present_model2_frame(model2_gpu_frame frame);
     void read_framebuffer(uint32_t* output);
 
 private:
     using task = std::function<void(polygon_renderer_gpu&)>;
+    struct rgba_frame {
+        std::vector<uint8_t> pixels;
+        int width{};
+        int height{};
+        int display_width{};
+        int display_height{};
+    };
+
     void worker_loop(emulator_settings settings);
     void enqueue(task work);
     void harvest_frontend(polygon_renderer_gpu& renderer);
@@ -86,6 +102,8 @@ private:
     std::mutex m_task_mutex;
     std::condition_variable m_task_ready;
     std::deque<task> m_tasks;
+    std::optional<rgba_frame> m_pending_rgba_frame;
+    bool m_rgba_task_queued{};
     std::optional<model2_gpu_frame> m_pending_model2_frame;
     bool m_model2_task_queued{};
     std::atomic<bool> m_stop{false};
@@ -98,7 +116,7 @@ private:
     std::mutex m_frontend_mutex;
     std::string m_selected_rom;
     bool m_rom_pending{};
-    bool m_dip_pending{};
+    std::deque<operator_menu_action> m_operator_actions;
     bool m_controls_pending{};
     bool m_settings_pending{};
     emulator_settings m_changed_settings{};

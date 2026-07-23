@@ -4,7 +4,8 @@
 #include "input_mapping.h"
 #include "launcher_menu.h"
 
-#include <SDL2/SDL_scancode.h>
+#include <SDL3/SDL_scancode.h>
+#include <SDL3/SDL_keyboard.h>
 
 #include <algorithm>
 #include <array>
@@ -93,7 +94,8 @@ std::vector<input_action> relevant_actions(std::string_view short_name) {
              input_action::right_up, input_action::right_down,
              input_action::shift_down, input_action::shift_up,
              input_action::view1});
-    } else if (short_name == "timecris") {
+    } else if (short_name == "timecris" || short_name == "vcop" ||
+               short_name == "vcop2") {
         add({input_action::p1_left, input_action::p1_right,
              input_action::p1_up, input_action::p1_down,
              input_action::p1_action1, input_action::p1_action2});
@@ -120,7 +122,7 @@ std::vector<input_action> relevant_actions(std::string_view short_name) {
         add({input_action::p1_left, input_action::p1_right,
              input_action::p1_action1, input_action::p1_action2});
     } else if (short_name == "galaxian" || short_name == "mooncrst" ||
-               short_name == "uniwars") {
+               short_name == "uniwars" || short_name == "galaga") {
         add({input_action::p1_left, input_action::p1_right,
              input_action::p1_action1, input_action::p2_left,
              input_action::p2_right, input_action::p2_action1});
@@ -131,6 +133,20 @@ std::vector<input_action> relevant_actions(std::string_view short_name) {
              input_action::p1_action3, input_action::p2_left,
              input_action::p2_right, input_action::p2_up,
              input_action::p2_down, input_action::p2_action1});
+    } else if (short_name == "gng") {
+        add({input_action::p1_left, input_action::p1_right,
+             input_action::p1_up, input_action::p1_down,
+             input_action::p1_action1, input_action::p1_action2,
+             input_action::p2_left, input_action::p2_right,
+             input_action::p2_up, input_action::p2_down,
+             input_action::p2_action1, input_action::p2_action2});
+    } else if (short_name == "pacmania") {
+        add({input_action::p1_left, input_action::p1_right,
+             input_action::p1_up, input_action::p1_down,
+             input_action::p1_action1,
+             input_action::p2_left, input_action::p2_right,
+             input_action::p2_up, input_action::p2_down,
+             input_action::p2_action1});
     } else {
         // Unknown future games remain configurable without waiting for a UI
         // update; the runtime still resolves the same stable action IDs.
@@ -185,13 +201,41 @@ std::string action_label(const mapper_profile& profile,
             return "Light gun - Trigger (mouse left click)";
         if (action.action == input_action::p1_action2)
             return "Foot pedal - Hold to stand (Space; right click reloads)";
+    } else if (profile.short_name == "vcop" || profile.short_name == "vcop2") {
+        if (action.action == input_action::p1_left)
+            return "Light gun - Aim left";
+        if (action.action == input_action::p1_right)
+            return "Light gun - Aim right";
+        if (action.action == input_action::p1_up)
+            return "Light gun - Aim up";
+        if (action.action == input_action::p1_down)
+            return "Light gun - Aim down";
+        if (action.action == input_action::p1_action1)
+            return "Light gun - Trigger (mouse left click)";
+        if (action.action == input_action::p1_action2)
+            return "Reload - Shoot off-screen (mouse right click)";
     } else if (profile.short_name == "galaxian" ||
                profile.short_name == "mooncrst" ||
-               profile.short_name == "uniwars") {
+               profile.short_name == "uniwars" ||
+               profile.short_name == "galaga") {
         if (action.action == input_action::p1_action1)
             return "Player 1 - Fire";
         if (action.action == input_action::p2_action1)
             return "Player 2 - Fire";
+    } else if (profile.short_name == "gng") {
+        if (action.action == input_action::p1_action1 ||
+            action.action == input_action::p2_action1)
+            return action.action == input_action::p1_action1
+                ? "Player 1 - Fire" : "Player 2 - Fire";
+        if (action.action == input_action::p1_action2 ||
+            action.action == input_action::p2_action2)
+            return action.action == input_action::p1_action2
+                ? "Player 1 - Jump" : "Player 2 - Jump";
+    } else if (profile.short_name == "pacmania") {
+        if (action.action == input_action::p1_action1 ||
+            action.action == input_action::p2_action1)
+            return action.action == input_action::p1_action1
+                ? "Player 1 - Jump" : "Player 2 - Jump";
     } else if (profile.short_name == "wingwar") {
         if (action.action == input_action::shift_down)
             return "Weapons - Machine gun";
@@ -250,7 +294,8 @@ control_category category_for(const mapper_profile& profile,
     if (profile.short_name == "vf" && action >= input_action::view1 &&
         action <= input_action::view3)
         return control_category::player1;
-    if (profile.short_name == "timecris" &&
+    if ((profile.short_name == "timecris" || profile.short_name == "vcop" ||
+         profile.short_name == "vcop2") &&
         action >= input_action::p1_left &&
         action <= input_action::p1_action2)
         return control_category::shooting;
@@ -304,8 +349,16 @@ void edit_control_category(
             const input_binding& shown = inherited ?
                 general_bindings[input_action_index(action.action)] :
                 configured;
+            std::string shown_name = input_binding_name(shown);
+            if (!keyboard) {
+                const input_binding alias =
+                    default_controller_alias(action.action, shown);
+                if (alias.type != input_binding_type::none)
+                    shown_name += " + " + input_binding_name(alias) +
+                                  "  [Default mirror]";
+            }
             rows.emplace_back(action_label(profile, action) + "  :  " +
-                              input_binding_name(shown) +
+                              shown_name +
                               (inherited ? "  [General]" : ""));
         }
 
@@ -336,12 +389,20 @@ void edit_control_category(
             capture_description, keyboard,
             controller ? controller->instance_id : -1, !profile.general());
         if (!captured) continue;
-        if (captured->type == input_binding_type::keyboard &&
-            captured->code == SDL_SCANCODE_C) {
+        const std::string_view reserved =
+            captured->type == input_binding_type::keyboard ?
+                reserved_host_key_purpose(captured->code) :
+                std::string_view{};
+        if (!reserved.empty()) {
+            const char* key_name = SDL_GetScancodeName(
+                static_cast<SDL_Scancode>(captured->code));
             menu.show_text(
-                "C Is Reserved",
-                "C opens the current game's controller mapper while a "
-                "cabinet is running. Choose a different gameplay key.",
+                std::string(key_name && *key_name ? key_name : "Key") +
+                    " Is Reserved",
+                std::string("This key is reserved to ") +
+                    std::string(reserved) +
+                    " while a cabinet is running. Choose a different "
+                    "gameplay key.",
                 "Back to Controls");
             continue;
         }

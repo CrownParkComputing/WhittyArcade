@@ -4,7 +4,6 @@
 #include <minizip/zip.h>
 
 #include <cassert>
-#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -13,6 +12,7 @@ namespace fs = std::filesystem;
 
 namespace {
 void make_zip(const fs::path& path, const std::vector<std::string>& entries) {
+    fs::create_directories(path.parent_path());
     zipFile archive = zipOpen64(path.string().c_str(), APPEND_STATUS_CREATE);
     assert(archive);
     for (const std::string& entry : entries) {
@@ -32,40 +32,40 @@ int main() {
     const fs::path root = fs::temp_directory_path() /
         ("whittyarcade-rom-library-test-" +
          std::to_string(test_process_id()));
-    const fs::path source = root / "mame";
     const fs::path data = root / "data";
-    fs::create_directories(source);
+    fs::create_directories(data);
     if (!test_set_environment("XDG_DATA_HOME", data)) return 1;
-    if (!test_set_environment("WHITTYARCADE_NO_LEGACY_ROM_SCAN", "1"))
-        return 1;
 
-    // A merged archive may use per-set subdirectories; identification is by
-    // basename and import must retain the archive unchanged.
-    make_zip(source / "ridgerac.zip", {"ridgerac/rr2_prgllb.4d"});
-    make_zip(source / "namcoc71.zip", {"c71.bin"});
-    make_zip(source / "namcoc74.zip", {"c74.bin"});
-    make_zip(source / "unrelated.zip", {"nothing.bin"});
-
-    const rom_import_result imported = import_rom_path(source.string());
-    assert(!imported.error.empty()); // Synthetic one-byte ROMs fail the audit.
-    assert(imported.archives_scanned == 4);
-    assert(imported.games_found == 1);
-    assert(imported.archives_imported == 3);
-    assert(fs::is_regular_file(data / "WhittyArcade" / "roms" /
-                               "system22" / "ridgerac.zip"));
-    assert(fs::is_regular_file(data / "WhittyArcade" / "roms" /
-                               "system22" / "namcoc71.zip"));
+    // WhittyArcade reads set ZIPs straight from its ROM folder. Drop a merged
+    // ridgerac.zip (per-set subdir, identified by basename) plus the C71/C74
+    // device archives directly into the folder - there is no import step.
+    const fs::path rom_folder(rom_library_path());
+    make_zip(rom_folder / "ridgerac.zip", {"ridgerac/rr2_prgllb.4d"});
+    make_zip(rom_folder / "namcoc71.zip", {"c71.bin"});
+    make_zip(rom_folder / "namcoc74.zip", {"c74.bin"});
+    make_zip(rom_folder / "unrelated.zip", {"nothing.bin"});
 
     const auto discovered = discover_library_roms("");
     assert(discovered.size() == 1);
     assert(discovered.front().board == arcade_board_type::system22);
+    // The device companions sit beside the set, so it reads as ready.
     assert(discovered.front().label.find("[ready]") != std::string::npos);
+
+    // The ROM and CHD folders live side by side under the data directory, and
+    // discovery creates both so the user knows where to drop files.
+    assert(fs::is_directory(rom_library_path()));
+    assert(fs::is_directory(chd_library_path()));
+    assert(fs::path(chd_library_path()).filename() == "chd");
+    assert(fs::path(chd_library_path()).parent_path().filename() ==
+           "WhittyArcade");
+
     const std::string required_sets = required_rom_sets_text();
     assert(supported_rom_sets().size() >= 15);
     for (const rom_set_manifest& manifest : supported_rom_sets()) {
         assert(required_sets.find(manifest.short_name) != std::string::npos);
         assert(arcade_board_index(manifest.board) < arcade_board_count);
     }
+    // Synthetic one-byte ROMs fail the read-only audit.
     assert(!audit_rom_path(discovered.front().path).success);
 
     fs::remove_all(root);

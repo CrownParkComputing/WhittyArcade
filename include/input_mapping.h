@@ -41,6 +41,7 @@ enum class input_action : uint8_t {
     p2_up,
     p2_down,
     p2_action1,
+    p2_action2,
     count,
 };
 
@@ -100,6 +101,15 @@ std::size_t input_action_index(input_action action) noexcept;
 
 input_binding_table default_keyboard_bindings();
 input_binding_table default_controller_bindings();
+// Returns a short description when a scancode belongs to the application
+// shell rather than an emulated cabinet. Reserved keys cannot be captured as
+// gameplay mappings because the host consumes them first.
+std::string_view reserved_host_key_purpose(int scancode) noexcept;
+// Stock left-stick directions also accept the matching D-pad button. The
+// alias is returned only while `primary` is still the built-in binding, so a
+// user remap or explicit clear remains authoritative.
+input_binding default_controller_alias(input_action action,
+                                       const input_binding& primary);
 input_binding_table inherited_input_bindings();
 input_mapping_config default_input_mapping_config();
 

@@ -6,11 +6,16 @@
 
 enum class arcade_board_type : uint8_t {
     system22,
+    system246,
+    xbox360,
     model1,
     model2,
     phoenix,
-    mooncrst,
-    shinobi,
+    galaxian,
+    system16b,
+    capcom_gng,
+    namco_galaga,
+    namco_system1,
 };
 
 // Host-window policy is explicit so closing the application cannot be
@@ -36,7 +41,7 @@ struct rom_choice {
 };
 
 struct input_state {
-    // ---- Driving boards (System 22, Model 1, Model 2) ----
+    // ---- Driving boards (System 22/246, Model 1, Model 2) ----
     uint16_t steering{0x800};
     uint16_t gas{0};
     uint16_t brake{0};
@@ -58,7 +63,7 @@ struct input_state {
 
     // ---- Action boards (Shinobi, future System 16-B games) ----
     // Action boards use left_stick_x/y as a 4-direction joystick
-    // (0x60 = left/up, 0xC0 = right/down, per the existing Moon Cresta
+    // (<0x60 = left/up, >0x90 = right/down, matching the action-board
     // threshold convention). buttons[] supplies the per-game action
     // buttons (Shinobi: fire / jump / throw); boards with fewer than
     // eight buttons leave the rest false.

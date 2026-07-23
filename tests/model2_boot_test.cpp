@@ -469,6 +469,27 @@ int main(int argc, char** argv) {
     }
 
     assert(machine.executed_cycles() != 0);
+    // The reference fingerprints below (TGP upload count, sound-ring state,
+    // rival object flags) are specific to Sega Rally. Other Model 2 sets
+    // (Virtua Cop / Virtua Cop 2) reuse this harness for host bring-up: report
+    // their boot state instead of asserting srallyc-only values.
+    if (machine.rom_set() != model2_rom_set::sega_rally_revision_c) {
+        std::printf("Boot summary: set=%s frames=%d pc=%08x cycles=%llu "
+                    "faulted=%d tgp_running=%d decoded_polys=%u direct=%u "
+                    "culled=%u backface=%u checker=%u zero=%u non_black=%zu\n",
+                    model2_rom_loader::set_short_name(machine.rom_set()),
+                    frames, machine.program_counter(),
+                    static_cast<unsigned long long>(machine.executed_cycles()),
+                    machine.cpu_faulted() ? 1 : 0,
+                    machine.tgp_running() ? 1 : 0, geometry.decoded_polygons,
+                    geometry.direct_polygons, geometry.culled_polygons,
+                    geometry.backface_polygons, geometry.checker_polygons,
+                    geometry.zero_length_objects, machine.non_black_pixels());
+        // A healthy bring-up runs without faulting and, given enough frames to
+        // pass the attract screens, renders a non-empty frame.
+        const bool rendered = frames < 1500 || machine.non_black_pixels() != 0;
+        return (machine.cpu_faulted() || !rendered) ? 1 : 0;
+    }
     assert(!machine.cpu_faulted());
     if (frames >= 100) {
         assert(machine.program_counter() != 0x005a3d70);

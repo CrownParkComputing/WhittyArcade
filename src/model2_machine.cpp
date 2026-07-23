@@ -45,7 +45,7 @@ bool model2_machine::initialize(const std::string& rom_path) {
     }
     m_set = loaded.set;
     m_roms = std::move(loaded.roms);
-    m_impl->bus.attach(m_roms);
+    m_impl->bus.attach(m_roms, model2_rom_loader::profile_for(m_roms.set));
     m_impl->bus.set_unmapped_callback(
         [this](bool write, uint32_t address) {
             std::printf("Model 2 unmapped %s %08x at i960 %08x: %s\n",

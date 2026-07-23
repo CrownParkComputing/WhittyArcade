@@ -36,7 +36,7 @@ data.
 
 | Area | Current implementation | Porting consequence |
 |---|---|---|
-| Launcher GUI | SDL2/SDL_ttf at a fixed 800 x 720 logical size | The same layout can be scaled on Android, Windows and Linux. Touch hit-testing and safe-area handling must be added. |
+| Launcher GUI | SDL3/SDL3_ttf at a fixed 800 x 720 logical size | The same layout can be scaled on Android, Windows and Linux. Touch hit-testing and safe-area handling must be added. |
 | In-game controls panel | A separate compact SDL window | Android needs the same 560 x 510 panel rendered as a modal on its single app surface. |
 | Gameplay renderer | Desktop OpenGL 4.3, GLEW and eleven GLSL 430 shader stages | Works for current Linux and Windows targets. Android needs a GLES or native Vulkan rendering path; changing only the final presenter is insufficient. |
 | Alternate presenters | Vulkan and software presentation consume an OpenGL-rendered frame | They do not remove the Android desktop-OpenGL dependency. Vulkan rasterisation is a separate future backend. |
@@ -129,7 +129,7 @@ an Android APK/AAB is not considered sale-ready merely because it builds.
   and the additional commercial gates linked above.
 
 SDL documents the required Activity/JNI and shared-library arrangement in its
-[Android README](https://wiki.libsdl.org/SDL2/README-android), while Android's
+[Android README](https://wiki.libsdl.org/SDL3/README-android), while Android's
 NDK guide documents the supported
 [Gradle/CMake toolchain](https://developer.android.com/ndk/guides/cmake).
 
@@ -158,7 +158,7 @@ and [GLES version support](https://developer.android.com/develop/ui/views/graphi
 
 ### Dependencies
 
-- Build SDL2, SDL2_ttf, zlib, MiniZip, GLM and libmpg123 for ARM64 from pinned
+- Build SDL3, SDL3_ttf, zlib, MiniZip, GLM and libmpg123 for ARM64 from pinned
   sources or verified prebuilts.
 - Build OpenAL Soft for Android and retain the existing board audio interface.
   OpenAL Soft officially supports Android and CMake:

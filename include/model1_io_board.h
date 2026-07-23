@@ -31,6 +31,11 @@ public:
     void reset();
     void execute(int clocks);
     void set_inputs(model1_rom_set game, const input_state& state);
+    // Light-gun cabinet input for the advanced (TMPZ84C015 / model1io2) board
+    // used by Model 2 games such as Virtua Cop. Digital coin/start/trigger
+    // lines plus two 10-bit gun coordinates per player, read by the firmware
+    // through the 315-5338A ports and the on-board FPGA.
+    void set_gun_inputs(const input_state& state);
     void set_dip_switches(const std::array<uint8_t, 3>& switches);
 
     bool active() const;

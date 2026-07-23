@@ -10,8 +10,11 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
+
+class model1_io_board;
 
 class model2_bus {
 public:
@@ -20,9 +23,16 @@ public:
         std::function<void(bool write, uint32_t address)>;
     using sound_uart_callback = std::function<void(uint8_t data)>;
 
+    // Constructor and destructor are defined out of line so translation units
+    // that only see the forward-declared model1_io_board do not instantiate
+    // the m_iob unique_ptr deleter against an incomplete type.
+    model2_bus();
     ~model2_bus();
 
-    void attach(const model2_roms& roms);
+    // The profile is supplied by the machine (which links the ROM loader);
+    // it defaults so I/O-only tests can attach without pulling in the loader.
+    void attach(const model2_roms& roms,
+                const model2_game_profile& profile = {});
     void reset();
     bool flush_nvram() { return save_nvram(); }
 
@@ -121,6 +131,10 @@ private:
                                    uint8_t value, uint64_t& generation);
 
     const model2_roms* m_roms{};
+    // Declarative hardware config for the loaded game (sound board, I/O kind,
+    // NVRAM leaf). Cached from model2_rom_loader::profile_for at attach; read
+    // in place of switching on the rom set.
+    model2_game_profile m_profile{};
     std::vector<uint8_t> m_local_ram;
     std::vector<uint8_t> m_work_ram;
     std::vector<uint8_t> m_geometry_ram;
@@ -176,6 +190,11 @@ private:
     uint8_t m_io_port_config{0xff};
     uint8_t m_io_mode{};
     uint8_t m_io_analog_channel{};
+    // Virtua Cop 2 (Model 2A) reads its light guns through the 315-5649 serial
+    // channel 2: the i960 writes an axis selector here and reads the selected
+    // 10-bit coordinate byte back. 0..7 pick P1_Y/P1_X/P2_Y/P2_X lo/hi bytes;
+    // >=8 returns the off-screen status.
+    uint8_t m_lightgun_mux{};
     bool m_uart_tx_ready{true};
     // The 8251 has separate data and shift registers.  A byte reaches the
     // SCSP only after its full 10-bit MIDI frame, while TXRDY may reassert as
@@ -207,6 +226,16 @@ private:
     uint8_t m_gear{1};
     bool m_shift_down_previous{};
     bool m_shift_up_previous{};
+
+    // Original Model 2 games (Virtua Cop) read their guns and switches through
+    // a Sega model1io2 cabinet-I/O board (TMPZ84C015) that shares dual-port RAM
+    // with the i960 at 0x01c00000. Present only for that set; the Model 2A sets
+    // read the 315-5296 chip mapped at the same window.
+    std::unique_ptr<model1_io_board> m_iob;
+    std::vector<uint8_t> m_iob_dpram;
+    std::array<uint8_t, 0x80> m_iob_eeprom{};
+    std::array<uint8_t, 0x80> m_iob_eeprom_saved{};
+    uint64_t m_iob_clock_accum{};
     uint32_t m_render_control{};
     uint16_t m_horizontal_sync{};
     uint16_t m_vertical_sync{};

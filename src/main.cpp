@@ -10,7 +10,7 @@
 #include "rom_library.h"
 
 #if defined(_WIN32)
-#include <SDL2/SDL_main.h>
+#include <SDL3/SDL_main.h>
 #endif
 
 #include <algorithm>
@@ -95,21 +95,6 @@ int run_session_factory_test() {
     return sessions_created == arcade_board_count * rounds ? 0 : 6;
 }
 
-int import_roms(int argc, char* argv[]) {
-    if (argc < 3) {
-        std::fprintf(stderr,
-                     "usage: WhittyArcade --import <zip-or-folder>...\n");
-        return 2;
-    }
-    std::vector<std::string> sources;
-    for (int index = 2; index < argc; ++index)
-        sources.emplace_back(argv[index]);
-    const rom_import_result result = import_rom_paths(sources);
-    std::printf("%s\nLibrary: %s\n", result.summary().c_str(),
-                rom_library_path().c_str());
-    return result.error.empty() && result.games_found != 0 ? 0 : 1;
-}
-
 int audit_roms(int argc, char* argv[]) {
     std::vector<rom_choice> choices;
     if (argc > 2) {
@@ -145,7 +130,6 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
         return run_video_lifecycle_test();
     if (command == "--session-factory-test")
         return run_session_factory_test();
-    if (command == "--import") return import_roms(argc, argv);
     if (command == "--list-roms") {
         std::printf("%s\n", required_rom_sets_text().c_str());
         return 0;
@@ -260,6 +244,15 @@ int main(int argc, char* argv[]) {
                 emu->refresh_output();
             else
                 emu->run_frame();
+
+            // System 246 waits directly on Play!'s completed GS flips. A
+            // second 60 Hz sleep here creates two free-running clocks; their
+            // phase drift periodically skips a field and makes an interlaced
+            // image jump.
+            if (!paused && emu->producer_paced()) {
+                deadline = std::chrono::steady_clock::now();
+                continue;
+            }
 
             // Cap host presentation at 60 Hz while respecting boards whose
             // native refresh is slower.

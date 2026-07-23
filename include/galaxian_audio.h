@@ -120,3 +120,6 @@ std::unique_ptr<galaxian_sound_synth> make_phoenix_sound_synth();
 std::unique_ptr<galaxian_sound_synth> make_galaxian_sound_synth();
 std::unique_ptr<galaxian_sound_synth> make_mooncrst_sound_synth();
 std::unique_ptr<galaxian_sound_synth> make_uniwars_sound_synth();
+std::unique_ptr<galaxian_sound_synth> make_galaga_sound_synth(
+    const std::array<uint8_t, 0x100>& waveform);
+std::unique_ptr<galaxian_sound_synth> make_system1_sound_synth();

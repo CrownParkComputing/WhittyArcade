@@ -25,6 +25,12 @@ fs::path nvram_root() {
     return config_root() / "WhittyArcade" / "nvram";
 }
 
+fs::path system246_save_root() {
+    fs::path root = whitty_platform::data_root();
+    if (root.empty()) root = fs::current_path();
+    return root / "WhittyArcade" / "play" / "arcadesaves";
+}
+
 std::string timestamp(bool filename_safe = false) {
     const std::time_t now = std::chrono::system_clock::to_time_t(
         std::chrono::system_clock::now());
@@ -101,9 +107,23 @@ std::vector<persistent_game_info> build_games() {
                                       "16 KiB battery-backed SRAM",
                                       game_root / "backup1", 0x4000));
             break;
+        case arcade_board_type::system246:
+            files.push_back(make_file(
+                "backupram", "64 KiB System 246 backup RAM",
+                system246_save_root() /
+                    (std::string(manifest.short_name) + ".backupram"),
+                0x10000));
+            break;
+        case arcade_board_type::xbox360:
+            // ReXGlue owns Robotron's local profile and achievement files.
+            // They are intentionally not exposed as fixed-size arcade NVRAM.
+            break;
         case arcade_board_type::phoenix:
-        case arcade_board_type::mooncrst:
-        case arcade_board_type::shinobi:
+        case arcade_board_type::galaxian:
+        case arcade_board_type::system16b:
+        case arcade_board_type::capcom_gng:
+        case arcade_board_type::namco_galaga:
+        case arcade_board_type::namco_system1:
             break;
         }
         if (!files.empty())
@@ -262,12 +282,12 @@ std::string persistent_settings_report(const std::string& short_name) {
                   "the game's on-screen instructions request them.\n"
                   "4. Choose the service screen's EXIT/RESET item. Close the "
                   "emulator normally so the updated EEPROM is flushed.\n\n"
-                  "F8 edits physical DIP switches; coinage, difficulty, laps "
+                  "D edits physical DIP switches; coinage, difficulty, laps "
                   "and sound are EEPROM options, not DIP settings.";
     } else if (model1) {
         if (short_name == "vformula") {
             report << "Quick change: while Virtua Formula is running, press "
-                      "F8 and toggle Advertise / attract sound.\n\n";
+                      "D and toggle Advertise / attract sound.\n\n";
         }
         report << "For all cabinet options, start the game and press F2 for "
                   "its TEST/service screen. Use 9 (SERVICE) to move/change and "
@@ -275,7 +295,7 @@ std::string persistent_settings_report(const std::string& short_name) {
                   "shown by the game. Exit through the service screen so its "
                   "checksum and EEPROM are committed.";
     } else if (model2) {
-        report << "Start Sega Rally and press F2 once. WhittyArcade performs "
+        report << "Start Sega Rally and press D once. WhittyArcade performs "
                   "a safe board reset with TEST held so the original service "
                   "screen opens. Once there, use 9 (SERVICE) to move/change "
                   "and F2 (TEST) to enter/select. Choose EXIT to return to "

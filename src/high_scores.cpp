@@ -57,6 +57,13 @@ constexpr std::array<memory_block, 2> shinobi_blocks{{
     {0xfff010, 4, 0x00, 0x00},
 }};
 
+// MAME plugins/hiscore/hiscore.dat (capcom/gng.cpp): ten rank pointers and
+// ten 7-byte score/name records, followed by the four-byte live top score.
+constexpr std::array<memory_block, 2> gng_blocks{{
+    {0x1518, 0x5a, 0x15, 0x72},
+    {0x00d0, 4, 0x00, 0x00},
+}};
+
 bool bcd_value(const std::uint8_t* bytes, std::size_t size,
                std::uint64_t& value) {
     value = 0;
@@ -210,6 +217,65 @@ bool decode_shinobi(const std::vector<std::uint8_t>& bytes,
     return true;
 }
 
+std::string decode_gng_name(const std::uint8_t* bytes) {
+    std::string result;
+    for (std::size_t index = 0; index < 3; ++index) {
+        const std::uint8_t value = bytes[index];
+        if (value == 0x1d) result.push_back('.');
+        else if (value >= 0x20 && value <= 0x7e)
+            result.push_back(static_cast<char>(value));
+        else if (value != 0)
+            result.push_back('?');
+    }
+    while (!result.empty() && result.back() == ' ') result.pop_back();
+    return result;
+}
+
+bool decode_gng(const std::vector<std::uint8_t>& bytes,
+                high_score_table& table, std::string& error) {
+    if (bytes.size() != 0x5e) {
+        error = "Ghosts'n Goblins score data must be exactly 94 bytes.";
+        return false;
+    }
+    std::array<std::size_t, 10> record_for_rank{};
+    std::array<bool, 10> used{};
+    for (std::size_t rank = 0; rank < 10; ++rank) {
+        // The saved table stores a page byte (0x15) followed by the record
+        // offset. hi2txt's byte-skip="odd" selects that second byte.
+        const int pointer = bytes[rank * 2 + 1];
+        if (pointer < 44 || (pointer - 44) % 7 != 0) {
+            error = "Ghosts'n Goblins contains an invalid rank pointer.";
+            return false;
+        }
+        const std::size_t record = static_cast<std::size_t>(pointer - 44) / 7;
+        if (record >= 10 || used[record]) {
+            error = "Ghosts'n Goblins contains duplicate rank pointers.";
+            return false;
+        }
+        used[record] = true;
+        record_for_rank[rank] = record;
+    }
+    table.game_name = "Ghosts'n Goblins";
+    constexpr std::size_t records_offset = 20;
+    for (std::size_t rank = 0; rank < 10; ++rank) {
+        const std::size_t offset = records_offset + record_for_rank[rank] * 7;
+        std::uint64_t score = 0;
+        if (!bcd_value(bytes.data() + offset, 4, score)) {
+            error = "Ghosts'n Goblins score data contains an invalid BCD digit.";
+            return false;
+        }
+        table.entries.push_back(
+            {score, decode_gng_name(bytes.data() + offset + 4)});
+    }
+    std::uint64_t top_score = 0;
+    if (!bcd_value(bytes.data() + 0x5a, 4, top_score)) {
+        error = "Ghosts'n Goblins top score contains an invalid BCD digit.";
+        return false;
+    }
+    table.extra_scores = {{"Top score record", top_score}};
+    return true;
+}
+
 const score_spec* find_spec(const std::string& short_name) {
     static const score_spec phoenix{
         "Phoenix", phoenix_blocks.data(), phoenix_blocks.size(), decode_phoenix};
@@ -218,9 +284,12 @@ const score_spec* find_spec(const std::string& short_name) {
         decode_mooncrst};
     static const score_spec shinobi{
         "Shinobi", shinobi_blocks.data(), shinobi_blocks.size(), decode_shinobi};
+    static const score_spec gng{
+        "Ghosts'n Goblins", gng_blocks.data(), gng_blocks.size(), decode_gng};
     if (short_name == "phoenix") return &phoenix;
     if (short_name == "mooncrst") return &mooncrst;
     if (short_name == "shinobi" || short_name == "shinobi4") return &shinobi;
+    if (short_name == "gng") return &gng;
     return nullptr;
 }
 

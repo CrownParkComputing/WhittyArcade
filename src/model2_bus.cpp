@@ -1,4 +1,5 @@
 #include "model2_bus.h"
+#include "model1_io_board.h"
 #include "platform_paths.h"
 
 #include <algorithm>
@@ -26,10 +27,12 @@ namespace fs = std::filesystem;
 // Battery RAM and 93C46 contents persist per game, using MAME's exact
 // nvram file names and layout so a working MAME configuration can be
 // copied straight into place.
-fs::path model2_nvram_directory() {
+// Per-game NVRAM subdirectory (from the game profile) so games never
+// overwrite each other's saves.
+fs::path model2_nvram_directory(const char* leaf) {
     fs::path root = whitty_platform::config_root();
     if (root.empty()) root = ".";
-    return root / "WhittyArcade" / "nvram" / "srallyc";
+    return root / "WhittyArcade" / "nvram" / (leaf ? leaf : "srallyc");
 }
 
 bool read_exact(const fs::path& path, uint8_t* data, std::size_t size) {
@@ -106,6 +109,8 @@ void write_dword(std::vector<uint8_t>& bytes, std::size_t offset,
 }
 }
 
+model2_bus::model2_bus() = default;
+
 model2_bus::~model2_bus() {
     if (!m_backup_ram.empty()) save_nvram();
 }
@@ -128,10 +133,23 @@ uint32_t model2_bus::master_z_clip() const {
 }
 
 void model2_bus::load_nvram() {
+    const fs::path directory = model2_nvram_directory(m_profile.nvram_leaf);
+
+    if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram) {
+        // model1io2 cabinets (Virtua Cop) keep bookkeeping and service settings
+        // in the board 93C46 rather than the CPU-board EEPROM. Start it blank
+        // (the firmware writes factory defaults) and restore any saved image so
+        // it survives a restart.
+        m_iob_eeprom.fill(0xff);
+        read_exact(directory / "ioboard_eeprom", m_iob_eeprom.data(),
+                   m_iob_eeprom.size());
+        m_iob_eeprom_saved = m_iob_eeprom;
+        return;
+    }
+
     initialize_srally_backup(m_backup_ram);
     m_eeprom_words = srally_factory_eeprom;
 
-    const fs::path directory = model2_nvram_directory();
     std::vector<uint8_t> backup(m_backup_ram.size());
     if (read_exact(directory / "backup1", backup.data(), backup.size()))
         m_backup_ram = std::move(backup);
@@ -145,10 +163,22 @@ void model2_bus::load_nvram() {
 }
 
 bool model2_bus::save_nvram() {
-    const fs::path directory = model2_nvram_directory();
+    const fs::path directory = model2_nvram_directory(m_profile.nvram_leaf);
     std::error_code error;
     fs::create_directories(directory, error);
     if (error) return false;
+
+    if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram) {
+        const bool saved = write_exact(directory / "ioboard_eeprom",
+                                       m_iob_eeprom.data(),
+                                       m_iob_eeprom.size());
+        if (saved) {
+            m_iob_eeprom_saved = m_iob_eeprom;
+            m_nvram_dirty = false;
+            m_last_nvram_save_frame = m_frame_number;
+        }
+        return saved;
+    }
 
     bool saved = write_exact(directory / "backup1", m_backup_ram.data(),
                              m_backup_ram.size());
@@ -199,8 +229,10 @@ bool model2_bus::write_video_region(std::vector<uint8_t>& region,
     return true;
 }
 
-void model2_bus::attach(const model2_roms& roms) {
+void model2_bus::attach(const model2_roms& roms,
+                        const model2_game_profile& profile) {
     m_roms = &roms;
+    m_profile = profile;
     m_local_ram.resize(0x40000);
     m_work_ram.resize(0x100000);
     m_geometry_ram.resize(0x4000);
@@ -232,6 +264,17 @@ void model2_bus::attach(const model2_roms& roms) {
     m_framebuffer_a.resize(0x80000);
     m_framebuffer_b.resize(0x80000);
     m_tgp_data_ram.resize(0x400);
+
+    // A model1io2 cabinet shares dual-port RAM with the i960 at 0x01c00000.
+    // Build the board (running the real epr-17181 firmware) when the profile
+    // selects that I/O kind; other cabinets read the 315-5296 chip there.
+    if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram &&
+        roms.io_cpu.size() == 0x10000) {
+        m_iob_dpram.assign(0x800, 0);
+        m_iob = std::make_unique<model1_io_board>(
+            model1_io_board_type::advanced_tmpz84c015, roms.io_cpu,
+            m_iob_dpram, m_iob_eeprom);
+    }
     reset();
 }
 
@@ -295,6 +338,8 @@ void model2_bus::reset() {
     m_io_port_config = 0xff;
     m_io_mode = 0;
     m_io_analog_channel = 0;
+    if (m_iob) m_iob->reset();
+    m_iob_clock_accum = 0;
     m_uart_tx_ready = true;
     m_uart_tx_empty_cycles = 0;
     m_uart_tx_empty = true;
@@ -422,6 +467,14 @@ uint8_t model2_bus::read8(uint32_t address) {
     if (address == 0x01a04002 || address == 0x01a14002)
         return static_cast<uint8_t>(m_comm_fg |
                                     ((~m_comm_zfg & 1) << 7) | 0x7e);
+    if (m_iob && in_range(address, 0x01c00000, 0x1000)) {
+        // Virtua Cop: the whole 0x01c00000 window is the model1io2 dual-port
+        // RAM. Byte-wide on even i960 lanes (umask 0x00ff00ff), same layout as
+        // the 315-5296 it replaces; odd lanes read back as zero.
+        if (address & 1) return 0x00;
+        const std::size_t index = (address - 0x01c00000) >> 1;
+        return index < m_iob_dpram.size() ? m_iob_dpram[index] : 0xff;
+    }
     if (in_range(address, 0x01c00040, 4))
         return 0; // write-only 2A-CRX board control
     if (in_range(address, 0x01c00000, 0x20)) {
@@ -517,6 +570,16 @@ uint32_t model2_bus::read32(uint32_t address) {
         return read_dword(bytes, static_cast<std::size_t>(address - base));
     };
 
+    if (m_iob && in_range(address, 0x01c00000, 0x1000)) {
+        // model1io2 dual-port RAM: two bytes per 32-bit word on lanes 0 and 2.
+        const std::size_t index = (address - 0x01c00000) >> 1;
+        const uint32_t low = index < m_iob_dpram.size() ?
+            m_iob_dpram[index] : 0xff;
+        const uint32_t high = index + 1 < m_iob_dpram.size() ?
+            m_iob_dpram[index + 1] : 0xff;
+        return low | (high << 16);
+    }
+
     if (m_roms && contained(0x00000000, m_roms->main_cpu.size()))
         return region(m_roms->main_cpu, 0x00000000);
     if (contained(0x00200000, m_local_ram.size()))
@@ -548,6 +611,14 @@ void model2_bus::write32(uint32_t address, uint32_t value) {
         return address >= base &&
                static_cast<uint64_t>(address) - base + 3 < size;
     };
+    if (m_iob && in_range(address, 0x01c00000, 0x1000)) {
+        const std::size_t index = (address - 0x01c00000) >> 1;
+        if (index < m_iob_dpram.size())
+            m_iob_dpram[index] = static_cast<uint8_t>(value);
+        if (index + 1 < m_iob_dpram.size())
+            m_iob_dpram[index + 1] = static_cast<uint8_t>(value >> 16);
+        return;
+    }
     if (contained(0x00200000, m_local_ram.size())) {
         write_dword(m_local_ram, address - 0x00200000, value);
         return;
@@ -737,6 +808,15 @@ void model2_bus::write8(uint32_t address, uint8_t value) {
     if ((address >= 0x01020000 && address <= 0x01070003) ||
         (address >= 0x01120000 && address <= 0x01170003))
         return;
+
+    if (m_iob && in_range(address, 0x01c00000, 0x1000)) {
+        // Virtua Cop: model1io2 dual-port RAM, even i960 lanes only.
+        if ((address & 1) == 0) {
+            const std::size_t index = (address - 0x01c00000) >> 1;
+            if (index < m_iob_dpram.size()) m_iob_dpram[index] = value;
+        }
+        return;
+    }
 
     if (in_range(address, 0x01c00040, 4))
         return; // write-only 2A-CRX board control
@@ -928,6 +1008,7 @@ void model2_bus::write8(uint32_t address, uint8_t value) {
 
 void model2_bus::set_inputs(const input_state& state) {
     m_inputs = state;
+    if (m_iob) m_iob->set_gun_inputs(state);
     if (std::getenv("MODEL2_INPUT_TRACE") &&
         (state.coin1 || state.start || state.gas || state.brake ||
          state.steering != 0x800))
@@ -945,6 +1026,24 @@ void model2_bus::set_inputs(const input_state& state) {
 }
 
 uint8_t model2_bus::io_read(uint8_t offset) {
+    // 315-5296 light-gun cabinets (Virtua Cop 2): coins/start use the base
+    // model2 IN0 bits (Sega Rally moves START to 0x40), triggers are on IN1,
+    // and the guns arrive through the serial-channel-2 mux at registers
+    // 0x0a/0x0c rather than the wheel/pedal ADC.
+    const bool gun = m_profile.io == model2_game_profile::io_kind::crx_gun;
+    const auto gun_axis = [this](unsigned port) -> uint16_t {
+        // 10-bit ADC ranges from MAME's vcop2 light-gun calibration; port
+        // order matches m_lightgun_ports {P1_Y, P1_X, P2_Y, P2_X}.
+        const auto scale = [](uint8_t v, int lo, int hi) {
+            return static_cast<uint16_t>(lo + v * (hi - lo) / 255);
+        };
+        switch (port) {
+        case 0: return scale(m_inputs.left_stick_y, 36, 425);   // P1_Y
+        case 1: return scale(m_inputs.left_stick_x, 137, 630);  // P1_X
+        case 2: return scale(m_inputs.p2_stick_y, 36, 425);     // P2_Y
+        default: return scale(m_inputs.p2_stick_x, 134, 627);   // P2_X
+        }
+    };
     const auto analog_scale = [](uint16_t value, uint16_t maximum) {
         // The 8-bit ADC rounds to the nearest code.  Truncation maps the
         // exact steering midpoint to 0x7f; Sega Rally then mirrors that to
@@ -955,15 +1054,20 @@ uint8_t model2_bus::io_read(uint8_t offset) {
             255, (static_cast<uint32_t>(value) * 255 + maximum / 2) /
                      maximum));
     };
-    const auto input_port = [this](unsigned port) {
+    const auto input_port = [this, gun](unsigned port) {
         if (port == 1) {
             uint8_t value = 0xff;
             if (m_inputs.coin1) value &= ~uint8_t{0x01};
             if (m_inputs.coin2) value &= ~uint8_t{0x02};
             if (m_inputs.test) value &= ~uint8_t{0x04};
             if (m_inputs.service) value &= ~uint8_t{0x08};
-            if (m_inputs.view) value &= ~uint8_t{0x20};
-            if (m_inputs.start) value &= ~uint8_t{0x40};
+            if (gun) {
+                if (m_inputs.start) value &= ~uint8_t{0x10};    // START1
+                if (m_inputs.p2_start) value &= ~uint8_t{0x20}; // START2
+            } else {
+                if (m_inputs.view) value &= ~uint8_t{0x20};
+                if (m_inputs.start) value &= ~uint8_t{0x40};
+            }
             // Port A bit 0 multiplexes the upper nibble of port B onto the
             // serial EEPROM pins. Coin/test/service stay live in the lower
             // nibble; start is visible again as soon as the transaction ends.
@@ -980,11 +1084,20 @@ uint8_t model2_bus::io_read(uint8_t offset) {
             return value;
         }
         if (port == 2) {
+            if (gun) {
+                // IN1: P1/P2 triggers (active low), rest unused.
+                uint8_t value = 0xff;
+                if (m_inputs.buttons[0]) value &= ~uint8_t{0x01};
+                if (m_inputs.p2_buttons[0]) value &= ~uint8_t{0x02};
+                return value;
+            }
             static constexpr std::array<uint8_t, 5> gear_code{0, 2, 1, 6, 5};
             return static_cast<uint8_t>(0x8f | (gear_code[m_gear] << 4));
         }
-        if (port == 3)
+        if (port == 3) {
+            if (gun) return uint8_t{0xff}; // IN2: DIP bank, all off
             return m_inputs.view4 ? uint8_t{0xff} : uint8_t{0x00};
+        }
         return uint8_t{0xff};
     };
 
@@ -992,6 +1105,19 @@ uint8_t model2_bus::io_read(uint8_t offset) {
         const uint8_t value = ((m_io_port_config >> offset) & 1) ?
             input_port(offset) : m_io_port_values[offset];
         return value;
+    }
+    if (gun && offset == 0x0c) {
+        // Serial-channel-2 read = light-gun mux (lightgun_mux_r): a coordinate
+        // byte for mux 0..7, otherwise the off-screen/reload status.
+        if (m_lightgun_mux < 8) {
+            const uint16_t axis = gun_axis(m_lightgun_mux >> 1);
+            return static_cast<uint8_t>(
+                (m_lightgun_mux & 1) ? (axis >> 8) : axis);
+        }
+        uint8_t data = 0xfc;
+        if (m_inputs.buttons[1]) data |= 0x01;    // P1 off-screen / reload
+        if (m_inputs.p2_buttons[1]) data |= 0x02; // P2 off-screen / reload
+        return data;
     }
     if (offset == 0x0d) return 0x0c;
     if (offset == 0x0f) {
@@ -1025,6 +1151,12 @@ void model2_bus::io_write(uint8_t offset, uint8_t value) {
     if (offset <= 6) {
         m_io_port_values[offset] = value;
         if (offset == 0) eeprom_write_lines(value);
+        return;
+    }
+    // 315-5296 light-gun cabinets select the gun axis through serial channel 2.
+    if (offset == 0x0a &&
+        m_profile.io == model2_game_profile::io_kind::crx_gun) {
+        m_lightgun_mux = value;
         return;
     }
     if (offset == 0x08) {
@@ -1179,6 +1311,16 @@ void model2_bus::sound_midi_receive(uint8_t data) {
 }
 
 void model2_bus::tick(uint32_t cycles) {
+    if (m_iob) {
+        // The model1io2 Z80 runs at 9.8304 MHz alongside the 25 MHz i960.
+        // Interleave it with the CPU slices so the shared-RAM request/response
+        // handshake advances within a frame rather than lagging a whole one.
+        m_iob_clock_accum += static_cast<uint64_t>(cycles) * 9830400ULL;
+        const uint32_t board_cycles =
+            static_cast<uint32_t>(m_iob_clock_accum / 25000000ULL);
+        m_iob_clock_accum -= static_cast<uint64_t>(board_cycles) * 25000000ULL;
+        if (board_cycles) m_iob->execute(static_cast<int>(board_cycles));
+    }
     if (m_uart_rx_pending.load(std::memory_order_acquire) &&
         (m_irq_enable & (1U << 10)))
         m_irq_request |= 1U << 10;
@@ -1227,7 +1369,9 @@ void model2_bus::vblank() {
     ++m_frame_number;
     // Service settings and bookkeeping must survive a compositor/session
     // kill as well as a clean destructor path. Coalesce battery-RAM writes
-    // and EEPROM transactions into at most one small save per second.
+    // and EEPROM transactions into at most one small save per second. The
+    // model1io2 board writes its 93C46 internally, so watch for changes here.
+    if (m_iob && m_iob_eeprom != m_iob_eeprom_saved) m_nvram_dirty = true;
     if (m_nvram_dirty &&
         m_frame_number - m_last_nvram_save_frame >= 60)
         save_nvram();

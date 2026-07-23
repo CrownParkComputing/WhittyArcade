@@ -25,7 +25,7 @@ public:
                       std::shared_ptr<arcade_cabinet_state> cabinet)
         : video_emulator_session(
               set == galaxian_rom_set::phoenix ? arcade_board_type::phoenix :
-                                                 arcade_board_type::mooncrst,
+                                                 arcade_board_type::galaxian,
               std::move(video), std::move(cabinet)),
           m_set(set) {}
     ~galaxian_emulator() override {
@@ -139,7 +139,7 @@ protected:
 };
 
 // =====================================================================
-// shinobi_emulator -- emulator session for Shinobi (Sega System 16-B).
+// system16b_emulator -- emulator session for Shinobi (Sega System 16-B).
 // Audio integrates with the in-tree Shinobi synth through a dedicated
 // audio thread (set up analogously to the galaxian_audio_system wiring).
 // =====================================================================
@@ -151,7 +151,7 @@ std::unique_ptr<emulator_session> make_galaxian_session(
     std::shared_ptr<arcade_cabinet_state> cabinet) {
     const galaxian_rom_set set = board == arcade_board_type::phoenix ?
         galaxian_rom_set::phoenix :
-        board == arcade_board_type::mooncrst ? galaxian_rom_set::mooncrst :
+        board == arcade_board_type::galaxian ? galaxian_rom_set::mooncrst :
                                                galaxian_rom_set::unknown;
     if (set == galaxian_rom_set::unknown)
         throw std::invalid_argument("Not a Galaxian-family board type");

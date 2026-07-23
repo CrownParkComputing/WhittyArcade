@@ -29,8 +29,8 @@ jobs:
             pkgconf \
             libglvnd \
             mesa \
-            sdl2-compat \
-            sdl2_ttf \
+            sdl3 \
+            sdl3_ttf \
             openal \
             glew \
             zlib \
