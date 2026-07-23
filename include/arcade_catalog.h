@@ -58,6 +58,8 @@ std::size_t arcade_board_index(arcade_board_type type);
 // tooling without loading or probing an archive.
 const arcade_game_list& supported_rom_sets();
 const rom_set_manifest* find_supported_rom_set(std::string_view short_name);
+bool supports_network_two_player(const rom_set_manifest& manifest);
+bool supports_native_system_link(const rom_set_manifest& manifest);
 
 // Probe a ROM archive/directory through the loader owned by each board. The
 // returned MAME short name is the stable key used by manifests and saved data.

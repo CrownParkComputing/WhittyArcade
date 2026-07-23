@@ -21,13 +21,19 @@ int main() {
                << "show_fps=true\n"
                << "show_renderer=false\n"
                << "window_width=1100\n"
-               << "vsync=false\n";
+               << "vsync=false\n"
+               << "rom_directory=/games/arcade/roms\n"
+               << "chd_directory=/games/arcade/chd\n"
+               << "library_setup_complete=true\n";
     }
     emulator_settings settings = load_settings();
     if (settings.master_volume != 125 ||
         settings.renderer != renderer_backend::software ||
         !settings.show_fps || settings.show_renderer || settings.vsync ||
-        settings.window_width != 1100)
+        settings.window_width != 1100 ||
+        settings.rom_directory != "/games/arcade/roms" ||
+        settings.chd_directory != "/games/arcade/chd" ||
+        !settings.library_setup_complete)
         return 1;
     if (std::string(renderer_backend_name(renderer_backend::opengl)) !=
             "opengl" ||
@@ -41,7 +47,10 @@ int main() {
     settings.show_fps = false;
     if (!save_settings(settings)) return 3;
     const emulator_settings saved = load_settings();
-    if (saved.renderer != renderer_backend::vulkan || saved.show_fps)
+    if (saved.renderer != renderer_backend::vulkan || saved.show_fps ||
+        saved.rom_directory != "/games/arcade/roms" ||
+        saved.chd_directory != "/games/arcade/chd" ||
+        !saved.library_setup_complete)
         return 4;
 
     fs::remove_all(root);

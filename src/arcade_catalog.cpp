@@ -127,3 +127,16 @@ const rom_set_manifest* find_supported_rom_set(std::string_view short_name) {
         });
     return found == manifests.end() ? nullptr : &*found;
 }
+
+bool supports_network_two_player(const rom_set_manifest& manifest) {
+    return manifest.working &&
+           (manifest.multiplayer == arcade_multiplayer_mode::alternating ||
+            manifest.multiplayer == arcade_multiplayer_mode::simultaneous);
+}
+
+bool supports_native_system_link(const rom_set_manifest& manifest) {
+    // System Link means the original cabinet communication hardware, rather
+    // than WhittyArcade's shared two-player input/video transport.
+    return manifest.working &&
+           manifest.multiplayer == arcade_multiplayer_mode::native_link;
+}

@@ -1,6 +1,7 @@
 #include "rom_library.h"
 
 #include "arcade_catalog.h"
+#include "arcade_settings.h"
 #include "namco/galaxian/galaxian_rom.h"
 #include "capcom/gng/gng_rom.h"
 #include "sega/model1/model1_rom.h"
@@ -160,7 +161,8 @@ std::string readiness_suffix(const fs::path& candidate,
             missing.emplace_back("namcoc74.zip");
     } else if (manifest.board == arcade_board_type::system246) {
         const std::string disc_path =
-            system246_rom_loader::find_disc_path(candidate.string());
+            system246_rom_loader::find_disc_path(candidate.string(),
+                                                  chd_library_path());
         if (disc_path.empty()) {
             missing.emplace_back("rrv1-a.chd");
         } else if (!system246_rom_loader::inspect_disc(disc_path)) {
@@ -216,11 +218,17 @@ bool known_collection_filename(const fs::path& path) {
 } // namespace
 
 std::string rom_library_path() {
-    return (data_root() / "WhittyArcade" / "roms").string();
+    const emulator_settings settings = load_settings();
+    return settings.rom_directory.empty() ?
+        (data_root() / "WhittyArcade" / "roms").string() :
+        normalized_path(settings.rom_directory);
 }
 
 std::string chd_library_path() {
-    return (data_root() / "WhittyArcade" / "chd").string();
+    const emulator_settings settings = load_settings();
+    return settings.chd_directory.empty() ?
+        (data_root() / "WhittyArcade" / "chd").string() :
+        normalized_path(settings.chd_directory);
 }
 
 std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
@@ -374,7 +382,7 @@ rom_audit_result audit_rom_path(const std::string& path) {
     }
     case arcade_board_type::system246: {
         const system246_rom_load_result loaded =
-            system246_rom_loader::load(path);
+            system246_rom_loader::load(path, chd_library_path());
         valid = static_cast<bool>(loaded);
         loader_error = loaded.error;
         break;

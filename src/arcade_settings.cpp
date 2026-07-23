@@ -79,6 +79,12 @@ emulator_settings load_settings() {
         else if (key == "show_fps") parse_boolean(value, settings.show_fps);
         else if (key == "show_renderer")
             parse_boolean(value, settings.show_renderer);
+        else if (key == "rom_directory")
+            settings.rom_directory = std::string(value);
+        else if (key == "chd_directory")
+            settings.chd_directory = std::string(value);
+        else if (key == "library_setup_complete")
+            parse_boolean(value, settings.library_setup_complete);
         else if (key == "renderer") {
             if (value == "vulkan") settings.renderer = renderer_backend::vulkan;
             else if (value == "software")
@@ -115,7 +121,11 @@ bool save_settings(const emulator_settings& settings) {
            << "show_fps=" << settings.show_fps << '\n'
            << "show_renderer=" << settings.show_renderer << '\n'
            << "renderer=" << renderer_backend_name(settings.renderer) << '\n'
-           << "output=" << output_mode_name(settings.output) << '\n';
+           << "output=" << output_mode_name(settings.output) << '\n'
+           << "rom_directory=" << settings.rom_directory << '\n'
+           << "chd_directory=" << settings.chd_directory << '\n'
+           << "library_setup_complete="
+           << settings.library_setup_complete << '\n';
     return output.good();
 }
 

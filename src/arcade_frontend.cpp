@@ -1,5 +1,6 @@
 #include "arcade_frontend.h"
 #include "arcade_catalog.h"
+#include "arcade_settings.h"
 #include "high_scores.h"
 #include "input_mapper.h"
 #include "launcher_menu.h"
@@ -245,34 +246,131 @@ void audit_installed_roms(launcher_menu& menu) {
     show_action_result(menu, "ROM audit", passed == choices.size(), report.str());
 }
 
+bool save_library_folders(launcher_menu& menu, emulator_settings& settings) {
+    settings.library_setup_complete = true;
+    if (!save_settings(settings)) {
+        menu.show_text(
+            "Folder settings - Error",
+            "WhittyArcade could not save the selected folders to:\n\n" +
+                settings_path());
+        return false;
+    }
+    // Discovery creates missing default/custom directories and immediately
+    // verifies that the new setting can be read back.
+    const std::vector<rom_choice> games = discover_library_roms({});
+    menu.show_text(
+        "Folders saved",
+        "ROM folder:\n" + rom_library_path() +
+            "\n\nCHD folder:\n" + chd_library_path() +
+            "\n\nInstalled supported games found: " +
+            std::to_string(games.size()));
+    return true;
+}
+
+bool choose_library_folders(launcher_menu& menu, bool first_run) {
+    emulator_settings settings = load_settings();
+    for (;;) {
+        const int selected = menu.select(
+            first_run ? "Welcome to WhittyArcade" : "ROM and CHD folders",
+            first_run ?
+                "Choose where WhittyArcade should look for your existing MAME "
+                "ROM archives and disc images. Files stay in place and are "
+                "never imported, copied or repacked." :
+                "Choose both library locations again, or use WhittyArcade's "
+                "recommended per-user folders.",
+            {"Choose my library folders",
+             "Use recommended per-user folders"},
+            first_run ? "Exit WhittyArcade" : "Cancel");
+        if (selected < 0) return false;
+        if (selected == 1) {
+            settings.rom_directory.clear();
+            settings.chd_directory.clear();
+            return save_library_folders(menu, settings);
+        }
+
+        const std::vector<std::string> rom_folder =
+            platform_file_selection(true, false, "Choose your MAME ROM folder");
+        if (rom_folder.empty()) continue;
+        settings.rom_directory = rom_folder.front();
+
+        const int chd_choice = menu.select(
+            "Disc image folder",
+            "CHD files can live beside your ROM ZIPs, or in their own folder.",
+            {"Choose a separate CHD folder",
+             "Use the ROM folder for CHDs"},
+            "Back");
+        if (chd_choice < 0) continue;
+        if (chd_choice == 0) {
+            const std::vector<std::string> chd_folder =
+                platform_file_selection(
+                    true, false, "Choose your arcade CHD folder");
+            if (chd_folder.empty()) continue;
+            settings.chd_directory = chd_folder.front();
+        } else {
+            settings.chd_directory = settings.rom_directory;
+        }
+        return save_library_folders(menu, settings);
+    }
+}
+
+void show_library_folder_settings(launcher_menu& menu) {
+    for (;;) {
+        const std::string description =
+            "ROM folder:\n" + rom_library_path() +
+            "\n\nCHD folder:\n" + chd_library_path();
+        const int selected = menu.select(
+            "ROM and CHD folders", description,
+            {"Change both folders",
+             "Change ROM folder only",
+             "Change CHD folder only",
+             "Use ROM folder for CHDs",
+             "Restore recommended folders"},
+            "Back to Settings");
+        if (selected < 0) return;
+        if (selected == 0) {
+            choose_library_folders(menu, false);
+            continue;
+        }
+
+        emulator_settings settings = load_settings();
+        if (selected == 1 || selected == 2) {
+            const bool rom = selected == 1;
+            const std::vector<std::string> folder = platform_file_selection(
+                true, false, rom ? "Choose your MAME ROM folder" :
+                                   "Choose your arcade CHD folder");
+            if (folder.empty()) continue;
+            if (rom) settings.rom_directory = folder.front();
+            else settings.chd_directory = folder.front();
+        } else if (selected == 3) {
+            settings.chd_directory = rom_library_path();
+        } else if (selected == 4) {
+            settings.rom_directory.clear();
+            settings.chd_directory.clear();
+        }
+        save_library_folders(menu, settings);
+    }
+}
+
 void show_rom_library_manager(launcher_menu& menu) {
     for (;;) {
         const std::vector<std::string> items{
+            "ROM and CHD folder locations",
             "Audit ROMs",
             "Required MAME sets",
-            "ROM / CHD folders",
             "How merged / split sets work",
         };
         const int selected = menu.select(
-            "ROM Folders",
-            "WhittyArcade reads ROM ZIPs and disc images straight from its ROM "
-            "and CHD folders. Drop supported sets in; nothing is imported or "
-            "copied.",
+            "Settings",
+            "Manage the folders WhittyArcade reads directly. Your ROM and CHD "
+            "files remain where they are.",
             items, "Back to Main Menu");
         if (selected < 0) return;
         if (selected == 0) {
-            audit_installed_roms(menu);
+            show_library_folder_settings(menu);
         } else if (selected == 1) {
-            menu.show_text("Required MAME sets", required_rom_sets_text());
+            audit_installed_roms(menu);
         } else if (selected == 2) {
-            const std::string message =
-                "WhittyArcade reads games directly from these folders:\n\n"
-                "ROM folder:\n" + rom_library_path() +
-                "\n\nCHD folder:\n" + chd_library_path() +
-                "\n\nDrop supported MAME set ZIPs into the ROM folder and disc "
-                "images (rrv1-a.chd) into the CHD folder. Files are read in "
-                "place - nothing is copied, extracted or repacked.";
-            menu.show_text("ROM / CHD folders", message);
+            menu.show_text("Required MAME sets", required_rom_sets_text());
         } else if (selected == 3) {
             menu.show_text(
                 "MAME archive layouts",
@@ -445,6 +543,9 @@ std::vector<rom_choice> discover_rom_choices(const std::string& current_path) {
 rom_selection_result show_rom_selector(const std::string& current_path,
                                        multiplayer_lobby* lobby) {
     launcher_menu menu;
+    if (!load_settings().library_setup_complete &&
+        !choose_library_folders(menu, true))
+        return {rom_selection_action::exit_requested, {}};
     std::vector<rom_choice> choices = discover_rom_choices(current_path);
     const auto linked_result = [&](std::string_view short_name, int node) {
         for (const rom_choice& choice : choices) {
@@ -477,14 +578,14 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             lobby && lobby->connected() ?
                 "Multiplayer  [CONNECTED]" :
                 "Multiplayer  [SEARCHING]",
-            "ROM Folders",
+            "Settings",
             "Controllers / Keyboard",
             "EEPROM / NVRAM Manager",
             "High Scores",
         };
         const std::string description = choices.empty() ?
-            "No games are installed yet. Open ROM Folders to see where to "
-            "place MAME ZIP archives and disc images." :
+            "No games were found in the configured folders. Open Settings to "
+            "choose the locations of your MAME ZIP archives and disc images." :
             "Choose where you want to go. Games are organised by their "
             "original arcade hardware.";
         const bool lobby_connected_at_draw =
@@ -550,6 +651,20 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     continue;
                 }
 
+                const int multiplayer_kind = menu.select_interruptible(
+                    "Multiplayer - Player 2 Connected",
+                    "Network Two Player shares one supported game's controls "
+                    "and picture between the apps. System Link uses original "
+                    "arcade cabinet communication and is currently enabled "
+                    "only for Sega Rally.",
+                    {"Network Two Player",
+                     "Arcade System Link  |  Sega Rally only"},
+                    "Back to Main Menu", 0,
+                    [lobby] { return !lobby->connected(); });
+                if (multiplayer_kind == launcher_menu::interrupted) continue;
+                if (multiplayer_kind < 0) break;
+
+                const bool system_link = multiplayer_kind == 1;
                 std::vector<std::size_t> linked_indices;
                 std::vector<std::string> linked_labels;
                 for (std::size_t index = 0; index < choices.size(); ++index) {
@@ -557,25 +672,32 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                         identify_arcade_game(choices[index].path);
                     const rom_set_manifest* manifest = identity ?
                         find_supported_rom_set(identity->short_name) : nullptr;
-                    if (!identity || !manifest || !manifest->working ||
-                        manifest->multiplayer ==
-                            arcade_multiplayer_mode::none ||
+                    if (!identity || !manifest ||
+                        (system_link ?
+                            !supports_native_system_link(*manifest) :
+                            !supports_network_two_player(*manifest)) ||
                         !lobby->peer_has_game(identity->short_name))
                         continue;
                     linked_indices.push_back(index);
-                    linked_labels.push_back(choices[index].label);
+                    linked_labels.push_back(
+                        std::string(system_link ? "SYSTEM LINK  |  " :
+                                                  "NETWORK 2P  |  ") +
+                        choices[index].label);
                 }
                 const int selected = menu.select_interruptible(
-                    "Multiplayer - Player 2 Connected",
+                    system_link ? "Arcade System Link" :
+                                  "Network Two Player",
                     linked_labels.empty() ?
-                        "No supported multiplayer ROM is installed on both "
-                        "systems." :
+                        (system_link ?
+                            "Sega Rally is not installed on both systems." :
+                            "No supported two-player ROM is installed on both "
+                            "systems.") :
                         "Choose once here. Player 2 will launch the same game "
                         "automatically.",
-                    linked_labels, "Back to Main Menu", 0,
+                    linked_labels, "Back to Multiplayer", 0,
                     [lobby] { return !lobby->connected(); });
                 if (selected == launcher_menu::interrupted) continue;
-                if (selected < 0) break;
+                if (selected < 0) continue;
                 if (selected >= static_cast<int>(linked_indices.size()))
                     continue;
                 const rom_choice& choice = choices[
@@ -640,8 +762,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                                 .display_name) + " Games",
                 game_indices.empty() ?
                     "No installed ROM archives were found for this board. "
-                    "Open ROM Folders from the Main Menu to see where to place "
-                    "the required files." :
+                    "Open Settings from the Main Menu to choose the ROM and "
+                    "CHD folders." :
                     "Choose a game to start.",
                 labels, "Back to Boards", current_selection);
             if (selected_game < 0 ||
@@ -661,16 +783,34 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     "current hardware implementation.", "Back to Games");
                 continue;
             }
-            const bool linked_model2 =
-                identity && std::string_view(identity->short_name) == "srallyc";
             const arcade_multiplayer_mode multiplayer = manifest ?
                 manifest->multiplayer : arcade_multiplayer_mode::none;
-            std::vector<std::string> launch_items{
-                "Single Screen  |  one arcade display",
-                "Twin Screen Fullscreen  |  two bordered panes",
-                "Twin Screen Two Windows  |  same desktop",
-                "Twin Screen Two Monitors  |  one window per monitor",
-            };
+            const bool system_link =
+                manifest && supports_native_system_link(*manifest);
+            const bool network_two_player =
+                manifest && supports_network_two_player(*manifest);
+            std::vector<std::string> launch_items;
+            if (system_link) {
+                launch_items = {
+                    "Single Cabinet  |  one Sega Rally machine",
+                    "Twin Linked Cabinets Fullscreen  |  two bordered panes",
+                    "Twin Linked Cabinets Two Windows  |  same desktop",
+                    "Twin Linked Cabinets Two Monitors  |  one per monitor",
+                };
+            } else if (network_two_player) {
+                launch_items = {
+                    multiplayer == arcade_multiplayer_mode::alternating ?
+                        "One Screen  |  original alternating 2-player cabinet" :
+                        "One Screen  |  original simultaneous 2-player cabinet",
+                    "Twin Display Fullscreen  |  same game on both panes",
+                    "Twin Display Two Windows  |  same desktop",
+                    "Twin Display Two Monitors  |  one per monitor",
+                };
+            } else {
+                launch_items = {
+                    "Single Screen  |  one-player cabinet",
+                };
+            }
             const char* multiplayer_description =
                 multiplayer == arcade_multiplayer_mode::alternating ?
                     "This is an original two-player alternating-turn game. " :
@@ -681,29 +821,30 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     "This title has no supported Player 2 input path. ";
             const int launch = menu.select(
                 "Start " + choice.label,
-                linked_model2 ?
+                system_link ?
                     "Single Screen runs one Sega cabinet. Twin Screen starts "
                     "two locally linked Sega cabinets, fitted independently "
                     "at the board's native pixel resolution. Choose fullscreen "
                     "panes, two windows or one window on each monitor. "
-                    "Use Multiplayer on the "
-                    "Main Menu to link two WhittyArcade apps." :
+                    "Use Multiplayer > Arcade System Link to connect two "
+                    "WhittyArcade apps; Sega Rally is currently the only "
+                    "enabled System Link title." :
                     std::string(multiplayer_description) +
-                    "Single Screen uses one correctly fitted arcade viewport. "
-                    "Twin Screen mirrors the same session into two bordered "
-                    "native-raster viewports with one integer scale on both "
-                    "axes. Choose fullscreen panes, two windows on one desktop "
-                    "or one window on each monitor. "
-                    "Use Multiplayer on "
-                    "the Main Menu for two-app play.",
+                    "Single Screen uses one correctly fitted arcade viewport. " +
+                    (network_two_player ?
+                        "Twin Display mirrors that same two-player session into "
+                        "two aspect-correct viewports. Use Multiplayer > "
+                        "Network Two Player for two-app play." :
+                        "No Player 2 or twin-display launch is offered until "
+                        "that game's second-player input path is implemented."),
                 launch_items, "Back to Games");
             if (launch < 0) continue;
             return {
                 rom_selection_action::selected,
                 choice.path,
                 launch == 0 ? cabinet_launch_mode::single :
-                    (linked_model2 ? cabinet_launch_mode::linked_pair :
-                                     cabinet_launch_mode::independent_pair),
+                    (system_link ? cabinet_launch_mode::linked_pair :
+                                   cabinet_launch_mode::independent_pair),
                 0,
                 launch == 0 ? -1 : (launch == 1 ? 1 : 0),
                 launch == 3,

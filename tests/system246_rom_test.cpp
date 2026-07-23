@@ -136,6 +136,17 @@ int main(int argc, char** argv) {
     assert(inspected.logical_bytes == 258684928);
     assert(system246_rom_loader::find_disc_path(archive.string()) ==
            disc.string());
+    const fs::path separate_rom_folder = root / "roms";
+    const fs::path separate_chd_folder = root / "my-chds";
+    fs::create_directories(separate_rom_folder);
+    fs::create_directories(separate_chd_folder);
+    const fs::path separated_archive = separate_rom_folder / "rrvac.zip";
+    const fs::path separated_disc = separate_chd_folder / "rrv1-a.chd";
+    fs::copy_file(archive, separated_archive);
+    fs::copy_file(disc, separated_disc);
+    assert(system246_rom_loader::find_disc_path(
+               separated_archive.string(), separate_chd_folder.string()) ==
+           separated_disc.string());
 
     write_test_chd(disc, false);
     assert(!system246_rom_loader::inspect_disc(disc.string()));

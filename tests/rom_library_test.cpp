@@ -1,3 +1,4 @@
+#include "arcade_settings.h"
 #include "rom_library.h"
 #include "test_platform.h"
 
@@ -35,6 +36,13 @@ int main() {
     const fs::path data = root / "data";
     fs::create_directories(data);
     if (!test_set_environment("XDG_DATA_HOME", data)) return 1;
+    if (!test_set_environment("XDG_CONFIG_HOME", root / "config")) return 1;
+
+    emulator_settings settings;
+    settings.rom_directory = (root / "my-roms").string();
+    settings.chd_directory = (root / "my-discs").string();
+    settings.library_setup_complete = true;
+    if (!save_settings(settings)) return 1;
 
     // WhittyArcade reads set ZIPs straight from its ROM folder. Drop a merged
     // ridgerac.zip (per-set subdir, identified by basename) plus the C71/C74
@@ -55,9 +63,10 @@ int main() {
     // discovery creates both so the user knows where to drop files.
     assert(fs::is_directory(rom_library_path()));
     assert(fs::is_directory(chd_library_path()));
-    assert(fs::path(chd_library_path()).filename() == "chd");
-    assert(fs::path(chd_library_path()).parent_path().filename() ==
-           "WhittyArcade");
+    assert(fs::path(rom_library_path()) == root / "my-roms");
+    assert(fs::path(chd_library_path()) == root / "my-discs");
+    // Custom locations are used directly rather than being copied beneath a
+    // WhittyArcade-managed import tree.
 
     const std::string required_sets = required_rom_sets_text();
     assert(supported_rom_sets().size() >= 15);

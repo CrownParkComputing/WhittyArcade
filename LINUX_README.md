@@ -18,11 +18,13 @@ chmod +x WhittyArcade
 ./WhittyArcade
 ```
 
-The launcher can import individual MAME-compatible ZIP archives or scan a ROM
-folder. Imported archives are copied unchanged below
-`$XDG_DATA_HOME/WhittyArcade/roms` (normally
-`~/.local/share/WhittyArcade/roms`). Settings and saves are stored below
-`$XDG_CONFIG_HOME/WhittyArcade` (normally `~/.config/WhittyArcade`).
+On first launch, choose the folders containing your MAME-compatible ZIPs and
+CHD images, or accept the recommended locations below
+`$XDG_DATA_HOME/WhittyArcade` (normally
+`~/.local/share/WhittyArcade`). WhittyArcade reads those files in place and
+does not import, copy, extract or repack them. Change the paths later under
+**Settings > ROM and CHD folder locations**. Settings and saves are stored
+below `$XDG_CONFIG_HOME/WhittyArcade` (normally `~/.config/WhittyArcade`).
 
 You must provide ROMs and firmware that you are legally entitled to use.
 WhittyArcade does not provide them or link to downloads.

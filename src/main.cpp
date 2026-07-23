@@ -346,7 +346,7 @@ int main(int argc, char* argv[]) {
 
     const runtime_options runtime = parse_runtime_options(argc, argv);
     std::string rom_path = runtime.positional.empty() ?
-        "roms/" : runtime.positional[0];
+        std::string{} : runtime.positional[0];
     std::string bios_path;
     const bool explicit_bios_path = runtime.positional.size() > 1;
     if (explicit_bios_path) {
@@ -387,6 +387,11 @@ int main(int argc, char* argv[]) {
             rom_selection_result selection =
                 show_rom_selector(rom_path, lobby.get());
             if (selection.action == rom_selection_action::selected) {
+                // The first-run/settings UI may have changed the persisted
+                // library paths. Reload the full settings record before
+                // applying this launch's runtime-only display choices so a
+                // later volume/display save cannot overwrite those paths.
+                settings = load_settings();
                 rom_path = std::move(selection.path);
                 launch_mode = selection.launch_mode;
                 cabinet_node = selection.cabinet_node;

@@ -587,6 +587,7 @@ add_test(NAME arcade_catalog_test COMMAND arcade_catalog_test)
 add_executable(rom_library_test
     tests/rom_library_test.cpp
     src/arcade_catalog.cpp
+    src/arcade_settings.cpp
     src/arcade_game_probe.cpp
     src/rom_library.cpp
     src/namco/system22/system22_rom.cpp

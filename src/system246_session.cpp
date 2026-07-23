@@ -4,6 +4,7 @@
 #include "arcade_session_internal.h"
 #include "arcade_frontend.h"
 #include "system246_rom.h"
+#include "rom_library.h"
 
 #include "system246/play_audio.h"
 #include "system246/play_core.h"
@@ -40,7 +41,7 @@ public:
         std::printf("RRV ROM path: %s\n", rom_path.c_str());
 
         const system246_rom_load_result roms =
-            system246_rom_loader::load(rom_path);
+            system246_rom_loader::load(rom_path, chd_library_path());
         if (!roms) {
             std::fprintf(stderr, "%s\n", roms.error.c_str());
             return false;

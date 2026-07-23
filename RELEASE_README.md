@@ -29,11 +29,12 @@ chmod +x WhittyArcade
 ./WhittyArcade
 ```
 
-The launcher opens automatically. Select **ROM Folders** to display the active
-locations. Put MAME-compatible ZIPs or extracted sets in
-`~/.local/share/WhittyArcade/roms` and disc images in
-`~/.local/share/WhittyArcade/chd`. WhittyArcade reads files in place; there is
-no import, copy, extraction or repacking step.
+The launcher opens automatically. Its first-run wizard asks for your ROM and
+CHD folders; you may select existing locations or accept
+`~/.local/share/WhittyArcade/roms` and
+`~/.local/share/WhittyArcade/chd`. Change them later under
+**Settings > ROM and CHD folder locations**. WhittyArcade reads files in
+place; there is no import, copy, extraction or repacking step.
 
 You must provide ROMs and firmware that you are legally entitled to use.
 WhittyArcade does not provide them or link to downloads.
