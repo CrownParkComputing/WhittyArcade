@@ -1,6 +1,7 @@
 #include "arcade_presenter.h"
 
 #include "arcade_config.h"
+#include "twin_window_layout.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -241,6 +242,7 @@ struct alternate_presenter::implementation {
     SDL_Texture* mirror_texture{};
     int mirror_texture_width{};
     int mirror_texture_height{};
+    int mirror_layout_attempts{};
     std::vector<uint8_t> mirror_pixels;
     int texture_width{};
     int texture_height{};
@@ -277,6 +279,7 @@ struct alternate_presenter::implementation {
         mirror_renderer = nullptr;
         mirror_window = nullptr;
         mirror_texture_width = mirror_texture_height = 0;
+        mirror_layout_attempts = 0;
         mirror_pixels.clear();
         if (window) SDL_SetWindowTitle(window, "WhittyArcade");
     }
@@ -296,14 +299,17 @@ struct alternate_presenter::implementation {
             return false;
         }
         set_fixed_window_size(mirror_window, settings.window_width);
-        if (!settings.twin_separate_monitors ||
-            !place_window_on_display(mirror_window, 1, true)) {
+        if (!settings.twin_separate_monitors) {
+            SDL_SetWindowTitle(window, "WhittyArcade - Player 1");
+            mirror_layout_attempts = 0;
+        } else if (!place_window_on_display(mirror_window, 1, true)) {
             int x = SDL_WINDOWPOS_CENTERED;
             int y = SDL_WINDOWPOS_CENTERED;
             SDL_GetWindowPosition(window, &x, &y);
             SDL_SetWindowPosition(mirror_window, x + 48, y + 48);
         }
-        SDL_SetWindowTitle(window, "WhittyArcade - Player 1");
+        if (settings.twin_separate_monitors)
+            SDL_SetWindowTitle(window, "WhittyArcade - Player 1");
         return true;
     }
 
@@ -317,6 +323,16 @@ struct alternate_presenter::implementation {
             return;
         }
         if (!ensure_mirror()) return;
+        // Wayland maps a newly-created top-level asynchronously. Retry the
+        // side-by-side compositor placement for the first few presented
+        // frames so both title selectors exist before Hyprland receives it.
+        if (!settings.twin_separate_monitors &&
+            mirror_layout_attempts < 6) {
+            SDL_PumpEvents();
+            whitty_window::arrange_twin_windows(
+                window, mirror_window, settings.window_width);
+            ++mirror_layout_attempts;
+        }
         if (!mirror_texture || mirror_texture_width != width ||
             mirror_texture_height != height) {
             if (mirror_texture) SDL_DestroyTexture(mirror_texture);
@@ -362,6 +378,16 @@ struct alternate_presenter::implementation {
             static_cast<float>(fit.w), static_cast<float>(fit.h)};
         SDL_RenderTexture(mirror_renderer, mirror_texture, nullptr,
                           &destination);
+        float old_scale_x = 1.0f;
+        float old_scale_y = 1.0f;
+        SDL_GetRenderScale(mirror_renderer, &old_scale_x, &old_scale_y);
+        SDL_SetRenderScale(mirror_renderer, 2.0f, 2.0f);
+        SDL_SetRenderDrawColor(mirror_renderer, 8, 13, 20, 220);
+        const SDL_FRect badge{8.0f, 8.0f, 48.0f, 13.0f};
+        SDL_RenderFillRect(mirror_renderer, &badge);
+        SDL_SetRenderDrawColor(mirror_renderer, 255, 92, 140, 255);
+        SDL_RenderDebugText(mirror_renderer, 12.0f, 10.0f, "PLAYER 2");
+        SDL_SetRenderScale(mirror_renderer, old_scale_x, old_scale_y);
         SDL_RenderPresent(mirror_renderer);
     }
 
@@ -884,12 +910,21 @@ void alternate_presenter::apply_settings(const emulator_settings& settings) {
     } else {
         SDL_SetWindowFullscreen(m_impl->window, false);
         set_fixed_window_size(m_impl->window, settings.window_width);
+        bool arranged_pair = false;
+        if (settings.output == output_mode::dual &&
+            !settings.twin_separate_monitors && m_impl->mirror_window) {
+            whitty_window::arrange_twin_windows(
+                m_impl->window, m_impl->mirror_window,
+                settings.window_width);
+            arranged_pair = true;
+        }
         const int target_display =
             settings.output == output_mode::dual &&
                     settings.twin_separate_monitors
                 ? 0
                 : settings.display_index;
-        if (!place_window_on_display(m_impl->window, target_display, true))
+        if (!arranged_pair &&
+            !place_window_on_display(m_impl->window, target_display, true))
             SDL_SetWindowPosition(m_impl->window, SDL_WINDOWPOS_CENTERED,
                                   SDL_WINDOWPOS_CENTERED);
     }

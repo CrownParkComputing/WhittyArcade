@@ -6,6 +6,7 @@
 #include "arcade_sdl_guard.h"
 #include "network_video_link.h"
 #include "platform_paths.h"
+#include "twin_window_layout.h"
 
 #include <GL/glew.h>
 #include <SDL3/SDL.h>
@@ -2748,7 +2749,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
 
     // In the fullscreen split, both players share one surface with no window
     // titles to tell them apart, so label each half in its bottom-left corner.
-    if (pane_count == 2) {
+    if (pane_count == 2 || second_window) {
         ensure_player_labels();
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2758,7 +2759,8 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
             glGetUniformLocation(m_settings_program, "settings_texture");
         glUniform1i(tex_loc, 0);
         glBindVertexArray(m_settings_vertex_array);
-        for (int pane = 0; pane < 2; ++pane) {
+        const int label_count = pane_count == 2 ? 2 : 1;
+        for (int pane = 0; pane < label_count; ++pane) {
             if (!m_player_label_texture[pane]) continue;
             glViewport(panes[pane].x + 16, panes[pane].y + 16,
                        m_player_label_w[pane], m_player_label_h[pane]);
@@ -2823,16 +2825,29 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
                         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE)) {
                     if (!m_display_settings.twin_separate_monitors ||
                         !place_window_on_display(w2, 1, true)) {
-                        int x = SDL_WINDOWPOS_CENTERED;
-                        int y = SDL_WINDOWPOS_CENTERED;
-                        SDL_GetWindowPosition(w1, &x, &y);
-                        SDL_SetWindowPosition(w2, x + 48, y + 48);
+                        if (!m_display_settings.twin_separate_monitors) {
+                            whitty_window::arrange_twin_windows(
+                                w1, w2, m_display_settings.window_width);
+                        } else {
+                            int x = SDL_WINDOWPOS_CENTERED;
+                            int y = SDL_WINDOWPOS_CENTERED;
+                            SDL_GetWindowPosition(w1, &x, &y);
+                            SDL_SetWindowPosition(w2, x + 48, y + 48);
+                        }
                     }
                     m_ctx->window2 = w2;
-                    SDL_SetWindowTitle(w1, "WhittyArcade - Player 1");
+                    if (m_display_settings.twin_separate_monitors)
+                        SDL_SetWindowTitle(w1, "WhittyArcade - Player 1");
                 }
             }
             if (SDL_Window* w2 = static_cast<SDL_Window*>(m_ctx->window2)) {
+                if (!m_display_settings.twin_separate_monitors &&
+                    m_ctx->twin_layout_attempts < 6) {
+                    SDL_PumpEvents();
+                    whitty_window::arrange_twin_windows(
+                        w1, w2, m_display_settings.window_width);
+                    ++m_ctx->twin_layout_attempts;
+                }
                 SDL_GL_MakeCurrent(w2, ctx);
                 int w2w = 1;
                 int w2h = 1;
@@ -2853,6 +2868,23 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
                 glUniform2i(output_origin_loc, p2.x, p2.y);
                 glBindVertexArray(m_post_vertex_array);
                 glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                ensure_player_labels();
+                if (m_player_label_texture[1]) {
+                    glEnable(GL_BLEND);
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    glUseProgram(m_settings_program);
+                    glActiveTexture(GL_TEXTURE0);
+                    glUniform1i(
+                        glGetUniformLocation(
+                            m_settings_program, "settings_texture"), 0);
+                    glBindVertexArray(m_settings_vertex_array);
+                    glViewport(16, 16, m_player_label_w[1],
+                               m_player_label_h[1]);
+                    glBindTexture(GL_TEXTURE_2D,
+                                  m_player_label_texture[1]);
+                    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                    glDisable(GL_BLEND);
+                }
                 SDL_GL_SwapWindow(w2);
                 SDL_GL_MakeCurrent(w1, ctx);
             }
@@ -2860,6 +2892,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
             // Left windowed dual output - tear the second window down.
             SDL_DestroyWindow(static_cast<SDL_Window*>(m_ctx->window2));
             m_ctx->window2 = nullptr;
+            m_ctx->twin_layout_attempts = 0;
             SDL_SetWindowTitle(static_cast<SDL_Window*>(m_ctx->window),
                                "WhittyArcade");
         }
@@ -3849,6 +3882,7 @@ void opengl_context::destroy() {
     if (gl_context) SDL_GL_DestroyContext(static_cast<SDL_GLContext>(gl_context));
     if (window) SDL_DestroyWindow(static_cast<SDL_Window*>(window));
     window2 = nullptr;
+    twin_layout_attempts = 0;
     gl_context = nullptr;
     window = nullptr;
 }

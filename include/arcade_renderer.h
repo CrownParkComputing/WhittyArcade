@@ -283,6 +283,7 @@ struct opengl_context {
     void* gl_context{nullptr};   // GL context
     int width{0};
     int height{0};
+    int twin_layout_attempts{0};
 
     bool create(void* window, int w, int h);
     void destroy();
