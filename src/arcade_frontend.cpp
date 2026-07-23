@@ -534,7 +534,33 @@ rom_selection_result show_rom_selector(const std::string& current_path) {
                     "current hardware implementation.", "Back to Games");
                 continue;
             }
-            return {rom_selection_action::selected, choice.path};
+            const bool linked_model2 =
+                identity && std::string_view(identity->short_name) == "srallyc";
+            const std::vector<std::string> launch_items{
+                "Single Cabinet",
+                linked_model2 ?
+                    "Linked Twin Cabinets (two screens)" :
+                    "Two Independent Cabinets (Player 1 / Player 2)",
+            };
+            const int launch = menu.select(
+                "Start " + choice.label,
+                linked_model2 ?
+                    "Linked Twin starts two complete Sega Rally machines. "
+                    "Each screen has its own view and controls; their Model 2 "
+                    "communication boards race together." :
+                    "This game's original board has one video output. Two "
+                    "Cabinets starts a second independent copy on screen 2, "
+                    "using Player 2's controller. It is not a second camera "
+                    "inside the first cabinet.",
+                launch_items, "Back to Games");
+            if (launch < 0) continue;
+            return {
+                rom_selection_action::selected,
+                choice.path,
+                launch == 0 ? cabinet_launch_mode::single :
+                    (linked_model2 ? cabinet_launch_mode::linked_pair :
+                                     cabinet_launch_mode::independent_pair),
+            };
         }
     }
 }

@@ -15,9 +15,16 @@ enum class rom_selection_action : uint8_t {
     exit_requested,
 };
 
+enum class cabinet_launch_mode : uint8_t {
+    single,
+    linked_pair,
+    independent_pair,
+};
+
 struct rom_selection_result {
     rom_selection_action action{rom_selection_action::no_change};
     std::string path;
+    cabinet_launch_mode launch_mode{cabinet_launch_mode::single};
 };
 
 rom_selection_result show_rom_selector(const std::string& current_path);

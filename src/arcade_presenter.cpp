@@ -444,9 +444,11 @@ struct alternate_presenter::implementation {
         std::array<present_pane, 2> panes{{{0, surface_w}, {0, 0}}};
         int pane_count = 1;
         if (settings.output == output_mode::dual && settings.fullscreen) {
-            const int split = std::clamp(surface_w / 2, 1, surface_w - 1);
-            panes[0] = {0, split};
-            panes[1] = {split, surface_w - split};
+            const int gap = std::max(surface_w / 40, 24);
+            const int left_w = std::clamp((surface_w - gap) / 2, 1,
+                                          surface_w - 1);
+            panes[0] = {0, left_w};
+            panes[1] = {left_w + gap, surface_w - left_w - gap};
             pane_count = 2;
         }
         for (int pane = 0; pane < pane_count; ++pane) {
@@ -712,9 +714,11 @@ bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
     int pane_count = 1;
     if (m_impl->settings.output == output_mode::dual &&
         m_impl->settings.fullscreen) {
-        const int split = std::clamp(output_width / 2, 1, output_width - 1);
-        panes[0] = {0, split};
-        panes[1] = {split, output_width - split};
+        const int gap = std::max(output_width / 40, 24);
+        const int left_w = std::clamp((output_width - gap) / 2, 1,
+                                      output_width - 1);
+        panes[0] = {0, left_w};
+        panes[1] = {left_w + gap, output_width - left_w - gap};
         pane_count = 2;
     }
     for (int pane = 0; pane < pane_count; ++pane) {
