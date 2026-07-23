@@ -1,7 +1,7 @@
 // arcade_renderer.cpp - shared renderer and output UI implementation
 #include "arcade_renderer.h"
 #include "arcade_catalog.h"
-#include "system22_config.h"
+#include "namco/system22/system22_config.h"
 #include "arcade_presenter.h"
 #include "arcade_sdl_guard.h"
 #include "platform_paths.h"

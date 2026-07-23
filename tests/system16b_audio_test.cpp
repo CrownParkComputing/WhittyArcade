@@ -1,4 +1,4 @@
-#include "system16b_audio.h"
+#include "sega/system16b/system16b_audio.h"
 
 #include <algorithm>
 #include <cassert>

@@ -10,7 +10,7 @@
 // or multi-board sessions) need no process-global dispatcher like the
 // old Musashi integration did.
 
-#include "system16b_machine.h"
+#include "sega/system16b/system16b_machine.h"
 #include "m68000_cpu.h"
 
 #include "z80.h"     // vendored BSD/MIT Z80 core from chips-SDL.

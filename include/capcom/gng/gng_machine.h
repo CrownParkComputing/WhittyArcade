@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gng_rom.h"
+#include "capcom/gng/gng_rom.h"
 
 #include <cstdint>
 #include <functional>

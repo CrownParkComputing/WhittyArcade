@@ -1,4 +1,4 @@
-#include "gng_audio.h"
+#include "capcom/gng/gng_audio.h"
 
 #include "ymfm.h"
 #include "ymfm_opn.h"

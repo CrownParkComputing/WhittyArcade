@@ -1,4 +1,4 @@
-#include "system22_audio.h"
+#include "namco/system22/system22_audio.h"
 
 #include <algorithm>
 #include <cstdint>

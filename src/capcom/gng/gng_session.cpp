@@ -1,9 +1,9 @@
 #include "arcade_session_internal.h"
 #include "arcade_frontend.h"
-#include "gng_audio.h"
-#include "gng_controls.h"
-#include "gng_machine.h"
-#include "gng_rom.h"
+#include "capcom/gng/gng_audio.h"
+#include "capcom/gng/gng_controls.h"
+#include "capcom/gng/gng_machine.h"
+#include "capcom/gng/gng_rom.h"
 
 #include <cstdio>
 #include <utility>

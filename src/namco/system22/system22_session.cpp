@@ -3,14 +3,14 @@
 #include "arcade_session_internal.h"
 #include "arcade_frontend.h"
 #include "persistent_data.h"
-#include "system22_audio.h"
-#include "system22_config.h"
-#include "system22_cpu.h"
-#include "system22_dsp.h"
-#include "system22_mcu.h"
-#include "system22_rom.h"
-#include "system22_sprites.h"
-#include "system22_types.h"
+#include "namco/system22/system22_audio.h"
+#include "namco/system22/system22_config.h"
+#include "namco/system22/system22_cpu.h"
+#include "namco/system22/system22_dsp.h"
+#include "namco/system22/system22_mcu.h"
+#include "namco/system22/system22_rom.h"
+#include "namco/system22/system22_sprites.h"
+#include "namco/system22/system22_types.h"
 
 #include <algorithm>
 #include <array>

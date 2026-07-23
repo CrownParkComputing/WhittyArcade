@@ -1,4 +1,4 @@
-#include "system22_sprites.h"
+#include "namco/system22/system22_sprites.h"
 
 #include <algorithm>
 #include <cstdint>

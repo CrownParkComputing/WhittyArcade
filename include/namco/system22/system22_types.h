@@ -2,7 +2,7 @@
 #pragma once
 
 #include "arcade_types.h"
-#include "system22_config.h"
+#include "namco/system22/system22_config.h"
 #include <cstdint>
 
 // Polygon vertex - matches MAME's namcos22_polyvertex

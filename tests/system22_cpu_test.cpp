@@ -1,5 +1,5 @@
-#include "system22_cpu.h"
-#include "system22_types.h"
+#include "namco/system22/system22_cpu.h"
+#include "namco/system22/system22_types.h"
 
 #include <cmath>
 #include <cstdint>

@@ -1,6 +1,6 @@
-#include "gng_machine.h"
-#include "gng_controls.h"
-#include "gng_rom.h"
+#include "capcom/gng/gng_machine.h"
+#include "capcom/gng/gng_controls.h"
+#include "capcom/gng/gng_rom.h"
 
 #include <cassert>
 #include <cstdint>

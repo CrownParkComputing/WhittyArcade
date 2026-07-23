@@ -2,7 +2,7 @@
 #pragma once
 
 #include "arcade_audio_output.h"
-#include "system22_config.h"
+#include "namco/system22/system22_config.h"
 
 #include <array>
 #include <atomic>

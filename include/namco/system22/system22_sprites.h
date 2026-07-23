@@ -1,7 +1,7 @@
 // Super System 22 sprite-list decoding.
 #pragma once
 
-#include "system22_types.h"
+#include "namco/system22/system22_types.h"
 
 #include <cstddef>
 #include <cstdint>

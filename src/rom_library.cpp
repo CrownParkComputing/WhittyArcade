@@ -2,13 +2,13 @@
 
 #include "arcade_catalog.h"
 #include "galaxian_rom.h"
-#include "gng_rom.h"
+#include "capcom/gng/gng_rom.h"
 #include "model1_rom.h"
 #include "model2_rom.h"
 #include "namco_rom.h"
 #include "platform_paths.h"
-#include "system16b_rom.h"
-#include "system22_rom.h"
+#include "sega/system16b/system16b_rom.h"
+#include "namco/system22/system22_rom.h"
 #include "system246_rom.h"
 #include "xbox360_rom.h"
 
