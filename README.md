@@ -75,8 +75,10 @@ Implemented and tested:
   alternating/simultaneous multiplayer games, Player 1 owns the authoritative
   emulator and sends its final picture to Player 2; Player 2 sends its local
   controls back as the arcade game's P2 inputs. Both displays therefore show
-  the same game and score, including while the players take turns. Native
-  multi-cabinet games such as Sega Rally instead run two linked arcade boards.
+  the same game and score, including while the players take turns. **Sega
+  Rally Championship is the only advertised native linked-cabinet game** and
+  instead runs two emulated Model 2 boards using Sega's original link
+  protocol.
 - Two normally opened WhittyArcade apps discover each other in the launcher,
   elect Player 1/Player 2 automatically and expose a shared **Multiplayer**
   game list. Player 1 chooses once; Player 2 launches the same installed ROM
@@ -130,8 +132,10 @@ implemented cabinet inputs:
   and Player 2 follows automatically. For ordinary games Player 1 streams the
   picture and audio remains on Player 1, while Player 2 contributes the second
   player's coin, start, directions and buttons. Each computer uses its normal
-  local P1 control layout. Sega Rally runs its real Model 2 link protocol
-  instead.
+  local P1 control layout. Alternating-turn networking is enabled for Galaga,
+  Galaxian, Moon Cresta, UniWar S, Phoenix, Shinobi, Ghosts'n Goblins and
+  Pac-Mania; Virtua Cop and Virtua Cop 2 use simultaneous P1/P2 input.
+  Sega Rally alone runs a native two-cabinet Model 2 link.
 
 For direct launch/testing, use `--twin-screen` for a local mirrored output, or
 use the same ROM and port base on each LAN computer:
@@ -344,7 +348,7 @@ use cases:
 | ROM workflow | Reads supported current-MAME ZIPs, extracted sets and CHDs directly from dedicated folders; no import/copy/repack step | Requires ROM sets matching the installed FBNeo version; official DAT/rebuild guidance is provided |
 | Catalog | 26 working sets across 11 board/runtime groups | A substantially broader multi-system catalog |
 | Cabinet tools | Per-game driving, twin-stick and light-gun paths; DIP/operator menus; EEPROM/NVRAM manager; verified high-score viewers | Broad input/DIP coverage, native cheats and optional `hiscore.dat` integration |
-| Wider ecosystem | Focused desktop feature set; no netplay, rewind, run-ahead or achievements at present | The Libretro core supports saves, rewind, run-ahead, pre-emptive frames, netplay, achievements and cheats through RetroArch |
+| Multiplayer / wider ecosystem | Built-in two-app discovery with authoritative network play for supported alternating and simultaneous 2P games, plus a native Sega Rally cabinet link; no rewind, run-ahead or achievements at present | The Libretro core supports saves, rewind, run-ahead, pre-emptive frames, netplay, achievements and cheats through RetroArch |
 
 See the [official FBNeo repository](https://github.com/finalburnneo/FBNeo) and
 [official Libretro FBNeo documentation](https://docs.libretro.com/library/fbneo/)

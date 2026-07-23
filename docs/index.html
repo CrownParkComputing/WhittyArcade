@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WhittyArcade — modular arcade emulator</title>
-<meta name="description" content="A standalone, board-based emulator for Sega, Namco and Capcom arcade hardware. How its architecture differs from MAME, its features, and the per-board logic.">
+<meta name="description" content="A standalone, board-based emulator for Sega, Namco and Capcom arcade hardware, with automatic two-player networking, native Sega Rally cabinet linking and direct ROM folders.">
 <meta property="og:title" content="WhittyArcade — modular arcade emulator">
-<meta property="og:description" content="Each board is a self-contained module; each game is data. How it differs from MAME, its features, and per-board logic.">
+<meta property="og:description" content="Each board is a self-contained module; each game is data. Automatic two-player networking, native Sega Rally cabinet linking and direct ROM folders.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕹️</text></svg>">
 </head>
@@ -226,9 +226,10 @@
     <div class="brand"><span class="dot"></span>WhittyArcade</div>
     <nav class="links" aria-label="Sections">
       <a href="#overview">Overview</a>
-      <a href="#vsmame">vs&nbsp;MAME</a>
+      <a href="#vsmame">Comparisons</a>
       <a href="#architecture">Architecture</a>
       <a href="#features">Features</a>
+      <a href="#multiplayer">Multiplayer</a>
       <a href="#boards">Boards</a>
       <a href="#roms">ROMs</a>
       <a href="#build">Build</a>
@@ -247,6 +248,7 @@
       <span><b>12+</b> CPU / DSP cores</span>
       <span><b>SDL3</b> host layer</span>
       <span>OpenGL&nbsp;/&nbsp;Vulkan&nbsp;/&nbsp;Software</span>
+      <span><b>2P</b> automatic LAN discovery</span>
       <span>Linux&nbsp;+&nbsp;Windows</span>
     </div>
   </div>
@@ -304,10 +306,39 @@
       <div class="row">
         <div class="k">ROM handling</div>
         <div class="mame"><b>MAME</b><p>Strict per-set / CRC audit against a fixed rompath.</p></div>
-        <div class="wa"><b>WhittyArcade</b><p>An app-owned library that imports and cherry-picks from merged, split or non-merged sets &mdash; while keeping MAME short-names as durable keys.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>Reads current-MAME ZIPs, extracted sets and CHDs directly from dedicated folders. Merged, split and non-merged layouts work without an import, copy or repack step.</p></div>
       </div>
     </div>
     <p class="note">These aren&rsquo;t competitors. MAME answers &ldquo;can this machine be preserved and documented?&rdquo; WhittyArcade answers &ldquo;can this shelf of boards share one clean, composable codebase and a good front-end?&rdquo; &mdash; and it leans on MAME to get each board right.</p>
+
+    <div class="shead" style="margin-top:3.5rem">
+      <p class="eyebrow">Focused desktop app, different scope</p>
+      <h2>How it differs from FinalBurn Neo</h2>
+      <p class="prose">FinalBurn Neo offers a much broader multi-system catalog and a mature Libretro ecosystem. WhittyArcade concentrates on a smaller group of explicitly integrated arcade boards, cabinet modes and operator workflows.</p>
+    </div>
+    <div class="contrast">
+      <div class="row">
+        <div class="k">Catalog</div>
+        <div class="mame"><b>FinalBurn Neo</b><p>Broad arcade, console and computer coverage through standalone ports and a widely used Libretro core.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>A curated Windows / Linux shelf that includes selected Namco and Sega 3D boards alongside classic 2D hardware.</p></div>
+      </div>
+      <div class="row">
+        <div class="k">ROM workflow</div>
+        <div class="mame"><b>FinalBurn Neo</b><p>Uses sets matched to the installed FBNeo version, with official DAT and rebuild guidance.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>Reads its supported current-MAME ZIPs, extracted sets and CHDs directly from ROM folders without importing or repacking them.</p></div>
+      </div>
+      <div class="row">
+        <div class="k">Multiplayer</div>
+        <div class="mame"><b>FinalBurn Neo</b><p>The Libretro core participates in RetroArch&rsquo;s broader netplay and frontend feature ecosystem.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>Two open apps discover each other and launch a shared supported 2P game. Sega Rally alone uses a native two-cabinet hardware link.</p></div>
+      </div>
+      <div class="row">
+        <div class="k">Cabinet UI</div>
+        <div class="mame"><b>FinalBurn Neo</b><p>Broad input and DIP coverage with frontend features varying between standalone and Libretro use.</p></div>
+        <div class="wa"><b>WhittyArcade</b><p>One built-in launcher for ROM folders, controls, pause/operator settings, high scores and native-aspect single/twin output.</p></div>
+      </div>
+    </div>
+    <p class="note">See the <a href="https://github.com/finalburnneo/FBNeo">official FBNeo repository</a> and <a href="https://docs.libretro.com/library/fbneo/">Libretro FBNeo documentation</a> for its current catalog and frontend capabilities.</p>
   </div>
 </section>
 
@@ -340,7 +371,7 @@
         </div>
         <div class="blk">
           <h3>Invariants, enforced by tests</h3>
-          <p>MAME short-names are durable keys for imports, NVRAM and scores; every board type has exactly one descriptor and at least one game; unknown archives never fall through to a default board. A factory test repeatedly builds and destroys every catalogued board against one shared video worker.</p>
+          <p>MAME short-names are durable keys for ROMs, NVRAM and scores; every board type has exactly one descriptor and at least one game; unknown archives never fall through to a default board. A factory test repeatedly builds and destroys every catalogued board against one shared video worker.</p>
         </div>
       </div>
     </div>
@@ -356,12 +387,13 @@
     <div class="grid">
       <div class="card"><div class="t">Emulation</div><h3>Real CPU &amp; DSP cores</h3><p>i960, NEC&nbsp;V60, MC68020, 68000, 6809, Z80, M37710 and the Model&nbsp;1/2 TGP geometry processors &mdash; interpreted and cycle-scheduled, not recompiled.</p></div>
       <div class="card"><div class="t">Output</div><h3>Three presenters</h3><p>OpenGL, Vulkan or a software renderer, all sharing one aspect-correct, letterboxed present path so the board&rsquo;s image is never stretched.</p></div>
-      <div class="card"><div class="t">Displays</div><h3>Dual-screen output</h3><p>A selectable Single / Dual output mode that gives each player their own screen &mdash; each kept at the board&rsquo;s true aspect, with a small Player&nbsp;1 / Player&nbsp;2 identifier per screen.</p></div>
+      <div class="card"><div class="t">Displays</div><h3>Native twin-screen output</h3><p>Single screen, two bordered fullscreen panes, two windows on one desktop, or one window per monitor &mdash; always fitted from the board&rsquo;s native raster without stretching.</p></div>
+      <div class="card"><div class="t">Network</div><h3>Automatic two-player play</h3><p>Open WhittyArcade on two computers and the launchers discover each other, elect Player&nbsp;1 / Player&nbsp;2 and share one installed-game menu with no IP or role setup.</p></div>
       <div class="card"><div class="t">Light guns</div><h3>On-screen crosshairs</h3><p>Per-player coloured gun sights for Virtua&nbsp;Cop and Time&nbsp;Crisis, mapped through the real board&rsquo;s gun ADC &mdash; both players read and drawn every frame.</p></div>
       <div class="card"><div class="t">Input</div><h3>Remappable controls</h3><p>SDL3 gamepad, keyboard and mouse with instance-ID hotplug, plus an in-app capture UI to rebind any control per game.</p></div>
       <div class="card"><div class="t">Operator</div><h3>DIP &amp; NVRAM</h3><p>An operator settings menu with DIP layouts, plus per-set EEPROM / NVRAM persistence generated from catalog metadata.</p></div>
       <div class="card"><div class="t">Scores</div><h3>High-score capture</h3><p>High-score tables are captured and persisted per set, keyed on the same durable MAME short-name as everything else.</p></div>
-      <div class="card"><div class="t">Library</div><h3>Import &amp; audit</h3><p>An app-owned ROM library that imports from merged / split / non-merged sets, audits each against its loader, and discovers ROMs across several roots.</p></div>
+      <div class="card"><div class="t">Library</div><h3>ROM folders &amp; audit</h3><p>Drop merged, split or non-merged sets into the ROM folder and CHDs into the media folder. WhittyArcade reads them in place and audits each set against its loader.</p></div>
       <div class="card"><div class="t">Lifecycle</div><h3>Clean game switching</h3><p>Deterministic teardown, a persistent host worker, pause / resume and frame pacing &mdash; switch games without restarting the process.</p></div>
     </div>
 
@@ -376,10 +408,29 @@
           <div class="scr"><span class="tag">Player 2</span><span class="img"></span></div>
         </div>
         <div class="fp-text">
-          <p><b>Selectable, not hidden.</b> Output mode is a normal setting &mdash; <span class="mono-inline">Single</span> or <span class="mono-inline">Dual</span> &mdash; in the operator menu, not a launch flag.</p>
-          <p><b>Proper resolution on every screen.</b> Whether the game shows on one screen or two, each screen keeps the board&rsquo;s true aspect and is pillarboxed to fit &mdash; never stretched across a bezel or an ultrawide span.</p>
+          <p><b>Selectable at launch.</b> Choose <span class="mono-inline">Single Screen</span>, bordered twin fullscreen, two windows on one desktop, or one window on each physical monitor.</p>
+          <p><b>Proper resolution on every screen.</b> Twin output preserves the exact board raster with one integer multiplier on both axes. Galaga remains 224&times;288; Shinobi remains 320&times;224.</p>
           <p><b>Who&rsquo;s who.</b> Each screen carries a small <span class="mono-inline">Player&nbsp;1</span> / <span class="mono-inline">Player&nbsp;2</span> identifier in the corner, so the pair know which screen is theirs.</p>
-          <p><b>Controls follow the game.</b> In take-turns games the active player&rsquo;s controls route to their screen &mdash; a simple switch. In simultaneous games like Virtua&nbsp;Cop, both players&rsquo; inputs are read every frame and both players&rsquo; state &mdash; both gun sights &mdash; is drawn on both screens.</p>
+          <p><b>Display mode is independent of networking.</b> Twin output can mirror one local cabinet. The Multiplayer menu is what connects two applications and routes the remote player&rsquo;s controls.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="feature-panel" id="multiplayer">
+      <div class="fp-head">
+        <p class="eyebrow">Two apps, one game</p>
+        <h3>Network multiplayer without manual setup</h3>
+      </div>
+      <div class="fp-grid">
+        <div class="fp-screens" aria-hidden="true">
+          <div class="scr"><span class="tag">Player 1 &middot; authoritative game</span><span class="img"></span></div>
+          <div class="scr"><span class="tag">Player 2 &middot; connected</span><span class="img"></span></div>
+        </div>
+        <div class="fp-text">
+          <p><b>Open both apps and play.</b> The launchers discover each other, elect roles and show a shared Multiplayer list containing games installed at both ends. Player&nbsp;1 selects once and Player&nbsp;2 follows automatically.</p>
+          <p><b>Alternating-turn network play.</b> Galaga, Galaxian, Moon&nbsp;Cresta, UniWar&nbsp;S, Phoenix, Shinobi, Ghosts&rsquo;n&nbsp;Goblins and Pac-Mania run one authoritative arcade session. Both players see the same picture and score; control ownership follows the original cabinet&rsquo;s turn.</p>
+          <p><b>Simultaneous network play.</b> Virtua&nbsp;Cop and Virtua&nbsp;Cop&nbsp;2 accept both players&rsquo; controls every frame, including their independent gun inputs.</p>
+          <p><b>Native cabinet link: Sega Rally only.</b> Sega Rally Championship is the sole native linked-cabinet title currently advertised. It runs two emulated Model&nbsp;2 cabinets using Sega&rsquo;s real link protocol and automatically selects CAR1 / CAR2 EEPROM roles. Other games use WhittyArcade&rsquo;s efficient authoritative-video and remote-input link, not a pretend hardware link.</p>
         </div>
       </div>
     </div>
@@ -548,33 +599,32 @@
   <div class="wrap">
     <div class="shead">
       <p class="eyebrow">Where the ROMs live</p>
-      <h2>ROM library</h2>
-      <p class="prose">WhittyArcade keeps its own library under the platform data directory and cherry-picks the exact ROMs each loader needs &mdash; so a single merged set can be the source of truth.</p>
+      <h2>ROM folders</h2>
+      <p class="prose">WhittyArcade reads supported current-MAME archives, extracted sets and CHDs directly from dedicated platform data folders. Nothing is imported, copied, extracted or repacked.</p>
     </div>
     <div class="split">
       <div>
         <ol class="steps">
-          <li><b>Import</b> a ZIP, CHD or a whole folder; only recognised sets are copied into the library.</li>
-          <li><b>Organised</b> by board: <code>roms/&lt;board&gt;/&lt;set&gt;.zip</code>, keyed on the MAME short-name.</li>
-          <li><b>Audited</b> against each board&rsquo;s loader, so a missing or wrong ROM is reported by name.</li>
-          <li><b>Discovered</b> across the library, the working directory and legacy roots &mdash; merged, split or non-merged.</li>
+          <li><b>Drop in</b> supported ZIPs or extracted sets under <code>roms</code>, and disc media under <code>chd</code>.</li>
+          <li><b>Keep your layout.</b> Merged, split and non-merged MAME collections are resolved in place.</li>
+          <li><b>Audit</b> from ROM Folders in the launcher, with missing or wrong files reported by name.</li>
+          <li><b>No import step.</b> Your source archives are never copied, modified or repacked.</li>
         </ol>
       </div>
       <div>
-<pre><code># import recognised sets from anywhere
-WhittyArcade --import ~/Downloads
-
-# list what each board expects
-WhittyArcade --list-roms
+<pre><code># Linux folders
+~/.local/share/WhittyArcade/roms/
+~/.local/share/WhittyArcade/chd/
 
 # audit the whole library
 WhittyArcade --audit-roms
 
-# library location
-~/.local/share/WhittyArcade/roms/
-  system22/ridgerac.zip
-  model2/vcop.zip  system16b/shinobi.zip
-  ...</code></pre>
+# list supported sets and requirements
+WhittyArcade --list-roms
+
+# Windows folders
+%LOCALAPPDATA%\WhittyArcade\roms
+%LOCALAPPDATA%\WhittyArcade\chd</code></pre>
       </div>
     </div>
   </div>
@@ -589,14 +639,14 @@ WhittyArcade --audit-roms
     <div class="split">
       <div class="prose">
         <p>WhittyArcade is C++17 with an SDL3 host layer, and builds on Linux and Windows. Each board compiles to its own static library, and the CPU / chip cores are vendored as small libraries the boards link on demand.</p>
-        <p>Configure with CMake, build, then point the ROM importer at your sets. A suite of unit and real-ROM integration tests covers the catalog, session lifecycle and every board loader.</p>
+        <p>Configure with CMake, build, then place supported sets in the displayed ROM / CHD folders. A suite of unit and real-ROM integration tests covers the catalog, session lifecycle and every board loader.</p>
       </div>
       <div>
 <pre><code>cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
 # tools live behind flags
-build/WhittyArcade --import &lt;path&gt;
+build/WhittyArcade --list-roms
 build/WhittyArcade --audit-roms
 
 # tests
