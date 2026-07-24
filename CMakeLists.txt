@@ -381,6 +381,7 @@ set(SOURCES
     src/namco/system22/system22_audio.cpp
     src/musashi_memory.cpp
     src/namco/system22/system22_cpu.cpp
+    src/namco/system22/system22_c139_transport.cpp
     src/namco/system22/system22_dsp.cpp
     src/namco/system22/system22_mcu.cpp
     src/namco/system22/system22_sprites.cpp
@@ -602,6 +603,9 @@ set_tests_properties(video_session_lifecycle_test PROPERTIES
 
 add_test(NAME arcade_session_factory_test
     COMMAND WhittyArcade --session-factory-test)
+add_test(NAME c139_link_test
+    COMMAND WhittyArcade --c139-link-test)
+set_tests_properties(c139_link_test PROPERTIES TIMEOUT 60)
 
 add_executable(arcade_audio_output_test tests/arcade_audio_output_test.cpp)
 target_link_libraries(arcade_audio_output_test PRIVATE arcade_audio_output)
@@ -912,6 +916,22 @@ target_link_libraries(system22_cpu_test PRIVATE
     musashi Threads::Threads ${WHITTY_MATH_LIB})
 target_compile_options(system22_cpu_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME system22_cpu_test COMMAND system22_cpu_test)
+
+add_executable(c139_transport_test
+    tests/c139_transport_test.cpp
+    src/musashi_memory.cpp
+    src/namco/system22/system22_cpu.cpp
+    src/namco/system22/system22_c139_transport.cpp
+)
+target_include_directories(c139_transport_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(c139_transport_test PRIVATE
+    musashi Threads::Threads ${WHITTY_MATH_LIB})
+target_compile_options(c139_transport_test PRIVATE
+    -Wall -Wextra -Wpedantic)
+add_test(NAME c139_transport_test COMMAND c139_transport_test)
+# Loopback sockets must be unique per test run, and the loopback
+# exchange loops several times — give it time.
+set_tests_properties(c139_transport_test PROPERTIES TIMEOUT 60)
 
 add_executable(system22_sprite_test
     tests/system22_sprite_test.cpp

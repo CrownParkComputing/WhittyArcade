@@ -9,6 +9,8 @@
 #include "input_mapper.h"
 #include "launcher_menu.h"
 #include "multiplayer_lobby.h"
+#include "namco/system22/system22_c139_transport.h"
+#include "namco/system22/system22_cpu.h"
 #include "rom_library.h"
 
 #if defined(_WIN32)
@@ -94,6 +96,7 @@ runtime_options parse_runtime_options(int argc, char* argv[]) {
 
 void configure_cabinet_environment(int node, uint16_t port_base,
                                    bool linked_model2,
+                                   bool linked_system22 = false,
                                    bool network_link = false,
                                    bool generic_input_link = false) {
     if (node != 1 && node != 2) {
@@ -102,6 +105,10 @@ void configure_cabinet_environment(int node, uint16_t port_base,
         unset_environment("MODEL2_COMM_LOCAL_PORT");
         unset_environment("MODEL2_COMM_PEER_PORT");
         unset_environment("MODEL2_COMM_NETWORK");
+        unset_environment("SYSTEM22_C139_NODE");
+        unset_environment("SYSTEM22_C139_LOCAL_PORT");
+        unset_environment("SYSTEM22_C139_PEER_PORT");
+        unset_environment("SYSTEM22_C139_NETWORK");
         unset_environment("WHITTY_INPUT_LINK");
         unset_environment("WHITTY_INPUT_LOCAL_PORT");
         unset_environment("WHITTY_INPUT_PEER_PORT");
@@ -128,6 +135,22 @@ void configure_cabinet_environment(int node, uint16_t port_base,
         unset_environment("MODEL2_COMM_LOCAL_PORT");
         unset_environment("MODEL2_COMM_PEER_PORT");
         unset_environment("MODEL2_COMM_NETWORK");
+    }
+    if (linked_system22) {
+        set_environment("SYSTEM22_C139_NODE", std::to_string(node));
+        set_environment("SYSTEM22_C139_LOCAL_PORT",
+                        std::to_string(local_port));
+        set_environment("SYSTEM22_C139_PEER_PORT",
+                        std::to_string(peer_port));
+        if (network_link)
+            set_environment("SYSTEM22_C139_NETWORK", "1");
+        else
+            unset_environment("SYSTEM22_C139_NETWORK");
+    } else {
+        unset_environment("SYSTEM22_C139_NODE");
+        unset_environment("SYSTEM22_C139_LOCAL_PORT");
+        unset_environment("SYSTEM22_C139_PEER_PORT");
+        unset_environment("SYSTEM22_C139_NETWORK");
     }
     if (generic_input_link) {
         set_environment("WHITTY_INPUT_LINK", "1");
@@ -295,6 +318,86 @@ int run_session_factory_test() {
     return sessions_created == arcade_board_count * rounds ? 0 : 6;
 }
 
+// Standalone end-to-end test for the System 22 C139 cabinet-to-cabinet
+// link transport. Spins up two system22_bus + two system22_c139_transport
+// instances on real UDP loopback, drives a known frame from cabinet 1's
+// TX FIFO, and asserts that cabinet 2's RX FIFO receives it with the
+// expected bit-9 sync mark. No ROM load, no GPU, no display — pure
+// network + bus path. Run as `WhittyArcade --c139-link-test`.
+int run_c139_link_test() {
+    system22_bus cabinet1;
+    system22_bus cabinet2;
+    cabinet1.set_c139_link(true, 1);
+    cabinet2.set_c139_link(true, 2);
+
+    // Use non-default UDP ports so the test is repeatable and doesn't
+    // conflict with a real Ridge Racer 2 cabinet link that the user
+    // might be running. 17512 / 17513 are well above the 1024 floor
+    // and unlikely to collide with anything else.
+    ::setenv("SYSTEM22_C139_LOCAL_PORT", "17512", 1);
+    ::setenv("SYSTEM22_C139_PEER_PORT",  "17513", 1);
+    // Cabinet 1 sits on 17512, sends to 17513. We re-set the env for
+    // cabinet 2 so the local/peer roles swap.
+    system22_c139_transport a;
+    if (!a.initialize(cabinet1, nullptr, /*forced_node=*/1)) {
+        std::fprintf(stderr, "c139 link test: transport a init failed\n");
+        return 1;
+    }
+    ::setenv("SYSTEM22_C139_LOCAL_PORT", "17513", 1);
+    ::setenv("SYSTEM22_C139_PEER_PORT",  "17512", 1);
+    system22_c139_transport b;
+    if (!b.initialize(cabinet2, nullptr, /*forced_node=*/2)) {
+        std::fprintf(stderr, "c139 link test: transport b init failed\n");
+        return 1;
+    }
+    if (!a.enabled() || !b.enabled()) {
+        std::fprintf(stderr, "c139 link test: transports not enabled "
+                              "after forced_node init\n");
+        return 2;
+    }
+    // Drive a known frame into cabinet 1's TX FIFO via the 68020-side
+    // register file (mirrors the test in tests/c139_transport_test.cpp).
+    cabinet1.write16(0x20020004, 0x0001);
+    cabinet1.write16(0x20010000, 0x0011);
+    cabinet1.write16(0x20010002, 0x0022);
+    cabinet1.write16(0x20010004, 0x0033);
+    cabinet1.write16(0x2002000a, 0x0003);
+    cabinet1.write16(0x20020004, 0x0003);
+
+    for (int round = 0; round < 5; ++round) {
+        a.exchange(cabinet1);
+        b.exchange(cabinet2);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (!a.linked() || !b.linked()) {
+        std::fprintf(stderr, "c139 link test: transports never linked "
+                              "(a=%d, b=%d)\n", a.linked(), b.linked());
+        return 3;
+    }
+    if ((cabinet2.read16(0x20020000) & 0x0002) == 0) {
+        std::fprintf(stderr, "c139 link test: cabinet 2 RX-ready bit not set\n");
+        return 4;
+    }
+    if (cabinet2.read16(0x2002000c) != 3) {
+        std::fprintf(stderr, "c139 link test: cabinet 2 RX word count = %u, "
+                              "expected 3\n",
+                     cabinet2.read16(0x2002000c));
+        return 5;
+    }
+    // receive_c139_frame takes only the low byte of each u16 word;
+    // the bus sets the bit-9 sync mark on the last word. So 0x0011 ->
+    // (hi=0x00, lo=0x11), 0x0022 -> (hi=0x00, lo=0x22), 0x0033+sync
+    // -> (hi=0x01, lo=0x33).
+    if (cabinet2.read16(0x20012000) != 0x0011 ||
+        cabinet2.read16(0x20012002) != 0x0022 ||
+        cabinet2.read16(0x20012004) != 0x0133) {
+        std::fprintf(stderr, "c139 link test: cabinet 2 RX FIFO mismatch\n");
+        return 6;
+    }
+    std::printf("c139 link test: 3-word frame delivered end-to-end\n");
+    return 0;
+}
+
 int audit_roms(int argc, char* argv[]) {
     std::vector<rom_choice> choices;
     if (argc > 2) {
@@ -330,6 +433,8 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
         return run_video_lifecycle_test();
     if (command == "--session-factory-test")
         return run_session_factory_test();
+    if (command == "--c139-link-test")
+        return run_c139_link_test();
     if (command == "--list-roms") {
         std::printf("%s\n", required_rom_sets_text().c_str());
         return 0;
@@ -421,6 +526,10 @@ int main(int argc, char* argv[]) {
 
         const bool native_model2_link =
             std::string_view(identity->short_name) == "srallyc";
+        const bool native_system22_link =
+            std::string_view(identity->short_name) == "ridgera2";
+        const bool native_hardware_link =
+            native_model2_link || native_system22_link;
         const rom_set_manifest* launch_manifest =
             find_supported_rom_set(identity->short_name);
         const bool supports_two_player = launch_manifest &&
@@ -453,8 +562,11 @@ int main(int argc, char* argv[]) {
             native_model2_link &&
                 (launch_mode == cabinet_launch_mode::linked_pair ||
                  launch_mode == cabinet_launch_mode::linked_network),
+            native_system22_link &&
+                (launch_mode == cabinet_launch_mode::linked_pair ||
+                 launch_mode == cabinet_launch_mode::linked_network),
             launch_mode == cabinet_launch_mode::linked_network,
-            !native_model2_link &&
+            !native_hardware_link &&
                 launch_mode == cabinet_launch_mode::linked_network);
         settings.output =
             launch_mode == cabinet_launch_mode::independent_pair ?
@@ -475,7 +587,7 @@ int main(int argc, char* argv[]) {
         // unsynchronised audio timelines can never be heard together.
         if (cabinet_node == 2 &&
             launch_mode == cabinet_launch_mode::linked_network &&
-            !native_model2_link) {
+            !native_hardware_link) {
             session_settings.master_volume = 0;
             session_settings.music_volume = 0;
             session_settings.effects_volume = 0;
@@ -488,7 +600,7 @@ int main(int argc, char* argv[]) {
                 "TWIN SCREEN  |  PLAYER 1 + PLAYER 2");
         } else if (cabinet_node &&
                    launch_mode == cabinet_launch_mode::linked_network &&
-                   !native_model2_link) {
+                   !native_hardware_link) {
             shared_video->set_cabinet_status(
                 "PLAYER " + std::to_string(cabinet_node) +
                 "  |  WAITING FOR NETWORK PLAYER...");
@@ -508,7 +620,7 @@ int main(int argc, char* argv[]) {
                arcade_host_action::continue_running) {
             if (cabinet_node &&
                 launch_mode == cabinet_launch_mode::linked_network &&
-                !native_model2_link) {
+                !native_hardware_link) {
                 const bool connected = arcade_input_network_peer_seen();
                 int active_turn = -1;
                 if (launch_manifest &&

@@ -655,10 +655,10 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     "Multiplayer - Player 2 Connected",
                     "Network Two Player shares one supported game's controls "
                     "and picture between the apps. System Link uses original "
-                    "arcade cabinet communication and is currently enabled "
-                    "only for Sega Rally.",
+                    "arcade cabinet communication for Sega Rally and "
+                    "Ridge Racer 2.",
                     {"Network Two Player",
-                     "Arcade System Link  |  Sega Rally only"},
+                     "Arcade System Link  |  Sega Rally + Ridge Racer 2"},
                     "Back to Main Menu", 0,
                     [lobby] { return !lobby->connected(); });
                 if (multiplayer_kind == launcher_menu::interrupted) continue;
@@ -689,7 +689,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                                   "Network Two Player",
                     linked_labels.empty() ?
                         (system_link ?
-                            "Sega Rally is not installed on both systems." :
+                            "No supported System Link ROM is installed on "
+                            "both systems." :
                             "No supported two-player ROM is installed on both "
                             "systems.") :
                         "Choose once here. Player 2 will launch the same game "
@@ -792,7 +793,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             std::vector<std::string> launch_items;
             if (system_link) {
                 launch_items = {
-                    "Single Cabinet  |  one Sega Rally machine",
+                    "Single Cabinet  |  one original arcade machine",
                     "Twin Linked Cabinets Fullscreen  |  two bordered panes",
                     "Twin Linked Cabinets Two Windows  |  same desktop",
                     "Twin Linked Cabinets Two Monitors  |  one per monitor",
@@ -822,13 +823,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             const int launch = menu.select(
                 "Start " + choice.label,
                 system_link ?
-                    "Single Screen runs one Sega cabinet. Twin Screen starts "
-                    "two locally linked Sega cabinets, fitted independently "
+                    "Single Screen runs one arcade cabinet. Twin Screen starts "
+                    "two locally linked cabinets, fitted independently "
                     "at the board's native pixel resolution. Choose fullscreen "
                     "panes, two windows or one window on each monitor. "
                     "Use Multiplayer > Arcade System Link to connect two "
-                    "WhittyArcade apps; Sega Rally is currently the only "
-                    "enabled System Link title." :
+                    "WhittyArcade apps." :
                     std::string(multiplayer_description) +
                     "Single Screen uses one correctly fitted arcade viewport. " +
                     (network_two_player ?

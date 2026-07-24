@@ -201,6 +201,45 @@ int main() {
                 "standalone C139 control writes must not clear ready status"))
         return 1;
 
+    system22_bus c139_sender;
+    system22_bus c139_receiver;
+    c139_sender.set_c139_link(true, 1);
+    c139_receiver.set_c139_link(true, 2);
+    c139_sender.write16(0x20020004, 0x0001);
+    c139_sender.write16(0x20010000, 0x0011);
+    c139_sender.write16(0x20010002, 0x0022);
+    c139_sender.write16(0x20010004, 0x0033);
+    c139_sender.write16(0x2002000a, 0x0003);
+    c139_sender.write16(0x20020004, 0x0003);
+    std::vector<uint16_t> c139_frame;
+    if (!expect(c139_sender.take_c139_transmit_frame(c139_frame) &&
+                    c139_frame ==
+                        std::vector<uint16_t>({0x0011, 0x0022, 0x0033}),
+                "C139 must publish the completed TX FIFO frame"))
+        return 1;
+    int c139_irq_level = 0;
+    c139_receiver.set_irq_handler(
+        [&c139_irq_level](int level) { c139_irq_level = level; });
+    c139_receiver.write8(0x40000002, 0x36);
+    c139_receiver.receive_c139_frame(c139_frame.data(),
+                                     c139_frame.size());
+    if (!expect((c139_receiver.read16(0x20020000) & 0x0002) != 0 &&
+                    c139_receiver.read16(0x2002000c) == 3,
+                "C139 RX must latch frame-received and advance its FIFO"))
+        return 1;
+    if (!expect(c139_receiver.read16(0x20012000) == 0x0011 &&
+                    c139_receiver.read16(0x20012002) == 0x0022 &&
+                    c139_receiver.read16(0x20012004) == 0x0133,
+                "C139 RX must preserve bytes and add the ninth-bit sync mark"))
+        return 1;
+    if (!expect(c139_irq_level == 6,
+                "C139 RX must assert System 22 SCI interrupt source 2"))
+        return 1;
+    c139_receiver.signal_vblank();
+    if (!expect(c139_receiver.read8(0x1000685c) == 1,
+                "linked cabinet 2 must expose Ridge Racer PCB ID 1"))
+        return 1;
+
     bus.write32(0x70000004, 0x00abcdef);
     if (!expect(bus.read32(0x70000004) == 0x00abcdef,
                 "polygon RAM must be visible on the MC68020 bus")) return 1;
