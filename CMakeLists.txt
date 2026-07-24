@@ -129,6 +129,25 @@ if(WHITTY_ENABLE_SYSTEM246)
         ${CMAKE_SOURCE_DIR}/src)
     target_compile_options(system246_video_geometry PRIVATE
         -Wall -Wextra -Wpedantic)
+
+    # Pure ATAPI command state machine (no filesystem/host I/O): a
+    # from-scratch, unit-testable component, not yet wired into any live
+    # session code. See docs/system246_256_board_plan.md's "Modular design
+    # for a clean-room reimplementation" section.
+    add_library(system246_atapi STATIC
+        src/system246/atapi_registers.cpp)
+    target_include_directories(system246_atapi PUBLIC
+        ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(system246_atapi PRIVATE
+        -Wall -Wextra -Wpedantic)
+
+    # Play!'s System 246/256 IOP HLE modules live inside the vendored tree
+    # (third_party/play/Source/iop/namco_sys246) but are WhittyArcade's own
+    # board-specific code, not upstream Play!; CAcAtaAtapi wires the ATAPI
+    # command state machine above into that layer. PlayCore's own
+    # CMakeLists.txt uses the plain target_link_libraries signature, which
+    # cannot be mixed with the keyword form on the same target.
+    target_link_libraries(PlayCore system246_atapi)
 endif()
 
 # FindGLEW can be backed by either CMake's module or a distribution-provided
@@ -489,6 +508,61 @@ if(WIN32)
     target_link_libraries(WhittyArcade PRIVATE ole32 shell32 uuid ws2_32)
 endif()
 
+if(WHITTY_ENABLE_SYSTEM246)
+    # Live, real-VM regression test for the RRV streamed-engine-audio bug
+    # (docs/system246_256_board_plan.md). Boots system246_play_core directly
+    # against the real dongle + disc image with no window (no
+    # arcade_frontend/arcade_renderer involved) and inspects the raw SPU
+    # dump for the "degrades into noise after one chunk" signature. Not
+    # registered as a ctest case unless RRV_TEST_ROM_ZIP names a real
+    # rrvac.zip on this machine.
+    add_executable(system246_rrv_stream_integration_test
+        tests/system246_rrv_stream_integration_test.cpp
+        src/system246_rom.cpp
+        src/system246_controls.cpp
+        src/system246/play_audio.cpp
+        src/system246/play_core.cpp
+        src/system246/play_input.cpp
+        src/system246/play_media_cache.cpp
+        src/system246/play_video.cpp
+    )
+    target_include_directories(system246_rrv_stream_integration_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(system246_rrv_stream_integration_test
+        SYSTEM PRIVATE
+        ${WHITTY_PLAY_SOURCE_DIR}/Source
+        ${WHITTY_PLAY_SOURCE_DIR}/deps/CodeGen/include
+        ${WHITTY_PLAY_SOURCE_DIR}/deps/Framework/include
+        ${WHITTY_PLAY_SOURCE_DIR}/deps/libchdr/include)
+    target_compile_definitions(system246_rrv_stream_integration_test PRIVATE
+        WHITTY_ENABLE_SYSTEM246=1)
+    target_link_libraries(system246_rrv_stream_integration_test PRIVATE
+        gsh_vulkan sh_openal PlayCore system246_rrv_music
+        system246_video_geometry chdr-static
+        arcade_audio_output Vulkan::Vulkan ${OPENAL_LIBRARY} SDL3::SDL3
+        ${WHITTY_GLEW_TARGET} ${OPENGL_LIBRARIES}
+        Threads::Threads PkgConfig::MINIZIP ZLIB::ZLIB
+        ${WHITTY_MATH_LIB} ${CMAKE_DL_LIBS})
+
+    set(RRV_TEST_ROM_ZIP "" CACHE FILEPATH
+        "Optional rrvac.zip used by the RRV streamed-audio integration test")
+    if(RRV_TEST_ROM_ZIP)
+        # The real boot sequence (self-test hardware check, parental
+        # advisory, attract intro) takes ~45 real seconds on its own before
+        # coins can even be inserted, then course/car select and race entry
+        # take another ~30s -- 10800 frames (~180 simulated seconds) reaches
+        # a solidly sustained mid-race streaming segment, confirmed via
+        # screenshots + SPU dump analysis. Real wall-clock runtime is
+        # roughly 1.5x that.
+        add_test(NAME system246_rrv_stream_integration_test
+            COMMAND system246_rrv_stream_integration_test
+                ${RRV_TEST_ROM_ZIP} 10800)
+        set_tests_properties(system246_rrv_stream_integration_test
+            PROPERTIES TIMEOUT 400 LABELS system246)
+    endif()
+endif()
+
 # Compiler flags
 target_compile_options(WhittyArcade PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:-O2;-Wall;-Wextra;-Wpedantic>"
@@ -734,6 +808,17 @@ if(WHITTY_ENABLE_SYSTEM246)
     set_tests_properties(system246_video_test PROPERTIES
         LABELS "system246;video")
 
+    add_executable(system246_atapi_test tests/system246_atapi_test.cpp)
+    target_include_directories(system246_atapi_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(system246_atapi_test PRIVATE
+        system246_atapi)
+    target_compile_options(system246_atapi_test PRIVATE
+        -Wall -Wextra -Wpedantic -UNDEBUG)
+    add_test(NAME system246_atapi_test COMMAND system246_atapi_test)
+    set_tests_properties(system246_atapi_test PROPERTIES
+        LABELS "system246;audio")
+
     add_executable(system246_music_test tests/system246_music_test.cpp)
     target_include_directories(system246_music_test PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -793,6 +878,7 @@ if(WHITTY_ENABLE_SYSTEM246)
             system246_music_test
             system246_spu2_test
             system246_video_test
+            system246_atapi_test
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         USES_TERMINAL)
 endif()

@@ -15,13 +15,17 @@
 #include "ee/VuExecutor.h"
 #include "iop/IopBios.h"
 #include "iop/ioman/McDumpDevice.h"
+#include "iop/namco_sys246/Iop_NamcoAcAtaAtapi.h"
 #include "iop/namco_sys246/Iop_NamcoAcCdvd.h"
+#include "iop/namco_sys246/Iop_NamcoAcLoCore.h"
 #include "iop/namco_sys246/Iop_NamcoAcRam.h"
 #include "iop/namco_sys246/Iop_NamcoPadMan.h"
 #include "iop/namco_sys246/Iop_NamcoSys246.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -87,6 +91,7 @@ struct system246_play_core::implementation {
     std::unique_ptr<CPS2VM> vm;
     CPS2VM::NewFrameEvent::Connection frame_connection;
     CPS2VM::NewFrameEvent::Connection bgm_connection;
+    CPS2VM::NewFrameEvent::Connection stream_trace_connection;
     std::vector<uint8> dongle;
     std::string optical_path;
     std::shared_ptr<system246_input_channel> input;
@@ -95,6 +100,60 @@ struct system246_play_core::implementation {
     bool initialized{};
     bool is_paused{true};
     std::int32_t last_game_bgm{std::numeric_limits<std::int32_t>::min()};
+
+    // Loads and starts the genuine RRV disc-driver chain from the dongle,
+    // in dependency order (each module's imports must already resolve, via
+    // HLE or an earlier real module in this same list, by the time its own
+    // init code runs). Offsets are the verified dongle scan results in
+    // docs/system246_256_board_plan.md. A failure anywhere here is logged
+    // and non-fatal: boot continues with CAcCdvd's existing SIF-level stub,
+    // which stays registered throughout as a fallback.
+    int32 load_and_start_dongle_module(
+            CIopBios& iop_bios, std::size_t offset, const char* module_label) {
+        if (offset >= dongle.size()) {
+            std::fprintf(stderr,
+                         "System 246 real driver chain: dongle too small for "
+                         "%s at offset 0x%zX (dongle size=%zu)\n",
+                         module_label, offset, dongle.size());
+            return -1;
+        }
+        int32 module_id = iop_bios.LoadModuleFromHost(dongle.data() + offset);
+        if (module_id < 0) {
+            std::fprintf(stderr,
+                         "System 246 real driver chain: failed to load %s "
+                         "from dongle offset 0x%zX\n", module_label, offset);
+            return -1;
+        }
+        iop_bios.StartModule(
+            CIopBios::MODULESTARTREQUEST_SOURCE::HOST, module_id,
+            module_label, "", 0);
+        std::printf(
+            "System 246 real driver chain: queued %s (moduleId=%d) from "
+            "dongle offset 0x%zX\n", module_label, module_id, offset);
+        std::fflush(stdout);
+        return module_id;
+    }
+
+    void load_real_driver_chain(CIopBios& iop_bios) {
+        constexpr std::size_t acacd_offset = 0x26A030;
+        constexpr std::size_t accdfs_offset = 0x26CCB0;
+        constexpr std::size_t accdc_offset = 0x26F300;
+        constexpr std::size_t accde_offset = 0x274180;
+        try {
+            load_and_start_dongle_module(iop_bios, acacd_offset, "acacd");
+            load_and_start_dongle_module(iop_bios, accdfs_offset, "accdfs");
+            load_and_start_dongle_module(iop_bios, accdc_offset, "accdc");
+            load_and_start_dongle_module(iop_bios, accde_offset, "accde");
+        } catch (const std::exception& exception) {
+            std::fprintf(stderr,
+                         "System 246 real driver chain load failed: %s\n",
+                         exception.what());
+        } catch (...) {
+            std::fprintf(stderr,
+                         "System 246 real driver chain load failed with an "
+                         "unknown error\n");
+        }
+    }
 
     void prepare_environment(CPS2VM& machine) {
         // System 246's SPU DMA completes in one operation. Play!'s normal PS2
@@ -148,6 +207,17 @@ struct system246_play_core::implementation {
         iop_bios->RegisterHleModuleReplacement(
             "CD/DVD_Compatible", ac_cdvd);
 
+        auto ac_lo_core = std::make_shared<Iop::Namco::CAcLoCore>();
+        iop_bios->RegisterModule(ac_lo_core);
+
+        auto ac_ata_atapi = std::make_shared<Iop::Namco::CAcAtaAtapi>(
+            *iop_bios, machine.m_iop->m_ram);
+        ac_ata_atapi->SetOpticalMedia(machine.m_cdrom0.get());
+        iop_bios->RegisterModule(ac_ata_atapi);
+
+        if (!std::getenv("WHITTYARCADE_DISABLE_REAL_DRIVER_CHAIN"))
+            load_real_driver_chain(*iop_bios);
+
         auto pad_man = std::make_shared<Iop::Namco::CPadMan>();
         iop_bios->RegisterHleModuleReplacement("rom0:PADMAN", pad_man);
         iop_bios->RegisterHleModuleReplacement("rom0:SIO2MAN", pad_man);
@@ -186,6 +256,7 @@ struct system246_play_core::implementation {
         vm->BeforeExecutableReloaded = {};
         vm->AfterExecutableReloaded = {};
         bgm_connection.reset();
+        stream_trace_connection.reset();
         frame_connection.reset();
         // DestroyImpl owns the strict GS -> pad -> sound teardown order and
         // joins Play!'s VM thread before the CPS2VM object is released.
@@ -263,6 +334,44 @@ bool system246_play_core::initialize(
             std::printf("RRV game BGM command: %d\n", game_bgm);
             std::fflush(stdout);
         });
+
+        if (const char* value = std::getenv("WHITTYARCADE_TRACE_SPUSIF");
+            value && *value && std::strcmp(value, "0") != 0) {
+            m_impl->stream_trace_connection = m_impl->vm->OnNewFrame.Connect(
+                [state]() {
+                    if (!state->vm || !state->vm->m_ee ||
+                        !state->vm->m_ee->m_ram)
+                        return;
+                    static std::uint32_t tick = 0;
+                    if ((++tick % 60) != 0) return;
+                    const uint8* ram = state->vm->m_ee->m_ram;
+                    // RRV's two active disc-stream structs (0x50 bytes each);
+                    // the game's chunk-read pump is expected to compare a
+                    // running counter at +0x48 against a threshold at +0x4A
+                    // to decide when to advance +0x30 (start sector) and
+                    // issue the next 0x0A ACCDVD read.
+                    for (uint32 base : {0x01EB6E00u, 0x01EB6E50u}) {
+                        std::uint32_t start_sector = 0;
+                        std::uint32_t sector_count = 0;
+                        std::uint32_t marker = 0;
+                        std::uint16_t counter = 0;
+                        std::uint16_t threshold = 0;
+                        std::memcpy(&marker, ram + base + 0x2C, 4);
+                        std::memcpy(&start_sector, ram + base + 0x30, 4);
+                        std::memcpy(&sector_count, ram + base + 0x34, 4);
+                        std::memcpy(&counter, ram + base + 0x48, 2);
+                        std::memcpy(&threshold, ram + base + 0x4A, 2);
+                        std::printf(
+                            "System 246 RRV stream struct @%08x active=%u "
+                            "active2=%u marker=%08x start=%08x count=%08x "
+                            "counter=%u threshold=%u flag27=%u flag4d=%u\n",
+                            base, ram[base + 0x00], ram[base + 0x28], marker,
+                            start_sector, sector_count, counter, threshold,
+                            ram[base + 0x27], ram[base + 0x4D]);
+                    }
+                    std::fflush(stdout);
+                });
+        }
 
         // A 20-block SPU packet is roughly 20 ms at 44.1 kHz, cutting the
         // upstream default's audio latency without starving OpenAL.
