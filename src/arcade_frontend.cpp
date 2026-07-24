@@ -655,10 +655,10 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     "Multiplayer - Player 2 Connected",
                     "Network Two Player shares one supported game's controls "
                     "and picture between the apps. System Link uses original "
-                    "arcade cabinet communication for Sega Rally and "
-                    "Ridge Racer 2.",
+                    "arcade cabinet communication for Sega Rally, "
+                    "Ridge Racer 2, and Rave Racer.",
                     {"Network Two Player",
-                     "Arcade System Link  |  Sega Rally + Ridge Racer 2"},
+                     "Arcade System Link  |  Sega Rally + System 22 racing"},
                     "Back to Main Menu", 0,
                     [lobby] { return !lobby->connected(); });
                 if (multiplayer_kind == launcher_menu::interrupted) continue;
@@ -794,18 +794,22 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             if (system_link) {
                 launch_items = {
                     "Single Cabinet  |  one original arcade machine",
-                    "Twin Linked Cabinets Fullscreen  |  two bordered panes",
+                    // Two Windows comes before Fullscreen so the menu
+                    // cursor lands on it by default — most users want two
+                    // side-by-side windows for a link, not a single
+                    // fullscreen surface with two panes.
                     "Twin Linked Cabinets Two Windows  |  same desktop",
                     "Twin Linked Cabinets Two Monitors  |  one per monitor",
+                    "Twin Linked Cabinets Fullscreen  |  two bordered panes",
                 };
             } else if (network_two_player) {
                 launch_items = {
                     multiplayer == arcade_multiplayer_mode::alternating ?
                         "One Screen  |  original alternating 2-player cabinet" :
                         "One Screen  |  original simultaneous 2-player cabinet",
-                    "Twin Display Fullscreen  |  same game on both panes",
                     "Twin Display Two Windows  |  same desktop",
                     "Twin Display Two Monitors  |  one per monitor",
+                    "Twin Display Fullscreen  |  same game on both panes",
                 };
             } else {
                 launch_items = {
@@ -846,8 +850,14 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     (system_link ? cabinet_launch_mode::linked_pair :
                                    cabinet_launch_mode::independent_pair),
                 0,
-                launch == 0 ? -1 : (launch == 1 ? 1 : 0),
-                launch == 3,
+                // launch index → fullscreen override. With the menu now
+                // ordered [single, two-windows, two-monitors, fullscreen]
+                // (fullscreen moved to the end so the default cursor lands
+                // on two-windows), fullscreen is launch == 3.
+                launch == 0 ? -1 : (launch == 3 ? 1 : 0),
+                // Separate-monitor mode is the second-to-last option
+                // (launch == 2 in the new order, was launch == 3).
+                launch == 2,
             };
         }
     }
