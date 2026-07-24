@@ -244,12 +244,18 @@ input_binding_table default_keyboard_bindings() {
     set(input_action::right_right, key(SDL_SCANCODE_RIGHT));
     set(input_action::right_up, key(SDL_SCANCODE_UP));
     set(input_action::right_down, key(SDL_SCANCODE_DOWN));
-    set(input_action::p2_left, key(SDL_SCANCODE_J));
-    set(input_action::p2_right, key(SDL_SCANCODE_L));
-    set(input_action::p2_up, key(SDL_SCANCODE_I));
-    set(input_action::p2_down, key(SDL_SCANCODE_K));
-    set(input_action::p2_action1, key(SDL_SCANCODE_U));
-    set(input_action::p2_action2, key(SDL_SCANCODE_O));
+    set(input_action::p2_left, key(SDL_SCANCODE_LEFT));
+    set(input_action::p2_right, key(SDL_SCANCODE_RIGHT));
+    set(input_action::p2_up, key(SDL_SCANCODE_UP));
+    set(input_action::p2_down, key(SDL_SCANCODE_DOWN));
+    // P2 default: Cursor for directions, Z/X for fire — matches the P1
+    // convention of WASD + ZX so a second player on the same keyboard
+    // (linked_pair) has a familiar cluster on the right hand. P1
+    // already uses Z/X so P2 mirrors that for the action keys; the
+    // directions deliberately move to Cursor so P1 and P2 don't
+    // collide on the same physical keys.
+    set(input_action::p2_action1, key(SDL_SCANCODE_Z));
+    set(input_action::p2_action2, key(SDL_SCANCODE_X));
     return bindings;
 }
 

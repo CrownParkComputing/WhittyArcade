@@ -503,6 +503,16 @@ int main(int argc, char* argv[]) {
                 if (selection.fullscreen_override >= 0)
                     settings.fullscreen =
                         selection.fullscreen_override != 0;
+                // A linked-cabinet launch (either via the menu's "Two
+                // Windows" path or via --network-cabinet) must open two
+                // windows side-by-side, never a single fullscreen
+                // surface. Force windowed here so a stale
+                // fullscreen=1 in settings.ini cannot override the
+                // user's intent.
+                if (launch_mode == cabinet_launch_mode::linked_pair ||
+                    launch_mode == cabinet_launch_mode::linked_network) {
+                    settings.fullscreen = false;
+                }
                 settings.twin_separate_monitors =
                     selection.twin_separate_monitors;
                 if (launch_mode == cabinet_launch_mode::linked_network)
@@ -526,12 +536,22 @@ int main(int argc, char* argv[]) {
 
         const bool native_model2_link =
             std::string_view(identity->short_name) == "srallyc";
-        const bool native_system22_link =
-            std::string_view(identity->short_name) == "ridgera2";
-        const bool native_hardware_link =
-            native_model2_link || native_system22_link;
+        // System 22 racing titles (Ridge Racer 1/2, Rave Racer, Ace Driver,
+        // Victory Lap) all share the same Namco C139 SCI cabinet-to-cabinet
+        // link cable; the per-game firmware just sets the role / heartbeat
+        // pattern. Drive the predicate from the catalog's multiplayer mode so
+        // adding a new linked System 22 title is a one-line change there.
         const rom_set_manifest* launch_manifest =
             find_supported_rom_set(identity->short_name);
+        const bool native_system22_link =
+            launch_manifest &&
+            launch_manifest->multiplayer ==
+                arcade_multiplayer_mode::native_link;
+        const bool native_hardware_link =
+            native_model2_link || native_system22_link;
+        // launch_manifest is also used below for the two-player input check;
+        // keep the original declaration shape so the rest of the function is
+        // untouched.
         const bool supports_two_player = launch_manifest &&
             launch_manifest->multiplayer != arcade_multiplayer_mode::none;
         if (launch_mode == cabinet_launch_mode::linked_network &&
