@@ -6,6 +6,7 @@
 #include "namco/system22/system22_audio.h"
 #include "namco/system22/system22_config.h"
 #include "namco/system22/system22_cpu.h"
+#include "namco/system22/system22_c139_transport.h"
 #include "namco/system22/system22_dsp.h"
 #include "namco/system22/system22_mcu.h"
 #include "namco/system22/system22_rom.h"
@@ -64,6 +65,10 @@ private:
     std::unique_ptr<system22_c74_mcu> m_mcu;
 
     std::unique_ptr<ridge_racer_roms> m_roms;
+
+    // Cabinet-to-cabinet C139 link transport. Only active when
+    // SYSTEM22_C139_NODE is set in the environment.
+    std::unique_ptr<system22_c139_transport> m_c139_transport;
 
     // Renderer state
     view_matrix m_viewmatrix;
@@ -173,6 +178,19 @@ bool system22_emulator::initialize(const std::string& rom_path,
     // Load ROMs and set up CPU
     m_roms = std::make_unique<ridge_racer_roms>(
         rom_loader::load_ridge_racer(rom_path, bios_path));
+
+    // Spin up the C139 cabinet-to-cabinet link transport. Only active
+    // when SYSTEM22_C139_NODE is set in the environment; in single-
+    // cabinet mode this is a no-op (the bus-side link is left disabled).
+    m_c139_transport = std::make_unique<system22_c139_transport>();
+    if (!m_c139_transport->initialize(*m_bus)) {
+        std::fprintf(stderr, "C139 link initialization failed; "
+                              "cabinet link disabled\n");
+        m_c139_transport.reset();
+    } else if (m_c139_transport->enabled()) {
+        std::printf("System 22 C139: cabinet %u active\n",
+                    m_c139_transport->node());
+    }
 
     m_bus->set_dip_switches(m_cabinet->system22_dip_switches);
     switch (game_set) {
@@ -482,6 +500,13 @@ void system22_emulator::run_frame() {
     render_frame();
 
     ++m_frame_number;
+    if (m_c139_transport && m_c139_transport->enabled()) {
+        // Send any TX FIFO data the bus produced this frame, drain any
+        // incoming RX FIFO the peer sent, and apply the received words
+        // to the bus. One round-trip per frame is sufficient for the
+        // 60 Hz System 22 vblank cadence.
+        m_c139_transport->exchange(*m_bus);
+    }
     if (!m_capture_done) {
         const char* capture_path = std::getenv("RRACER_CAPTURE");
         const char* capture_frame_text = std::getenv("RRACER_CAPTURE_FRAME");

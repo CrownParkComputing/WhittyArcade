@@ -304,7 +304,24 @@ void system22_bus::write_syscontrol(std::size_t offset, uint8_t value) {
         m_dsp_control_handler(value);
 }
 
+void system22_bus::signal_c139_irq() {
+    if (!m_c139_link_enabled || m_super_system22) return;
+    constexpr uint8_t sci_line = uint8_t{1u << 2};
+    if ((m_irq_enabled & sci_line) == 0) return;
+    m_irq_state |= sci_line;
+    update_irq_level();
+}
+
 void system22_bus::signal_vblank() {
+    if (m_c139_link_enabled && !m_super_system22) {
+        // RR2's C139 service routine uses the ready cause to schedule its next
+        // 36-word state frame. A received-frame cause takes priority and is
+        // left intact until the game acknowledges RX Status.
+        if ((m_c139_status & 0x0003) == 0) m_c139_status |= 0x0004;
+        m_main_ram[0x685c] =
+            static_cast<uint8_t>(m_c139_cabinet_node - 1);
+        signal_c139_irq();
+    }
     const uint8_t vblank_line = m_super_system22 ? uint8_t{1} :
                                                   uint8_t{1u << 4};
     if ((m_irq_enabled & vblank_line) == 0) return;
@@ -330,6 +347,92 @@ bool system22_bus::load_program_rom(const uint8_t* data, std::size_t size) {
 void system22_bus::load_eeprom(const uint8_t* data, std::size_t size) {
     if (!data || size != m_eeprom.size()) return;
     std::copy(data, data + size, m_eeprom.begin());
+}
+
+void system22_bus::set_c139_link(bool enabled, uint8_t cabinet_node) {
+    m_c139_link_enabled =
+        enabled && (cabinet_node == 1 || cabinet_node == 2);
+    m_c139_cabinet_node =
+        m_c139_link_enabled ? cabinet_node : uint8_t{0};
+    m_c139_transmit_pending = false;
+    m_c139_status = 0x0004;
+    if (!m_c139_link_enabled) return;
+
+    // Ridge Racer 2 copies its operator PCB number into this work-RAM byte
+    // before entering the link scheduler. Keep the two process-local EEPROMs
+    // independent, but supply the launcher's explicit cabinet role so a fresh
+    // installation cannot bring both boards up as PCB 1.
+    m_main_ram[0x685c] =
+        static_cast<uint8_t>(m_c139_cabinet_node - 1);
+}
+
+uint16_t system22_bus::read_c139_register(std::size_t index) const {
+    if (index >= m_c139_registers.size()) return 0;
+    if (index == 0)
+        return m_c139_link_enabled ? m_c139_status : uint16_t{0x0004};
+    return m_c139_registers[index];
+}
+
+void system22_bus::write_c139_register(std::size_t index, uint16_t value) {
+    if (index >= m_c139_registers.size()) return;
+    m_c139_registers[index] = value;
+    switch (index) {
+    case 0:
+        // Writing RX Status acknowledges the latched frame/ready flags.
+        m_c139_status = static_cast<uint16_t>(value & 0x0007);
+        break;
+    case 2:
+        // RR2 brackets writes to the TX FIFO with 1 then 3. Bit one asks the
+        // C139 to append its ninth-bit sync marker to the completed frame.
+        if ((value & 0x0003) == 1)
+            m_c139_transmit_pending = false;
+        else if ((value & 0x0003) == 3)
+            m_c139_transmit_pending = true;
+        break;
+    default:
+        break;
+    }
+}
+
+bool system22_bus::take_c139_transmit_frame(
+    std::vector<uint16_t>& words) {
+    words.clear();
+    if (!m_c139_link_enabled || !m_c139_transmit_pending) return false;
+
+    const std::size_t count = std::min<std::size_t>(
+        m_c139_registers[5] & 0x1fff, SCI_RAM_SIZE / 2);
+    if (count == 0) return false;
+    words.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::size_t offset = index * 2;
+        words.push_back(static_cast<uint16_t>(
+            (static_cast<uint16_t>(m_sci_ram[offset]) << 8) |
+            m_sci_ram[offset + 1]));
+    }
+    m_c139_transmit_pending = false;
+    return true;
+}
+
+void system22_bus::receive_c139_frame(const uint16_t* words,
+                                      std::size_t count) {
+    if (!m_c139_link_enabled || !words || count == 0) return;
+    count = std::min<std::size_t>(count, 0x1000);
+
+    uint16_t pointer =
+        static_cast<uint16_t>(m_c139_registers[6] & 0x0fff);
+    for (std::size_t index = 0; index < count; ++index) {
+        uint16_t value = static_cast<uint16_t>(words[index] & 0x00ff);
+        if (index + 1 == count) value |= 0x0100; // serial sync ninth bit
+        const std::size_t offset =
+            0x2000 + static_cast<std::size_t>(pointer) * 2;
+        m_sci_ram[offset] = static_cast<uint8_t>(value >> 8);
+        m_sci_ram[offset + 1] = static_cast<uint8_t>(value);
+        pointer = static_cast<uint16_t>((pointer + 1) & 0x0fff);
+    }
+    m_c139_registers[6] = pointer;
+    m_c139_status = static_cast<uint16_t>(
+        (m_c139_status & ~uint16_t{0x0001}) | 0x0002);
+    signal_c139_irq();
 }
 
 uint16_t system22_bus::next_keycus_value() {
@@ -531,9 +634,10 @@ uint8_t system22_bus::read_mapped_byte(uint32_t address) {
     if (in_range(address, 0x20010000, SCI_RAM_SIZE))
         return m_sci_ram[address - 0x20010000];
     if (in_range(address, 0x20020000, 0x10)) {
-        // C139 SCI receive status. Non-linked cabinets report the controller
-        // ready/idle bit; later System 22 games wait for it during boot.
-        return address == 0x20020001 ? 0x04 : 0x00;
+        const std::size_t index = (address - 0x20020000) >> 1;
+        const uint16_t value = read_c139_register(index);
+        return (address & 1u) ? static_cast<uint8_t>(value) :
+                               static_cast<uint8_t>(value >> 8);
     }
     if (in_range(address, 0x40000000, m_syscontrol.size()))
         return m_syscontrol[address - 0x40000000];
@@ -587,8 +691,16 @@ void system22_bus::write_mapped_byte(uint32_t address, uint8_t value) {
         return;
     }
     if (in_range(address, 0x20020000, 0x10)) {
-        // Link control/FIFO writes have no observable effect in a standalone
-        // cabinet until C139 networking is implemented.
+        const std::size_t index = (address - 0x20020000) >> 1;
+        uint16_t register_value = m_c139_registers[index];
+        if (address & 1u)
+            register_value = static_cast<uint16_t>(
+                (register_value & 0xff00u) | value);
+        else
+            register_value = static_cast<uint16_t>(
+                (register_value & 0x00ffu) |
+                (static_cast<uint16_t>(value) << 8));
+        write_c139_register(index, register_value);
         return;
     }
     if (in_range(address, 0x40000000, m_syscontrol.size())) {
@@ -646,6 +758,10 @@ uint16_t system22_bus::read16(uint32_t address) {
         return 0x8000; // C305 status used as a ready bit by Dirt Dash.
     if (m_super_system22 && address == 0x8a000e)
         return 0x0000; // C305 trigger/status register used by Time Crisis.
+    const uint32_t c139_base =
+        m_super_system22 ? 0x420000u : 0x20020000u;
+    if (in_range(address, c139_base, 0x10) && (address & 1u) == 0)
+        return read_c139_register((address - c139_base) >> 1);
     const uint32_t keycus_base = m_super_system22 ? 0x400000u : 0x20000000u;
     const uint32_t keycus_size = m_super_system22 ? 0x20u : 0x10u;
     const uint32_t keycus_address = keycus_base +
@@ -700,6 +816,12 @@ void system22_bus::write16(uint32_t address, uint16_t value) {
     if (m_super_system22) address &= 0x00ffffffu;
     if (m_super_system22 && address == 0x430000) {
         m_cpu_led_data = value;
+        return;
+    }
+    const uint32_t c139_base =
+        m_super_system22 ? 0x420000u : 0x20020000u;
+    if (in_range(address, c139_base, 0x10) && (address & 1u) == 0) {
+        write_c139_register((address - c139_base) >> 1, value);
         return;
     }
     const uint32_t portbit_base = m_super_system22 ? 0x450008u : 0x50000008u;

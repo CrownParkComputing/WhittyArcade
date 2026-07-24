@@ -87,6 +87,14 @@ public:
     // bits 8..15. A set bit is OFF, matching the physical switches.
     uint16_t dip_switches() const { return m_dip_switches; }
     void set_dip_switches(uint16_t switches) { m_dip_switches = switches; }
+    // The C139 is kept as an emulated board device; host transport is owned by
+    // the session. This lets local-process and LAN links feed the exact same
+    // RX FIFO without putting sockets in the MC68020 memory bus.
+    void set_c139_link(bool enabled, uint8_t cabinet_node = 0);
+    bool c139_link_enabled() const { return m_c139_link_enabled; }
+    uint8_t c139_cabinet_node() const { return m_c139_cabinet_node; }
+    bool take_c139_transmit_frame(std::vector<uint16_t>& words);
+    void receive_c139_frame(const uint16_t* words, std::size_t count);
     void signal_vblank();
 
     uint8_t read_mcu_shared_byte(std::size_t index) const;
@@ -137,6 +145,9 @@ private:
     void update_cyber_commando_inputs(const input_state& state);
     void update_time_crisis_inputs(const input_state& state);
     void write_syscontrol(std::size_t offset, uint8_t value);
+    uint16_t read_c139_register(std::size_t index) const;
+    void write_c139_register(std::size_t index, uint16_t value);
+    void signal_c139_irq();
     void update_irq_level();
 
     std::vector<uint8_t> m_program_rom;
@@ -157,6 +168,7 @@ private:
     std::array<uint8_t, SPOT_RAM_SIZE> m_spot_ram{};
     std::array<uint8_t, TEXT_ATTR_SIZE> m_textattr{};
     std::array<uint8_t, 0x20> m_syscontrol{};
+    std::array<uint16_t, 8> m_c139_registers{};
     std::array<uint16_t, 2> m_portbits{0xffff, 0xffff};
     std::function<void(int)> m_irq_handler;
     std::function<void(uint8_t)> m_dsp_control_handler;
@@ -174,6 +186,10 @@ private:
     uint16_t m_cpu_led_data{0xffff};
     uint16_t m_spot_address{0};
     uint16_t m_spot_enable{0};
+    uint16_t m_c139_status{0x0004};
+    bool m_c139_link_enabled{false};
+    bool m_c139_transmit_pending{false};
+    uint8_t m_c139_cabinet_node{0};
     bool m_super_system22{false};
     system22_driving_profile m_driving_profile{
         system22_driving_profile::ridge_racer};
