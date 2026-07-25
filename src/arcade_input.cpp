@@ -741,9 +741,15 @@ void arcade_input::update() {
     m_state.p2_start = m_cabinet_pulse_frames[3] != 0;
     m_state.service = action_value(input_action::service, keys) >=
                       cabinet_press_threshold;
-    m_state.test = m_test_input_enabled.load(std::memory_order_acquire) &&
-                   action_value(input_action::test, keys) >=
-                       cabinet_press_threshold;
+                      
+    const bool is_test_pressed = action_value(input_action::test, keys) >= cabinet_press_threshold;
+    if (is_test_pressed && !m_test_key_was_pressed) {
+        m_test_toggle_active = !m_test_toggle_active;
+    }
+    m_test_key_was_pressed = is_test_pressed;
+    
+    m_state.test = m_test_input_enabled.load(std::memory_order_acquire) && m_test_toggle_active;
+
     m_state.shift_down = action_value(input_action::shift_down, keys) >=
                          cabinet_press_threshold;
     m_state.shift_up = action_value(input_action::shift_up, keys) >=

@@ -88,6 +88,8 @@ private:
     std::array<std::atomic_int, 4> m_watch_controller_buttons{};
     std::atomic_bool m_mouse_activity{false};
     std::atomic_bool m_test_input_enabled{true};
+    bool m_test_toggle_active{false};
+    bool m_test_key_was_pressed{false};
     bool m_time_crisis_mouse{false};
     // Virtua Cop's model1io2 gun ADC spans a full 10-bit range calibrated in
     // the I/O board, so its cursor maps to the whole 0..255 axis rather than
