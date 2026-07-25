@@ -98,7 +98,7 @@ public:
     }
 
     void run_frame() override {
-        m_input->set_suppressed(m_gpu_renderer->settings_visible());
+        m_input->set_suppressed(m_gpu_renderer->input_suppressed());
         int gx = 0, gy = 0, gw = 0, gh = 0, gdw = 0, gdh = 0;
         if (m_gpu_renderer &&
             m_gpu_renderer->picture_rect(gx, gy, gw, gh, gdw, gdh))

@@ -13,6 +13,13 @@ struct metrics {
     double normalization_gain{1.0};
 };
 
+// Process-wide output mute. Every board's samples pass through the
+// conditioning below, so this silences the whole process without any board
+// needing to take part. Used by the arcade wall, where all columns keep
+// running but only the focused one is heard.
+void set_output_muted(bool muted);
+bool output_muted();
+
 // Applies UI master gain and a board's fixed analogue-line calibration, then
 // uses a continuous soft knee instead of a hard int16 clamp. Values below the
 // knee remain bit-exact; dense multi-voice peaks retain headroom without the

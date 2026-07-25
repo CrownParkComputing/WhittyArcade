@@ -776,6 +776,14 @@ void arcade_input::update() {
         m_state.buttons[1] = false;
         m_state.buttons[2] = action2 >= cabinet_press_threshold;
     }
+    if (m_lightgun_full_range) {
+        // A cabinet button for menus, kept clear of the trigger. Driving one
+        // from the trigger's own key closed two switches per shot, and the gun
+        // calibration reads the second as "exit", so a shot cancelled the
+        // screen it was aiming at.
+        m_state.buttons[3] = action_value(input_action::p1_action3, keys) >=
+                             cabinet_press_threshold;
+    }
     m_state.p2_buttons[0] = action_value(input_action::p2_action1, keys) >=
                             cabinet_press_threshold;
     m_state.p2_buttons[1] = action_value(input_action::p2_action2, keys) >=

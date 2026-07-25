@@ -78,4 +78,11 @@ public:
     // built-in enum entry -- identify_set only knows the curated sets, but the
     // board boots any manifest, so routing keys off this instead.
     static std::string acgame_short_name(const std::string& path);
+
+    // True when a collection game seats two players at once (Time Crisis'
+    // second gun, a fighting game's second panel). These games carry no
+    // catalog entry - the board boots any manifest, which is what lets the
+    // whole collection work with no per-title code - so the two-player launch
+    // options have to be answered from here instead of from a manifest.
+    static bool acgame_two_player(const std::string& short_name);
 };

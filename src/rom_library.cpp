@@ -24,6 +24,7 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace fs = std::filesystem;
@@ -233,6 +234,49 @@ bool known_collection_filename(const fs::path& path) {
                      stem) != collection_aliases.end();
 }
 
+bool eight_hex_digits(const std::string& name) {
+    return name.size() == 8 &&
+           std::all_of(name.begin(), name.end(), [](unsigned char character) {
+               return std::isxdigit(character) != 0;
+           });
+}
+
+// Xbox 360 titles that were never extracted are single signed STFS packages,
+// stored the way the console stores them and the way a download arrives:
+//     <anywhere>/<TITLE ID>/<content type>/<content hash>
+// with both directory names eight hex digits and the leaf file named after the
+// SHA-1 of its content. Nothing in the path or the filename says which game it
+// is - only the package's own header does - so this collects the files that
+// could be packages and lets the loader identify them.
+//
+// Directories are walked to a bounded depth and files are only listed where that
+// layout matches (or directly in a scan root, so a package dropped in the ROM
+// folder is still found). Pointing this at a large Downloads tree therefore
+// costs one directory read per directory and nothing else.
+void collect_package_candidates(const fs::path& directory, int depth,
+                                bool list_files,
+                                std::vector<fs::path>& candidates) {
+    std::error_code error;
+    if (!fs::is_directory(directory, error)) return;
+    const bool content_directory =
+        eight_hex_digits(directory.filename().string()) &&
+        eight_hex_digits(directory.parent_path().filename().string());
+    list_files = list_files || content_directory;
+    for (fs::directory_iterator iterator(
+             directory, fs::directory_options::skip_permission_denied, error),
+         end; !error && iterator != end; iterator.increment(error)) {
+        std::error_code type_error;
+        if (iterator->is_directory(type_error)) {
+            // A content-type directory holds the package and nothing below it.
+            if (!content_directory && depth > 0)
+                collect_package_candidates(iterator->path(), depth - 1, false,
+                                           candidates);
+        } else if (list_files && iterator->is_regular_file(type_error)) {
+            candidates.push_back(iterator->path());
+        }
+    }
+}
+
 } // namespace
 
 std::string rom_library_path() {
@@ -279,7 +323,9 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
         label += "  (" + candidate.filename().string() + ")";
         label += readiness_suffix(candidate, *identified.manifest);
         if (normalized == normalized_current) label += "  [current]";
-        choices.push_back({normalized, std::move(label), identified.board});
+        choices.push_back({normalized, std::move(label),
+                           identified.board,
+                           identified.manifest->publisher});
     };
 
     const fs::path current(current_path);
@@ -441,11 +487,73 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
                 std::string missing;
                 label += system246_rom_loader::acgame_ready(apath, &missing) ?
                     "  [ready]" : "  [missing files]";
-                choices.push_back(
-                    {apath, std::move(label), arcade_board_type::system246});
+                choices.push_back({apath, std::move(label),
+                                   arcade_board_type::system246, "Namco"});
             }
         }
     }
+
+    // Both Xbox 360 passes below hand their finds to this, because a title that
+    // was dumped both ways is on the machine twice and only one copy may be
+    // offered. Which one must be the title's registered preference rather than
+    // an accident of which pass ran first or which entry the filesystem listed
+    // first: the first copy found is listed, a later copy in the preferred shape
+    // replaces it, and any further copy is ignored. The exception is a copy the
+    // player currently has selected, which is never replaced - the browser has
+    // to be able to show which copy is loaded.
+    //
+    // Returns false only when the candidate is not a supported title at all, so
+    // a caller scanning several candidate paths for one game knows to keep
+    // looking.
+    struct xbox360_listing {
+        std::size_t index;
+        xbox360_content_shape shape;
+    };
+    std::unordered_map<std::string, xbox360_listing> xbox360_listed;
+    const auto offer_xbox360 = [&](const fs::path& candidate,
+                                   const char* incomplete_note) {
+        // Identification does not require the data, so an incomplete copy is
+        // still listed - a game the player can see is missing files beats a game
+        // that silently is not there - and it still reports its own shape.
+        const xbox360_rom_info identified =
+            xbox360_rom_loader::inspect(candidate.string(), false);
+        if (!identified) return false;
+        const std::string identity =
+            xbox360_rom_loader::set_short_name(identified.set);
+        const std::string normalized = normalized_path(candidate);
+        if (!seen_paths.insert(normalized).second) return true;
+        const xbox360_content_shape preferred =
+            xbox360_rom_loader::set_preferred_shape(identified.set);
+        const auto listed = xbox360_listed.find(identity);
+        if (listed != xbox360_listed.end()) {
+            if (listed->second.shape == preferred ||
+                identified.shape != preferred ||
+                choices[listed->second.index].path == normalized_current)
+                return true;
+        } else if (!seen_sets.insert(identity).second) {
+            return true;
+        }
+
+        std::string label =
+            xbox360_rom_loader::set_display_name(identified.set);
+        label += xbox360_rom_loader::inspect(candidate.string()) ?
+            "  [ready]" : incomplete_note;
+        if (normalized == normalized_current) label += "  [current]";
+        const rom_set_manifest* known = find_supported_rom_set(identity);
+        rom_choice choice{normalized, std::move(label),
+                          arcade_board_type::xbox360,
+                          known ? known->publisher : ""};
+        if (listed != xbox360_listed.end()) {
+            choices[listed->second.index] = std::move(choice);
+            listed->second.shape = identified.shape;
+            return true;
+        }
+        xbox360_listed.emplace(identity,
+                               xbox360_listing{choices.size(),
+                                               identified.shape});
+        choices.push_back(std::move(choice));
+        return true;
+    };
 
     // Xbox 360 titles are extracted game directories, not archives, and the
     // ones that have a native port live in the recompilation suite's own tree
@@ -476,25 +584,35 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
                 for (const fs::path& candidate :
                      {it->path() / "extracted", it->path()}) {
                     if (!fs::is_directory(candidate, type_error)) continue;
-                    const xbox360_rom_set set =
-                        xbox360_rom_loader::identify_set(candidate.string());
-                    if (set == xbox360_rom_set::unknown) continue;
-                    const std::string identity =
-                        xbox360_rom_loader::set_short_name(set);
-                    const std::string normalized = normalized_path(candidate);
-                    if (!seen_paths.insert(normalized).second) break;
-                    if (!seen_sets.insert(identity).second) break;
-                    std::string label =
-                        xbox360_rom_loader::set_display_name(set);
-                    label += xbox360_rom_loader::inspect(candidate.string()) ?
-                        "  [ready]" : "  [missing files]";
-                    if (normalized == normalized_current) label += "  [current]";
-                    choices.push_back({normalized, std::move(label),
-                                       arcade_board_type::xbox360});
-                    break;
+                    if (offer_xbox360(candidate, "  [missing files]")) break;
                 }
             }
         }
+    }
+
+    // Xbox 360 titles that were never extracted: one signed STFS package holding
+    // the whole game. These are not archives, not directories and not named
+    // after anything - the file is named after the hash of its content - so the
+    // scans above cannot see them either. Same treatment as the extracted pass
+    // and the System 246 .acgame pass: find them where they are stored, identify
+    // them by their header, and dedupe by set. Overridable so a test can point
+    // it at a fixture instead of the machine's downloads.
+    {
+        const char* package_env = std::getenv("WHITTY_XBOX360_PACKAGE_ROOT");
+        std::vector<fs::path> roots;
+        if (package_env != nullptr && *package_env != '\0') {
+            roots.emplace_back(package_env);
+        } else {
+            const char* home = std::getenv("HOME");
+            if (home != nullptr && *home != '\0')
+                roots.push_back(fs::path(home) / "Downloads");
+            roots.push_back(fs::path(rom_library_path()) / "xbox360");
+        }
+        std::vector<fs::path> candidates;
+        for (const fs::path& root : roots)
+            collect_package_candidates(root, 5, true, candidates);
+        for (const fs::path& candidate : candidates)
+            offer_xbox360(candidate, "  [incomplete package]");
     }
 
     std::sort(choices.begin(), choices.end(),

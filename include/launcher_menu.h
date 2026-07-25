@@ -19,6 +19,18 @@ struct launcher_controller_info {
 class launcher_menu {
 public:
     static constexpr int interrupted = -2;
+    // Returned by select_grid when the player asks to change the view (TAB /
+    // controller Y): the caller re-sorts or re-filters and shows the grid
+    // again.
+    static constexpr int view_change = -3;
+    // Returned by a paging grid (PgUp/PgDn, controller shoulders): the
+    // caller flips to the previous or next page - the next board, the next
+    // publisher - and shows the grid again.
+    static constexpr int page_back = -4;
+    static constexpr int page_forward = -5;
+    // Returned when the player asks for the page's information panel
+    // (the "i" chip, I key or controller X).
+    static constexpr int info_request = -6;
     // Compact utility mode is used for menus shown over a running game.
     explicit launcher_menu(bool compact_utility_window = false);
     ~launcher_menu();
@@ -41,9 +53,83 @@ public:
         const std::string& back_label, int initial_selection,
         std::function<bool()> interrupt);
 
+    // Cover art for one grid card. The pixels are RGBA, owned by the caller
+    // and only read during the call; a null pointer draws a title-only card,
+    // which is what a game with no artwork yet gets.
+    struct cover {
+        const uint8_t* pixels{};
+        int width{};
+        int height{};
+    };
+
+    // Cover-art grid selector, the console-style counterpart to select().
+    // cover_for(index) is asked for artwork as cards are drawn, and tick() is
+    // called once per frame so the caller can collect covers that arrived in
+    // the background - returning true when something changed and the grid
+    // should be redrawn.
+    // interrupt, when supplied, is polled alongside tick: returning true
+    // abandons the grid with `interrupted` - how a network peer's launch
+    // pulls the player out of browsing.
+    int select_grid(const std::string& title, const std::string& description,
+                    const std::vector<std::string>& items,
+                    const std::string& back_label, int initial_selection,
+                    std::function<cover(int)> cover_for,
+                    std::function<bool()> tick = {},
+                    std::function<bool()> interrupt = {},
+                    bool paging = false,
+                    // Non-null on a paged view: the page's board photo or
+                    // publisher logo, drawn large in the header. Pixels may
+                    // be null while the artwork is still arriving.
+                    const cover* banner = nullptr,
+                    // True when the page has an information panel to show;
+                    // the grid then offers the "i" chip and returns
+                    // info_request when it is asked for.
+                    bool info = false);
+
+    // Picks several games from one grid rather than asking repeatedly. Cards
+    // already chosen are numbered in the order they were taken, and the grid
+    // returns as soon as `wanted` of them are held. Empty when cancelled.
+    std::vector<int> select_grid_multiple(
+        const std::string& title, const std::string& description,
+        const std::vector<std::string>& items, const std::string& back_label,
+        int wanted, std::function<cover(int)> cover_for,
+        std::function<bool()> tick = {});
+
     // Displays scrollable text using the same launcher presentation.
     void show_text(const std::string& title, const std::string& text,
                    const std::string& back_label = "Back");
+
+    // Displays scrollable text with left/right navigation across `count` pages.
+    // `page_provider(page_index)` returns the (title, body) pair for that page.
+    // Returns the index of the page shown when the user closed, or -1 if they
+    // backed out entirely (only possible when count is 0).
+    // One page of the high-score board: a ranked table drawn with medal
+    // colours and aligned columns rather than a wall of text.
+    struct scoreboard_row {
+        int rank{};
+        std::string name;
+        std::string score;
+    };
+    struct scoreboard_page {
+        std::string title;
+        std::string subtitle;
+        std::vector<scoreboard_row> rows;
+        std::vector<std::pair<std::string, std::string>> extras;
+        // Shown instead of the table when there is nothing to decode.
+        std::string message;
+    };
+
+    // Paged like show_pages: left/right moves between games.
+    int show_scoreboard(
+        const std::string& back_label, const std::string& description,
+        int count, std::function<scoreboard_page(int)> page_provider,
+        int initial_page = 0);
+
+    int show_pages(
+        const std::string& back_label, const std::string& description,
+        int count,
+        std::function<std::pair<std::string, std::string>(int)> page_provider,
+        int initial_page = 0);
 
     // Returns controllers currently recognised by SDL's GameController API.
     std::vector<launcher_controller_info> controllers();

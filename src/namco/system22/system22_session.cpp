@@ -362,7 +362,7 @@ void system22_emulator::run_frame() {
     // The external control C74 publishes the standard cabinet switches and
     // ADC channels immediately before vblank, matching the real board/MAME
     // handoff into the sound-C74 shared RAM.
-    m_input->set_suppressed(m_gpu_renderer->settings_visible());
+    m_input->set_suppressed(m_gpu_renderer->input_suppressed());
     int gx = 0, gy = 0, gw = 0, gh = 0, gdw = 0, gdh = 0;
     if (m_gpu_renderer &&
         m_gpu_renderer->picture_rect(gx, gy, gw, gh, gdw, gdh))

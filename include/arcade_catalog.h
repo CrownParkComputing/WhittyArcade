@@ -43,12 +43,17 @@ struct rom_set_manifest {
     // actually wires the board's P2 inputs, not merely because the original
     // title was marketed for multiple players.
     arcade_multiplayer_mode multiplayer{arcade_multiplayer_mode::none};
+    // Who put the machine in the arcade, which is not always the board's
+    // maker: Moon Cresta and UniWar S both run on Galaxian hardware but came
+    // from Nichibutsu and Irem. Browsing by publisher is only honest if this
+    // is per game rather than derived from the board.
+    const char* publisher{""};
 };
 
 constexpr std::size_t arcade_board_count = 11;
 using arcade_board_list =
     std::array<arcade_board_descriptor, arcade_board_count>;
-constexpr std::size_t arcade_game_count = 29;
+constexpr std::size_t arcade_game_count = 31;
 using arcade_game_list =
     std::array<rom_set_manifest, arcade_game_count>;
 

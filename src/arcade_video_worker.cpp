@@ -58,7 +58,7 @@ void arcade_video_worker::reset_session() {
         m_rgba_task_queued = false;
         m_pending_model2_frame.reset();
         m_model2_task_queued = false;
-        m_tasks.emplace_back([completed](polygon_renderer_gpu& renderer) {
+            m_tasks.emplace_back([completed](polygon_renderer_gpu& renderer) {
             renderer.set_lightgun_cursor(false);
             renderer.set_single_screen_only(false);
             renderer.set_cabinet_status({});
@@ -159,8 +159,16 @@ void arcade_video_worker::harvest_frontend(polygon_renderer_gpu& renderer) {
     const bool has_rom = renderer.take_rom_selection(selected);
     const bool has_operator = renderer.take_operator_action(operator_action);
     const bool has_controls = renderer.take_controls_request();
+    const bool has_picker = renderer.take_game_picker_request();
     const bool has_settings = renderer.take_settings_change(changed);
-    if (!has_rom && !has_operator && !has_controls && !has_settings) return;
+    // Arcade wall focus changes arrive on the render thread but are acted on
+    // by the host loop, which owns the emulator and its volume.
+    bool audible = true;
+    if (renderer.take_wall_audio_change(audible))
+        m_wall_audible.store(audible ? 1 : 0, std::memory_order_release);
+    if (!has_rom && !has_operator && !has_controls && !has_settings &&
+        !has_picker)
+        return;
     std::lock_guard<std::mutex> lock(m_frontend_mutex);
     if (has_rom) {
         m_selected_rom = std::move(selected);
@@ -168,6 +176,7 @@ void arcade_video_worker::harvest_frontend(polygon_renderer_gpu& renderer) {
     }
     if (has_operator) m_operator_actions.push_back(operator_action);
     if (has_controls) m_controls_pending = true;
+    if (has_picker) m_game_picker_pending = true;
     if (has_settings) {
         m_changed_settings = changed;
         m_settings_pending = true;
@@ -189,6 +198,13 @@ void arcade_video_worker::set_single_screen_only(bool enabled) {
 void arcade_video_worker::set_cabinet_status(std::string status) {
     enqueue([status = std::move(status)](polygon_renderer_gpu& renderer) mutable {
         renderer.set_cabinet_status(std::move(status));
+    });
+}
+
+void arcade_video_worker::set_board_name(std::string short_name) {
+    enqueue([short_name = std::move(short_name)](
+                polygon_renderer_gpu& renderer) mutable {
+        renderer.set_board_name(std::move(short_name));
     });
 }
 
@@ -219,6 +235,13 @@ bool arcade_video_worker::take_operator_action(operator_menu_action& action) {
     action = m_operator_actions.front();
     m_operator_actions.pop_front();
     return true;
+}
+
+bool arcade_video_worker::take_game_picker_request() {
+    std::lock_guard<std::mutex> lock(m_frontend_mutex);
+    const bool pending = m_game_picker_pending;
+    m_game_picker_pending = false;
+    return pending;
 }
 
 bool arcade_video_worker::take_controls_request() {
@@ -371,8 +394,9 @@ void arcade_video_worker::present_rgba_frame(const uint8_t* pixels,
         std::lock_guard<std::mutex> lock(m_task_mutex);
         if (!m_alive.load()) return;
         // A board may produce frames faster than the host can present them.
-        // Keep only the newest complete RGBA frame so latency remains bounded
-        // instead of turning a temporary slowdown into a growing input queue.
+        // Keep only the newest complete RGBA frame per column so latency
+        // remains bounded instead of turning a temporary slowdown into a
+        // growing input queue.
         m_pending_rgba_frame = std::move(frame);
         if (m_rgba_task_queued) return;
         m_rgba_task_queued = true;

@@ -6,7 +6,10 @@
 #include "arcade_sdl_guard.h"
 #include "network_video_link.h"
 #include "platform_paths.h"
+#include "bezel_library.h"
+#include "system22_vulkan_uniforms.h"
 #include "twin_window_layout.h"
+#include "wall_log.h"
 
 #include <GL/glew.h>
 #include <SDL3/SDL.h>
@@ -93,43 +96,45 @@ bool place_window_on_display(SDL_Window* window, int display_index,
 // to position its own window without help from the other. Cabinet 1 →
 // left half, cabinet 2 → right half, so the two side-by-side windows fit
 // a single ultrawide without overlap.
+// Whether System 22 rasterises through Vulkan. On by default; set
+// WHITTY_VK_SYSTEM22=0 to fall back to the OpenGL route.
+//
+// This gates the sheet uploads as well as the draw, because an unused path
+// must cost nothing at all - not even a texture upload. Building the scene
+// sheets is tens of megabytes of image creation and several queue waits, and
+// once cost the window entirely when only the draw was gated.
+bool native_path_enabled(const char* variable, bool default_on) {
+    const char* value = std::getenv(variable);
+    if (!value) return default_on;
+    return *value != '0';
+}
+
+bool native_system22_enabled() {
+    static const bool enabled =
+        native_path_enabled("WHITTY_VK_SYSTEM22", true);
+    return enabled;
+}
+
+// Model 2 through Vulkan. On by default; set WHITTY_VK_MODEL2=0 to fall back
+// to the OpenGL route. Gates the uploads as well as the draw, for the reason
+// the System 22 gate does.
+bool native_model2_enabled() {
+    static const bool enabled =
+        native_path_enabled("WHITTY_VK_MODEL2", true);
+    return enabled;
+}
+
 bool place_window_on_cabinet_half(SDL_Window* window, int cabinet_node) {
-    if (!window || cabinet_node < 1 || cabinet_node > 2) return false;
-    int count = 0;
-    SDL_DisplayID* displays = SDL_GetDisplays(&count);
-    if (!displays || count == 0) {
-        if (displays) SDL_free(displays);
-        return false;
-    }
-    SDL_Rect usable{0, 0, 1920, 1080};
-    const SDL_DisplayID display = displays[0];
-    if (!SDL_GetDisplayUsableBounds(display, &usable))
-        SDL_GetDisplayBounds(display, &usable);
-    SDL_free(displays);
-    const int half_w = usable.w / 2;
-    // Size the window to the largest 4:3 fit inside its half of the
-    // desktop. bounded_window_size() applies the same half-width cap, but
-    // callers may also call this directly, so enforce it here too.
-    int width = std::min(half_w, usable.h * 4 / 3);
-    int height = width * 3 / 4;
-    if (height > usable.h) {
-        height = usable.h;
-        width = height * 4 / 3;
-    }
-    SDL_SetWindowSize(window, width, height);
-    const int x = cabinet_node == 1
-        ? usable.x
-        : usable.x + half_w;
-    const int y = usable.y + std::max((usable.h - height) / 2, 0);
-    // On Wayland, SDL_SetWindowPosition typically reports success while
-    // the compositor keeps the window at the compositor-managed position.
-    // Try a compositor-specific move first, then fall back to SDL on
-    // non-Wayland platforms where it actually works.
-    const char* title = SDL_GetWindowTitle(window);
-    if (whitty_window::run_hyprctl_move(
-            title ? title : "WhittyArcade", x, y))
-        return true;
-    return SDL_SetWindowPosition(window, x, y);
+    return whitty_window::place_cabinet_half(window, cabinet_node);
+}
+
+// Which half of the shared desktop this process owns. The launcher exports the
+// node before the window exists, so both the OpenGL and alternate-presenter
+// paths can read it without threading it through their own settings.
+int cabinet_node_from_environment() {
+    const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+    const int node = node_text ? std::atoi(node_text) : 0;
+    return node >= 1 && node <= 2 ? node : 1;
 }
 
 constexpr float normalized_byte(uint8_t value) {
@@ -162,6 +167,38 @@ struct draw_vertex {
     float object_flags;
 };
 
+// The Vulkan polygon pipeline declares its vertex attributes from these same
+// offsets, so this array uploads to it unmodified. Reordering the struct
+// without updating system22_vertex_layout breaks the build here rather than
+// feeding the shader plausible-looking nonsense.
+static_assert(sizeof(draw_vertex) == system22_vertex_layout::stride);
+static_assert(offsetof(draw_vertex, x) == system22_vertex_layout::position);
+static_assert(offsetof(draw_vertex, u_over_z) ==
+              system22_vertex_layout::u_over_z);
+static_assert(offsetof(draw_vertex, v_over_z) ==
+              system22_vertex_layout::v_over_z);
+static_assert(offsetof(draw_vertex, brightness_over_z) ==
+              system22_vertex_layout::brightness_over_z);
+static_assert(offsetof(draw_vertex, one_over_z) ==
+              system22_vertex_layout::one_over_z);
+static_assert(offsetof(draw_vertex, palette_base) ==
+              system22_vertex_layout::palette);
+static_assert(offsetof(draw_vertex, color_mode) ==
+              system22_vertex_layout::color_mode);
+static_assert(offsetof(draw_vertex, texture_bank) ==
+              system22_vertex_layout::texture_bank);
+static_assert(offsetof(draw_vertex, direct) ==
+              system22_vertex_layout::direct);
+static_assert(offsetof(draw_vertex, fog) == system22_vertex_layout::fog);
+static_assert(offsetof(draw_vertex, fog_color_r) ==
+              system22_vertex_layout::fog_color);
+static_assert(offsetof(draw_vertex, viewport_x) ==
+              system22_vertex_layout::viewport);
+static_assert(offsetof(draw_vertex, clip_left) ==
+              system22_vertex_layout::clip_rect);
+static_assert(offsetof(draw_vertex, sprite) ==
+              system22_vertex_layout::render_flags);
+
 struct model2_draw_vertex {
     float x, y, z;
     float u, v;
@@ -174,6 +211,29 @@ struct model2_draw_vertex {
     float texture_lod;
     float draw_priority;
 };
+
+// As with draw_vertex above, the Vulkan pipeline declares its attributes from
+// these offsets, so this array uploads unmodified.
+static_assert(sizeof(model2_draw_vertex) == model2_vertex_layout::stride);
+static_assert(offsetof(model2_draw_vertex, x) ==
+              model2_vertex_layout::position);
+static_assert(offsetof(model2_draw_vertex, u) == model2_vertex_layout::uv);
+static_assert(offsetof(model2_draw_vertex, center_x) ==
+              model2_vertex_layout::center);
+static_assert(offsetof(model2_draw_vertex, clip_left) ==
+              model2_vertex_layout::clip);
+static_assert(offsetof(model2_draw_vertex, header0) ==
+              model2_vertex_layout::header0);
+static_assert(offsetof(model2_draw_vertex, color_base) ==
+              model2_vertex_layout::color_base);
+static_assert(offsetof(model2_draw_vertex, luma) == model2_vertex_layout::luma);
+static_assert(offsetof(model2_draw_vertex, renderer) ==
+              model2_vertex_layout::renderer);
+static_assert(offsetof(model2_draw_vertex, texture_lod) ==
+              model2_vertex_layout::texture_lod);
+static_assert(offsetof(model2_draw_vertex, draw_priority) ==
+              model2_vertex_layout::draw_priority);
+
 
 constexpr const char* model2_vertex_shader_source = R"GLSL(
 #version 430 core
@@ -769,6 +829,25 @@ uint apply_fade(uint component, uint factor) {
     return min((component * factor) >> 8u, 255u);
 }
 
+// Sharp bilinear, matching shaders/arcade_post.frag. Plain bilinear blends
+// across a whole source texel, which is what makes an arcade raster look soft
+// once it is scaled by a non-integer factor. This keeps each texel's interior
+// flat - as nearest does - and confines the blend to a single output pixel at
+// the texel boundary, so the picture stays crisp without the uneven pixel
+// widths nearest produces.
+vec2 sharp_texel_coordinate(vec2 uv, vec2 source_size) {
+    vec2 scale = max(vec2(output_size) / source_size, vec2(1.0));
+    vec2 texel = uv * source_size;
+    vec2 base = floor(texel);
+    vec2 offset = texel - base;
+    vec2 flat_range = vec2(0.5) - vec2(0.5) / scale;
+    vec2 centre_distance = offset - vec2(0.5);
+    vec2 ramp =
+        (centre_distance - clamp(centre_distance, -flat_range, flat_range)) *
+            scale + vec2(0.5);
+    return (base + ramp) / source_size;
+}
+
 void main() {
     ivec2 source_size = textureSize(scene_color, 0);
     vec2 output_coordinate = gl_FragCoord.xy - vec2(output_origin);
@@ -779,7 +858,8 @@ void main() {
         // visibly squeezing fine HUD text even when LINEAR was selected.
         vec2 uv = output_coordinate / vec2(output_size);
         if (flip_y) uv.y = 1.0 - uv.y;
-        sampled = texture(scene_color, uv).rgb;
+        sampled = texture(scene_color,
+                          sharp_texel_coordinate(uv, vec2(source_size))).rgb;
     } else {
         ivec2 coordinate = ivec2(output_coordinate * vec2(source_size) /
                                  vec2(output_size));
@@ -976,6 +1056,12 @@ polygon_renderer_gpu::~polygon_renderer_gpu() {
     shutdown();
 }
 
+namespace {
+// Reported a handful of times, not every frame: enough to see whether a path
+// is reached at all without filling the file.
+bool log_first(int& counter, int limit = 3) { return ++counter <= limit; }
+} // namespace
+
 bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     if (m_initialized) return true;
 
@@ -995,6 +1081,7 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     }
 
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+        whitty_wall_log::note("SDL video init FAILED: %s", SDL_GetError());
         std::fprintf(stderr, "SDL initialization failed: %s\n", SDL_GetError());
         return false;
     }
@@ -1243,6 +1330,7 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     if (!create_graphics_pipeline() || !create_model2_pipeline() ||
         !create_text_pipeline() ||
         !create_post_pipeline() || !create_settings_overlay()) {
+        whitty_wall_log::note("renderer pipeline setup FAILED");
         shutdown();
         return false;
     }
@@ -1255,6 +1343,13 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     m_network_video = std::make_unique<network_video_link>();
     apply_display_settings(settings);
     printf("GPU renderer initialized\n");
+    whitty_wall_log::note("renderer up: wanted=%d actual=%d window=%d "
+                          "headless=%d",
+                          static_cast<int>(settings.renderer),
+                          m_alternate_presenter
+                              ? static_cast<int>(m_alternate_presenter->backend())
+                              : -1,
+                          m_ctx ? 1 : 0, m_headless ? 1 : 0);
     m_initialized = true;
     return true;
 }
@@ -1438,12 +1533,46 @@ arcade_host_action polygon_renderer_gpu::process_events() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         const bool key_down = event.type == SDL_EVENT_KEY_DOWN;
+        // A compositor asking a column to close looks, one event later,
+        // exactly like the user quitting: SDL turns the last window closing
+        // into SDL_EVENT_QUIT. Recording it separates the two.
+        if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+            whitty_wall_log::note("compositor asked window %u to close",
+                                  static_cast<unsigned>(event.window.windowID));
+        if (event.type == SDL_EVENT_WINDOW_DESTROYED)
+            whitty_wall_log::note("window %u destroyed",
+                                  static_cast<unsigned>(event.window.windowID));
         const arcade_host_action host_action = classify_arcade_host_event(
             event.type == SDL_EVENT_QUIT,
             key_down && event.key.key == SDLK_ESCAPE,
             key_down && event.key.repeat != 0);
-        if (host_action != arcade_host_action::continue_running)
+        if (host_action != arcade_host_action::continue_running) {
+            whitty_wall_log::note(
+                "host stop requested: sdl event %u (quit=%d escape=%d)",
+                static_cast<unsigned>(event.type),
+                event.type == SDL_EVENT_QUIT ? 1 : 0,
+                key_down && event.key.key == SDLK_ESCAPE ? 1 : 0);
             return host_action;
+        }
+        // On an arcade wall every column keeps running, but only the one you
+        // are looking at should be heard. Following keyboard focus means the
+        // flip needs no messaging between the processes: each mutes itself
+        // when focus leaves it, and SDL delivers key events only to the
+        // focused window.
+        if (m_display_settings.wall_count > 1 &&
+            (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ||
+             event.type == SDL_EVENT_WINDOW_FOCUS_LOST)) {
+            m_wall_column_active =
+                event.type == SDL_EVENT_WINDOW_FOCUS_GAINED;
+            m_wall_audio_changed = true;
+            // Only the column that gained focus knows the wall has a new
+            // big cabinet. Publishing it is what lets the other two shrink
+            // themselves: each of them can see its own focus, but not whose
+            // gain caused their loss.
+            if (m_wall_column_active)
+                whitty_window::publish_wall_focus(
+                    m_display_settings.wall_slot);
+        }
         if (!m_alternate_presenter &&
             (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
              event.type == SDL_EVENT_WINDOW_RESIZED) && m_ctx) {
@@ -1715,6 +1844,15 @@ emulator_settings polygon_renderer_gpu::effective_presenter_settings(
     return effective;
 }
 
+void polygon_renderer_gpu::set_board_name(std::string short_name) {
+    if (short_name == m_bezel_board) return;
+    m_bezel_board = std::move(short_name);
+    // The previous board's artwork must not frame this one.
+    m_bezel_pixels.clear();
+    if (m_alternate_presenter) m_alternate_presenter->set_bezel({});
+    m_bezels.request(m_bezel_board);
+}
+
 void polygon_renderer_gpu::set_cabinet_status(std::string status) {
     if (m_cabinet_status == status) return;
     m_cabinet_status = std::move(status);
@@ -1847,6 +1985,12 @@ bool polygon_renderer_gpu::take_operator_action(operator_menu_action& action) {
     return true;
 }
 
+bool polygon_renderer_gpu::take_game_picker_request() {
+    const bool requested = m_game_picker_requested;
+    m_game_picker_requested = false;
+    return requested;
+}
+
 bool polygon_renderer_gpu::take_controls_request() {
     const bool requested = m_controls_requested;
     m_controls_requested = false;
@@ -1887,6 +2031,21 @@ void polygon_renderer_gpu::apply_display_settings(
         SDL_SetWindowMaximumSize(window, 16384, 16384);
         place_window_on_display(window, settings.display_index, false);
         SDL_SetWindowFullscreen(window, true);
+    } else if (settings.wall_count > 1) {
+        // Arcade wall: one column of several, each a different game.
+        SDL_SetWindowFullscreen(window, false);
+        if (!whitty_window::place_wall_slot(window, settings.wall_slot,
+                                            settings.wall_count))
+            SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
+                                  SDL_WINDOWPOS_CENTERED);
+    } else if (settings.twin_one_screen) {
+        // Two linked cabinets sharing one screen: this process owns one half
+        // of the desktop, the companion process owns the other.
+        SDL_SetWindowFullscreen(window, false);
+        if (!place_window_on_cabinet_half(window,
+                                          cabinet_node_from_environment()))
+            SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
+                                  SDL_WINDOWPOS_CENTERED);
     } else {
         SDL_SetWindowFullscreen(window, false);
         const auto size = bounded_window_size(window, settings.window_width);
@@ -2018,7 +2177,10 @@ bool polygon_renderer_gpu::activate_pause_menu() {
         m_controls_requested = true;
         break;
     case 4:
-        m_rom_menu_visible = true;
+        // The full cover browser runs as a modal launcher over the paused
+        // game, replacing the old text-overlay ROM list.
+        m_pause_menu_visible = true;
+        m_game_picker_requested = true;
         break;
     case 5:
         return true;
@@ -2105,8 +2267,7 @@ void polygon_renderer_gpu::adjust_setting(int direction) {
         resume_game();
         return;
     case 13:
-        m_pause_menu_visible = false;
-        m_rom_menu_visible = true;
+        m_game_picker_requested = true;
         m_settings_texture_dirty = true;
         return;
     case 14:
@@ -2180,6 +2341,21 @@ void polygon_renderer_gpu::submit_textures(const uint8_t* texture_rom,
     glBindTexture(GL_TEXTURE_2D, m_tileattr_texture);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1024, 512,
                     GL_RED_INTEGER, GL_UNSIGNED_BYTE, tilemap_rom + 0x200000);
+
+    // The Vulkan scene pipeline samples its own copies. The bytes are the
+    // same ones OpenGL just took, in the same layout, so both stay in step
+    // without the board knowing which backend is live.
+    if (m_alternate_presenter && native_system22_enabled()) {
+        m_alternate_presenter->upload_scene_sheet(
+            scene_sheet::texture_tiles, texture_rom + region_offset,
+            bank_size * bank_count);
+        m_alternate_presenter->upload_scene_sheet(
+            scene_sheet::texture_map, tile_words.data(),
+            tile_words.size() * sizeof(uint16_t));
+        m_alternate_presenter->upload_scene_sheet(
+            scene_sheet::texture_attr, tilemap_rom + 0x200000,
+            static_cast<std::size_t>(1024) * 512);
+    }
 }
 
 void polygon_renderer_gpu::submit_sprites(const uint8_t* sprite_rom,
@@ -2200,19 +2376,32 @@ void polygon_renderer_gpu::submit_sprites(const uint8_t* sprite_rom,
                         GL_RED_INTEGER, GL_UNSIGNED_BYTE,
                         sprite_rom + layer * layer_size);
     }
+    if (m_alternate_presenter && native_system22_enabled())
+        m_alternate_presenter->upload_scene_sheet(
+            scene_sheet::sprite_tiles, sprite_rom, sprite_size);
 }
 
 void polygon_renderer_gpu::submit_palette(const uint8_t* palette_ram, size_t size) {
     if (m_headless || !m_initialized || !palette_ram || size < 0x18000) return;
     m_ctx->make_current();
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, m_palette_texture);
-    for (std::size_t component = 0; component < 3; ++component) {
-        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0,
-                        static_cast<GLint>(component),
-                        256, 128, 1, GL_RED_INTEGER, GL_UNSIGNED_BYTE,
-                        palette_ram + component * std::size_t{0x8000});
+    // The OpenGL copy exists only to keep the fallback warm. The board
+    // resubmits the palette every frame, so a decline repopulates it
+    // immediately and skipping it while Vulkan owns the frame is free.
+    if (opengl_textures_needed()) {
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, m_palette_texture);
+        for (std::size_t component = 0; component < 3; ++component) {
+            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0,
+                            static_cast<GLint>(component),
+                            256, 128, 1, GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                            palette_ram + component * std::size_t{0x8000});
+        }
     }
+    // The three colour planes are contiguous at a 0x8000 stride, which is
+    // exactly the layered image the Vulkan shader samples.
+    if (m_alternate_presenter && native_system22_enabled())
+        m_alternate_presenter->upload_scene_sheet(scene_sheet::palette,
+                                                  palette_ram, 0x18000);
 }
 
 void polygon_renderer_gpu::submit_gamma(const uint8_t* gamma_proms, size_t size) {
@@ -2226,6 +2415,10 @@ void polygon_renderer_gpu::submit_gamma(const uint8_t* gamma_proms, size_t size)
                         256, 1, 1, GL_RED_INTEGER, GL_UNSIGNED_BYTE,
                         gamma_proms + component * std::size_t{0x100});
     }
+    // The three ramps are contiguous, which is the layered image the Vulkan
+    // presentation pass samples.
+    if (m_alternate_presenter && native_system22_enabled())
+        m_alternate_presenter->upload_gamma_ramp(gamma_proms, 256 * 3);
 }
 
 void polygon_renderer_gpu::submit_text_layer(const uint8_t* character_ram,
@@ -2245,18 +2438,33 @@ void polygon_renderer_gpu::submit_text_layer(const uint8_t* character_ram,
         return;
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glBindTexture(GL_TEXTURE_2D, m_character_texture);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 512, 256,
-                    GL_RED_INTEGER, GL_UNSIGNED_BYTE, character_ram);
+    if (opengl_textures_needed()) {
+        glBindTexture(GL_TEXTURE_2D, m_character_texture);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 512, 256,
+                        GL_RED_INTEGER, GL_UNSIGNED_BYTE, character_ram);
+    }
 
     std::array<uint16_t, std::size_t{64} * 64> entries{};
     for (std::size_t index = 0; index < entries.size(); ++index)
         entries[index] = static_cast<uint16_t>(
             (static_cast<uint16_t>(text_ram[index * 2]) << 8) |
             text_ram[index * 2 + 1]);
-    glBindTexture(GL_TEXTURE_2D, m_textmap_texture);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 64, 64,
-                    GL_RED_INTEGER, GL_UNSIGNED_SHORT, entries.data());
+    if (opengl_textures_needed()) {
+        glBindTexture(GL_TEXTURE_2D, m_textmap_texture);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 64, 64,
+                        GL_RED_INTEGER, GL_UNSIGNED_SHORT, entries.data());
+    }
+    // The Vulkan text pipeline samples its own copies of both. The board
+    // rewrites them as it runs, so these stream in with the frame rather
+    // than stalling the queue.
+    if (m_alternate_presenter && native_system22_enabled()) {
+        m_alternate_presenter->upload_scene_sheet(
+            scene_sheet::character_data, character_ram,
+            static_cast<std::size_t>(512) * 256);
+        m_alternate_presenter->upload_scene_sheet(
+            scene_sheet::text_map, entries.data(),
+            entries.size() * sizeof(uint16_t));
+    }
 
     const int scroll_x = (static_cast<int>(
         (static_cast<uint16_t>(text_attributes[0]) << 8) |
@@ -2395,6 +2603,40 @@ void polygon_renderer_gpu::render_scene(const view_matrix& view, const rgba_colo
     // submit_polygons itself is safe for the CPU/DSP producer thread.
     glBindFramebuffer(GL_FRAMEBUFFER, m_scene_framebuffer);
     glViewport(0, 0, SYSTEM22_SCREEN_WIDTH, SYSTEM22_SCREEN_HEIGHT);
+    // With Vulkan owning the window the whole scene rasterises there: the
+    // same vertices, the same uniforms, straight into the image the post pass
+    // samples. That removes this board's glReadPixels round trip and the CPU
+    // rescale behind it. The native path declines when it is unavailable, and
+    // the OpenGL route below then runs exactly as before.
+    // Opt-in while this path is still being brought up: System 22 has a
+    // proven OpenGL route and there is no reason to risk it by default.
+    // Set WHITTY_VK_SYSTEM22=1 to rasterise natively instead.
+    if (m_alternate_presenter && native_system22_enabled()) {
+        system22_scene scene;
+        scene.width = SYSTEM22_SCREEN_WIDTH;
+        scene.height = SYSTEM22_SCREEN_HEIGHT;
+        scene.vertices = vertices.data();
+        scene.vertex_count = vertices.size();
+        scene.uniforms = build_system22_uniforms(view);
+        scene.draw_text = (m_system22_layer_mask & 0x04) != 0;
+        scene.text_uniforms = build_system22_text_uniforms();
+        // The OpenGL route ends in present_texture(..., board_color = true),
+        // so the same grading has to reach the Vulkan presentation pass.
+        scene.apply_board_color = true;
+        scene.super_system22 = m_super_system22_video;
+        scene.screen_fade[0] = m_screen_fade_r;
+        scene.screen_fade[1] = m_screen_fade_g;
+        scene.screen_fade[2] = m_screen_fade_b;
+        // Presentation has to succeed too. Returning on a rasterised-but-
+        // unpresented frame would leave the window never shown and no way
+        // back to OpenGL, so both halves are required before this path
+        // claims the frame.
+        if (present_native_scene(
+                m_alternate_presenter->render_system22_scene(scene),
+                "System 22", SYSTEM22_SCREEN_WIDTH, SYSTEM22_SCREEN_HEIGHT))
+            return;
+    }
+
     glClearColor(normalized_byte(fog_color.r), normalized_byte(fog_color.g),
                  normalized_byte(fog_color.b), 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -2518,6 +2760,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     if (m_headless || !m_ctx || texture == 0 ||
         source_width <= 0 || source_height <= 0)
         return;
+    recover_from_device_loss();
 
     if (display_width <= 0) display_width = source_width;
     if (display_height <= 0) display_height = source_height;
@@ -2846,21 +3089,8 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
         glDisable(GL_BLEND);
     }
 
-    const bool status_overlay_visible = !m_cabinet_status.empty() ||
-        m_display_settings.show_fps || m_display_settings.show_renderer;
+    const bool status_overlay_visible = tick_status_overlay();
     if (status_overlay_visible) {
-        ++m_fps_frame_count;
-        const auto now = std::chrono::steady_clock::now();
-        if (m_fps_epoch.time_since_epoch().count() == 0)
-            m_fps_epoch = now;
-        const double elapsed = std::chrono::duration<double>(
-            now - m_fps_epoch).count();
-        if (elapsed >= 0.5) {
-            m_last_fps = static_cast<double>(m_fps_frame_count) / elapsed;
-            update_fps_texture(m_last_fps);
-            m_fps_frame_count = 0;
-            m_fps_epoch = now;
-        }
         // OpenGL draws directly in host pixels. Alternate backends receive
         // the same panel separately below and composite it after scaling the
         // native game frame, keeping its physical size backend-independent.
@@ -2888,6 +3118,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     } else {
         SDL_GL_SwapWindow(static_cast<SDL_Window*>(m_ctx->window));
+        maintain_gl_wall_placement();
         // Windowed dual output: mirror the same frame into an independent
         // Player 2 window, either beside Player 1 on the same desktop or
         // centred on the second physical display. The window shares this GL
@@ -2925,6 +3156,12 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
                     ++m_ctx->twin_layout_attempts;
                 }
                 SDL_GL_MakeCurrent(w2, ctx);
+                // The Player 1 swap above has already waited for vblank.
+                // Letting this one wait as well serialises two vblanks into
+                // one frame, which pins windowed dual output to half the
+                // refresh rate no matter how fast the machine is. The mirror
+                // rides Player 1's cadence with its interval released.
+                if (m_display_settings.vsync) SDL_GL_SetSwapInterval(0);
                 int w2w = 1;
                 int w2h = 1;
                 SDL_GetWindowSizeInPixels(w2, &w2w, &w2h);
@@ -2963,6 +3200,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
                 }
                 SDL_GL_SwapWindow(w2);
                 SDL_GL_MakeCurrent(w1, ctx);
+                if (m_display_settings.vsync) SDL_GL_SetSwapInterval(1);
             }
         } else if (m_ctx->window2) {
             // Left windowed dual output - tear the second window down.
@@ -2975,7 +3213,178 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     }
 }
 
+// Packs the loose System 22 uniforms into the std140 block the Vulkan shaders
+// read. The OpenGL path sets the same values one glUniform call at a time;
+// this is the only place the two can drift, so it reads them from the same
+// members in the same order.
+system22_uniform_block polygon_renderer_gpu::build_system22_uniforms(
+        const view_matrix& view) const {
+    system22_uniform_block block;
+    // The GL path uploads the matrix transposed (glUniformMatrix4fv with
+    // transpose = GL_TRUE); std140 has no such switch, so transpose here.
+    for (int row = 0; row < 4; ++row)
+        for (int column = 0; column < 4; ++column)
+            block.view_matrix[column * 4 + row] = view.m[row][column];
+    block.super_fade_color[0] = m_super_screen_fade_r;
+    block.super_fade_color[1] = m_super_screen_fade_g;
+    block.super_fade_color[2] = m_super_screen_fade_b;
+    block.super_poly_fade_color[0] = m_super_poly_fade_r;
+    block.super_poly_fade_color[1] = m_super_poly_fade_g;
+    block.super_poly_fade_color[2] = m_super_poly_fade_b;
+    block.texture_control[0] = m_texture_address_base;
+    block.texture_control[1] = m_texture_tile_high_bit_from_attr ? 1u : 0u;
+    block.texture_control[2] = m_super_system22_video ? 1u : 0u;
+    block.texture_control[3] = m_super_screen_fade_factor;
+    block.mixer_control[0] = m_super_mixer_flags;
+    block.mixer_control[1] = m_super_poly_fade_enabled ? 1u : 0u;
+    block.mixer_control[2] = m_super_poly_alpha_color;
+    block.mixer_control[3] = m_super_poly_alpha_pen;
+    block.alpha_control[0] = m_super_poly_alpha_factor;
+    return block;
+}
+
+// The text layer's own std140 block. Its fade is driven by the same screen
+// mixer as the polygon layer, hence the shared colour and factor.
+system22_text_uniform_block
+polygon_renderer_gpu::build_system22_text_uniforms() const {
+    system22_text_uniform_block block;
+    block.text_scroll[0] = m_text_scroll_x;
+    block.text_scroll[1] = m_text_scroll_y;
+    block.text_scroll[2] = m_text_palette_base;
+    block.super_fade_color[0] = m_super_screen_fade_r;
+    block.super_fade_color[1] = m_super_screen_fade_g;
+    block.super_fade_color[2] = m_super_screen_fade_b;
+    block.super_control[0] = m_super_system22_video ? 1u : 0u;
+    block.super_control[1] = m_super_screen_fade_factor;
+    block.super_control[2] = m_super_mixer_flags;
+    return block;
+}
+
+// Advances the frame counter that drives the on-screen rate readout and
+// refreshes its texture twice a second. Returns whether the status panel
+// should be shown at all. Shared by the OpenGL and native Vulkan paths so the
+// measured rate means the same thing on both.
+// Bundles the host panels the Vulkan path composites over a board frame. Each
+// is left null when it should not be shown, which the presenter reads as "no
+// change" - so a panel is only re-uploaded when its bitmap has actually been
+// rebuilt.
+board_overlays polygon_renderer_gpu::collect_board_overlays() {
+    poll_bezel();
+    board_overlays panels;
+    if (tick_status_overlay()) {
+        panels.status = m_fps_pixels.data();
+        panels.status_width = m_fps_texture_width;
+        panels.status_height = m_fps_texture_height;
+    } else {
+        // An empty panel clears whatever the slot last held.
+        panels.status = m_blank_overlay.data();
+        panels.status_width = 1;
+        panels.status_height = 1;
+    }
+    if (m_settings_visible) {
+        if (m_settings_texture_dirty) update_settings_texture();
+        if (!m_settings_pixels.empty()) {
+            panels.menu = m_settings_pixels.data();
+            panels.menu_width = settings_width;
+            panels.menu_height = settings_height;
+        }
+    } else {
+        panels.menu = m_blank_overlay.data();
+        panels.menu_width = 1;
+        panels.menu_height = 1;
+    }
+    ensure_player_labels();
+    const bool labels_wanted =
+        m_display_settings.output == output_mode::dual && !m_settings_visible;
+    for (int pane = 0; pane < 2; ++pane) {
+        const std::size_t index = static_cast<std::size_t>(pane);
+        if (labels_wanted && !m_player_label_pixels[index].empty()) {
+            panels.player_label[index] = m_player_label_pixels[index].data();
+            panels.player_label_width[index] = m_player_label_w[pane];
+            panels.player_label_height[index] = m_player_label_h[pane];
+        } else {
+            panels.player_label[index] = m_blank_overlay.data();
+            panels.player_label_width[index] = 1;
+            panels.player_label_height[index] = 1;
+        }
+    }
+    return panels;
+}
+
+// Presents a scene the native path has just rasterised, reporting once if
+// either half declines. Both board families need exactly this, and a silent
+// refusal here is indistinguishable from a hang.
+bool polygon_renderer_gpu::present_native_scene(bool rasterised,
+                                                const char* board, int width,
+                                                int height) {
+    static int native_entries = 0;
+    if (log_first(native_entries))
+        whitty_wall_log::note("present_native_scene(%s): rasterised=%d "
+                              "alternate=%d", board, rasterised ? 1 : 0,
+                              m_alternate_presenter ? 1 : 0);
+    const bool presented = rasterised &&
+        m_alternate_presenter->render_board_frame(
+            nullptr, 0, 0, true, collect_board_overlays(), m_settings_visible,
+            width, height);
+    if (!presented && !m_native_decline_reported) {
+        m_native_decline_reported = true;
+        std::fprintf(stderr,
+                     "%s native path declined: scene=%s present=%s - falling "
+                     "back to OpenGL\n",
+                     board, rasterised ? "ok" : "FAILED",
+                     presented ? "ok" : "FAILED");
+    }
+    m_native_frame_live = presented;
+    return presented;
+}
+
+// Installs the running board's bezel once the fetch finishes. Called from the
+// frame path because that is the only place guaranteed to run while a board is
+// live; it does nothing at all until a bezel actually arrives.
+void polygon_renderer_gpu::poll_bezel() {
+    if (!m_alternate_presenter) return;
+    for (bezel::ready_bezel& ready : m_bezels.take_ready()) {
+        if (ready.short_name != m_bezel_board) continue;
+        // Held because the presenter uploads from this memory and the
+        // library hands ownership over.
+        m_bezel_pixels = std::move(ready.rgba);
+        bezel_frame frame;
+        frame.pixels = m_bezel_pixels.data();
+        frame.width = ready.width;
+        frame.height = ready.height;
+        frame.cutout_x = ready.window.x;
+        frame.cutout_y = ready.window.y;
+        frame.cutout_width = ready.window.width;
+        frame.cutout_height = ready.window.height;
+        m_alternate_presenter->set_bezel(frame);
+    }
+}
+
+bool polygon_renderer_gpu::tick_status_overlay() {
+    const bool visible = !m_cabinet_status.empty() ||
+        m_display_settings.show_fps || m_display_settings.show_renderer;
+    if (!visible) return false;
+    ++m_fps_frame_count;
+    const auto now = std::chrono::steady_clock::now();
+    if (m_fps_epoch.time_since_epoch().count() == 0) m_fps_epoch = now;
+    const double elapsed =
+        std::chrono::duration<double>(now - m_fps_epoch).count();
+    if (elapsed >= 0.5) {
+        m_last_fps = static_cast<double>(m_fps_frame_count) / elapsed;
+        update_fps_texture(m_last_fps);
+        m_fps_frame_count = 0;
+        m_fps_epoch = now;
+    }
+    return true;
+}
+
 void polygon_renderer_gpu::refresh_output() {
+    // A paused or menu-dismissed frame on the native Vulkan path is redrawn
+    // from the image already resident on the GPU - there is no OpenGL texture
+    // to replay.
+    if (m_native_frame_live && m_alternate_presenter && !m_settings_visible &&
+        m_alternate_presenter->repeat_board_frame())
+        return;
     if (!m_ctx || !m_last_present_texture) return;
     m_ctx->make_current();
     present_texture(m_last_present_texture, m_last_present_width,
@@ -2984,12 +3393,98 @@ void polygon_renderer_gpu::refresh_output() {
                     m_last_present_display_height);
 }
 
+// A lost Vulkan device never comes back, and every further submit fails - a
+// column in that state used to run invisibly forever. The OpenGL context is
+// alive and has been rendering the same frames all along, so drop the dead
+// presenter, show the GL window, and carry on: degraded presentation beats a
+// game that plays to nobody.
+// Keeps a wall column's GL window in its slot, the same maintenance the
+// Vulkan presenter performs for its window. This exists for the device-loss
+// failover: a column presenting through OpenGL would otherwise never be
+// re-placed and ends up covering its neighbours.
+void polygon_renderer_gpu::maintain_gl_wall_placement() {
+    if (m_display_settings.wall_count <= 1 || !m_ctx) return;
+    if (--m_gl_wall_countdown > 0) return;
+    m_gl_wall_countdown = 30;
+    const int focused = whitty_window::read_wall_focus();
+    bool needed = !m_gl_wall_placed || focused != m_gl_wall_focus;
+    if (!needed) {
+        int x = 0, y = 0, width = 0, height = 0;
+        if (whitty_window::compositor_window_geometry(x, y, width, height))
+            needed = x != m_gl_wall_x || width != m_gl_wall_width ||
+                     height != m_gl_wall_height;
+    }
+    if (!needed) return;
+    m_gl_wall_focus = focused;
+    m_gl_wall_placed = whitty_window::place_wall_slot(
+        static_cast<SDL_Window*>(m_ctx->window), m_display_settings.wall_slot,
+        m_display_settings.wall_count);
+    if (m_gl_wall_placed) {
+        int y = 0;
+        whitty_window::compositor_window_geometry(m_gl_wall_x, y,
+                                                  m_gl_wall_width,
+                                                  m_gl_wall_height);
+        whitty_wall_log::note("gl window placed at %d %dx%d", m_gl_wall_x,
+                              m_gl_wall_width, m_gl_wall_height);
+    }
+}
+
+void polygon_renderer_gpu::recover_from_device_loss() {
+    if (!m_alternate_presenter || !m_alternate_presenter->device_lost())
+        return;
+    whitty_wall_log::note(
+        "vulkan device lost - switching to OpenGL presentation");
+    std::fprintf(stderr,
+                 "Vulkan device lost; presenting through OpenGL instead\n");
+    m_alternate_presenter->shutdown();
+    m_alternate_presenter.reset();
+    m_native_frame_live = false;
+    m_active_backend = renderer_backend::opengl;
+    if (!m_ctx) return;
+    SDL_Window* window = static_cast<SDL_Window*>(m_ctx->window);
+    SDL_ShowWindow(window);
+    SDL_GetWindowSizeInPixels(window, &m_ctx->width, &m_ctx->height);
+    m_ctx->width = std::max(m_ctx->width, 1);
+    m_ctx->height = std::max(m_ctx->height, 1);
+    // Placement starts over for the GL window, and keeps being maintained
+    // from the GL present path from here on.
+    m_gl_wall_placed = false;
+    m_gl_wall_countdown = 0;
+    maintain_gl_wall_placement();
+}
+
 void polygon_renderer_gpu::present_rgba_frame(const uint8_t* pixels,
                                               int width, int height,
                                               int display_width,
                                               int display_height) {
+    static int rgba_entries = 0;
+    if (log_first(rgba_entries))
+        whitty_wall_log::note("present_rgba_frame: pixels=%d %dx%d headless=%d "
+                              "ctx=%d alternate=%d",
+                              pixels ? 1 : 0, width, height, m_headless ? 1 : 0,
+                              m_ctx ? 1 : 0, m_alternate_presenter ? 1 : 0);
     if (!pixels || width <= 0 || height <= 0 || m_headless || !m_ctx) return;
+    // The panel bitmaps are still authored through SDL_ttf into OpenGL
+    // textures, so the context has to be current before they are collected -
+    // even on the native path, which only wants their host-side pixels.
     m_ctx->make_current();
+    recover_from_device_loss();
+
+    // Boards that hand over a finished raster have no reason to visit OpenGL
+    // when Vulkan owns the window: the pixels go straight into a sampled
+    // image and the Vulkan post pipeline scales them. This skips a texture
+    // upload, a framebuffer pass, a full glReadPixels and a CPU rescale. The
+    // native path declines when it is unavailable, and the OpenGL route below
+    // then runs exactly as before.
+    if (m_alternate_presenter) {
+        if (m_alternate_presenter->render_board_frame(
+                pixels, width, height, true, collect_board_overlays(),
+                m_settings_visible, display_width, display_height)) {
+            m_native_frame_live = true;
+            return;
+        }
+        m_native_frame_live = false;
+    }
 
     if (!m_external_frame_texture)
         glGenTextures(1, &m_external_frame_texture);
@@ -3035,14 +3530,29 @@ void polygon_renderer_gpu::present_model2_frame(model2_gpu_frame frame) {
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-    glBindTexture(GL_TEXTURE_2D, m_model2_base_texture);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, model2_gpu_frame::width,
-                    model2_gpu_frame::height, GL_RGBA, GL_UNSIGNED_BYTE,
-                    frame.base_rgba.data());
-    glBindTexture(GL_TEXTURE_2D, m_model2_foreground_texture);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, model2_gpu_frame::width,
-                    model2_gpu_frame::height, GL_RGBA, GL_UNSIGNED_BYTE,
-                    frame.foreground_rgba.data());
+    // Both layers arrive every frame, so the OpenGL copies can be skipped
+    // while Vulkan owns the picture - this is the largest of the duplicated
+    // uploads at roughly 1.5 MB a frame.
+    if (opengl_textures_needed()) {
+        glBindTexture(GL_TEXTURE_2D, m_model2_base_texture);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, model2_gpu_frame::width,
+                        model2_gpu_frame::height, GL_RGBA, GL_UNSIGNED_BYTE,
+                        frame.base_rgba.data());
+        glBindTexture(GL_TEXTURE_2D, m_model2_foreground_texture);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, model2_gpu_frame::width,
+                        model2_gpu_frame::height, GL_RGBA, GL_UNSIGNED_BYTE,
+                        frame.foreground_rgba.data());
+    }
+    // The Vulkan scene pass samples its own copies of the two 2D layers.
+    // They are rewritten every frame, so they stream in with it.
+    if (m_alternate_presenter && native_model2_enabled()) {
+        m_alternate_presenter->upload_scene_sheet(
+            scene_sheet::model2_base, frame.base_rgba.data(),
+            frame.base_rgba.size());
+        m_alternate_presenter->upload_scene_sheet(
+            scene_sheet::model2_foreground, frame.foreground_rgba.data(),
+            frame.foreground_rgba.size());
+    }
     if (texture_packet) {
         glBindTexture(GL_TEXTURE_2D_ARRAY, m_model2_sheet_texture);
         glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 1024, 1024, 1,
@@ -3051,6 +3561,18 @@ void polygon_renderer_gpu::present_model2_frame(model2_gpu_frame frame) {
         glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, 1024, 1024, 1,
                         GL_RED_INTEGER, GL_UNSIGNED_BYTE,
                         frame.texture_sheet_1.data());
+        // Both layers are contiguous in the Vulkan array image.
+        if (m_alternate_presenter && native_model2_enabled()) {
+            std::vector<uint8_t> both(frame.texture_sheet_0.size() +
+                                      frame.texture_sheet_1.size());
+            std::memcpy(both.data(), frame.texture_sheet_0.data(),
+                        frame.texture_sheet_0.size());
+            std::memcpy(both.data() + frame.texture_sheet_0.size(),
+                        frame.texture_sheet_1.data(),
+                        frame.texture_sheet_1.size());
+            m_alternate_presenter->upload_scene_sheet(
+                scene_sheet::model2_sheets, both.data(), both.size());
+        }
     }
     if (color_packet) {
         glBindTexture(GL_TEXTURE_2D, m_model2_luma_texture);
@@ -3090,6 +3612,14 @@ void polygon_renderer_gpu::present_model2_frame(model2_gpu_frame frame) {
         glBindTexture(GL_TEXTURE_2D, m_model2_color_texture);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1024, 64,
                         GL_RGB, GL_UNSIGNED_BYTE, colors.data());
+        if (m_alternate_presenter && native_model2_enabled()) {
+            m_alternate_presenter->upload_scene_sheet(
+                scene_sheet::model2_luma, frame.luma.data(),
+                frame.luma.size());
+            // Packed three-byte RGB, widened on the way in.
+            m_alternate_presenter->upload_model2_color_table(colors.data(),
+                                                             colors.size());
+        }
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
@@ -3145,6 +3675,23 @@ void polygon_renderer_gpu::present_model2_frame(model2_gpu_frame frame) {
                             clipped.vertices[vertex],
                             clipped.vertices[vertex + 1], priority);
         }
+    }
+
+    // With Vulkan owning the window the whole Model 2 frame rasterises there:
+    // base layer, polygons and foreground layer straight into the image the
+    // post pass samples, with no glReadPixels round trip behind it.
+    if (m_alternate_presenter && native_model2_enabled()) {
+        model2_scene scene;
+        scene.width = model2_gpu_frame::width;
+        scene.height = model2_gpu_frame::height;
+        scene.vertices = vertices.data();
+        scene.vertex_count = vertices.size();
+        scene.crtc_offset[0] = static_cast<float>(frame.horizontal_offset);
+        scene.crtc_offset[1] = static_cast<float>(frame.vertical_offset);
+        if (present_native_scene(
+                m_alternate_presenter->render_model2_scene(scene), "Model 2",
+                model2_gpu_frame::width, model2_gpu_frame::height))
+            return;
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, m_model2_framebuffer);
@@ -3744,6 +4291,16 @@ void polygon_renderer_gpu::update_settings_texture() {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, settings_width, settings_height,
                  0, GL_RGBA, GL_UNSIGNED_BYTE, panel->pixels);
+    // Keep a tightly packed host copy for the Vulkan path, which uploads the
+    // panel itself rather than reading it back out of an OpenGL texture.
+    m_settings_pixels.resize(
+        static_cast<std::size_t>(settings_width) * settings_height * 4);
+    for (int y = 0; y < settings_height; ++y)
+        std::memcpy(m_settings_pixels.data() +
+                        static_cast<std::size_t>(y) * settings_width * 4,
+                    static_cast<const uint8_t*>(panel->pixels) +
+                        static_cast<std::size_t>(y) * panel->pitch,
+                    static_cast<std::size_t>(settings_width) * 4);
     SDL_DestroySurface(panel);
     m_settings_texture_dirty = false;
 }
@@ -3836,6 +4393,16 @@ void polygon_renderer_gpu::ensure_player_labels() {
                      GL_RGBA, GL_UNSIGNED_BYTE, panel->pixels);
         m_player_label_w[i] = panel->w;
         m_player_label_h[i] = panel->h;
+        // Host copy for the Vulkan overlay pipeline, packed to width*4.
+        m_player_label_pixels[static_cast<std::size_t>(i)].resize(
+            static_cast<std::size_t>(panel->w) * panel->h * 4);
+        for (int row = 0; row < panel->h; ++row)
+            std::memcpy(m_player_label_pixels[static_cast<std::size_t>(i)]
+                                .data() +
+                            static_cast<std::size_t>(row) * panel->w * 4,
+                        static_cast<const uint8_t*>(panel->pixels) +
+                            static_cast<std::size_t>(row) * panel->pitch,
+                        static_cast<std::size_t>(panel->w) * 4);
         SDL_DestroySurface(panel);
     }
 }

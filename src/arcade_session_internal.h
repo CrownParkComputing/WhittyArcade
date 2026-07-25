@@ -63,6 +63,9 @@ public:
     bool take_controls_request() final {
         return m_gpu_renderer->take_controls_request();
     }
+    bool take_game_picker_request() final {
+        return m_gpu_renderer->take_game_picker_request();
+    }
     bool take_settings_change(emulator_settings& settings) final {
         if (!m_gpu_renderer->take_settings_change(settings)) return false;
         apply_audio_settings(settings);
