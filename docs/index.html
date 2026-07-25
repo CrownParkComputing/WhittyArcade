@@ -221,6 +221,7 @@
     <a class="brand" href="#top">WhittyArcade</a>
     <nav aria-label="Main navigation">
       <a href="#games">Games</a>
+      <a href="#wall">Arcade wall</a>
       <a href="#multiplayer">Multiplayer</a>
       <a href="#screens">Screens</a>
       <a href="#features">Features</a>
@@ -246,9 +247,9 @@
       </figure>
       <p class="caption">Ridge Racer · live capture from the current WhittyArcade build</p>
       <div class="stats">
-        <div class="stat"><b>26</b><span>working game sets</span></div>
+        <div class="stat"><b>30</b><span>working game sets</span></div>
         <div class="stat"><b>11</b><span>board/runtime groups</span></div>
-        <div class="stat"><b>4</b><span>single and twin display layouts</span></div>
+        <div class="stat"><b>3</b><span>games at once on the arcade wall</span></div>
         <div class="stat"><b>2P</b><span>automatic network discovery</span></div>
       </div>
     </div>
@@ -277,6 +278,36 @@
           <img src="assets/shinobi-twin.png" alt="Two native-aspect Shinobi screens side by side">
           <div class="game-info"><span class="tag">Horizontal arcade raster</span><h3>Shinobi</h3><p>The same twin layout follows Shinobi’s 320×224 raster with one scale on both axes.</p></div>
         </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="wall">
+    <div class="wrap">
+      <div class="section-head">
+        <div><p class="eyebrow">Several cabinets, one display</p><h2>The arcade wall</h2></div>
+        <p>Two or three different games run side by side across one screen, each one a complete arcade board rather than a video of one. They all keep playing their attract modes; the cabinet you are at gets the larger pane, the sound and the controls, and moving between them re-sizes the wall as you go.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature"><span class="icon">3x</span><h3>Whole boards, not thumbnails</h3><p>Every column owns its CPUs, texture memory, vertex buffers and audio device. Three Namco System 22 racers can run at once because none of them is sharing a renderer.</p></article>
+        <article class="feature"><span class="icon">&#8596;</span><h3>Focus follows you</h3><p>The played cabinet takes about half the display and the others share the rest. Click or tab across and the wall re-lays itself, with only the focused game audible.</p></article>
+        <article class="feature"><span class="icon">&#8635;</span><h3>Swap without restarting</h3><p>Change the game in one column from inside the wall. That column rebuilds its board in place while its neighbours keep running.</p></article>
+        <article class="feature"><span class="icon">&#9633;</span><h3>Its own workspace</h3><p>The wall claims a free virtual desktop where one is available, so it never buries what you already had open.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section id="launcher">
+    <div class="wrap">
+      <div class="section-head">
+        <div><p class="eyebrow">Cover art first</p><h2>A shelf you browse, not a menu you climb</h2></div>
+        <p>The app opens on the games themselves. Sorting, hardware and publisher pages, and the two-player filters are all views over that same grid rather than menus standing in front of it.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature"><span class="icon">&#9635;</span><h3>Games immediately</h3><p>Arcade title screens on every card, loaded from a local cache. One key changes the view; nothing sits between you and starting a game.</p></article>
+        <article class="feature"><span class="icon">&#9776;</span><h3>Boards and publishers as pages</h3><p>Flip through hardware families or publishers with the shoulder buttons. Each page carries the board's photo, its name, and its real hardware description behind an info button.</p></article>
+        <article class="feature"><span class="icon">2P</span><h3>Filtered by how you play</h3><p>Alternating, simultaneous, twin screen, linked cabinets and network play each list only the games that genuinely support them.</p></article>
+        <article class="feature"><span class="icon">HI</span><h3>An arcade ranking table</h3><p>Decoded high scores presented the way the machines did it, with the table building itself a row at a time.</p></article>
       </div>
     </div>
   </section>
@@ -346,7 +377,7 @@
         <article class="feature"><span class="icon">↔</span><h3>Remappable controls</h3><p>SDL gamepads, keyboard and mouse with hot-plug detection and per-device saved mappings.</p></article>
         <article class="feature"><span class="icon">DIP</span><h3>Operator settings</h3><p>Game-specific switches plus EEPROM and NVRAM handling, including Sega Rally cabinet roles.</p></article>
         <article class="feature"><span class="icon">HI</span><h3>High-score viewers</h3><p>Decoded and persistent score tables are keyed to the same stable game identity as saves and controls.</p></article>
-        <article class="feature"><span class="icon">GPU</span><h3>Three output paths</h3><p>OpenGL, Vulkan and software presenters share the same aspect-correct layout rules.</p></article>
+        <article class="feature"><span class="icon">GPU</span><h3>Native Vulkan rendering</h3><p>Boards rasterise straight into the presented image - no readback, no CPU rescale - with OpenGL kept as the fallback and as failover if a GPU device is lost.</p></article>
         <article class="feature"><span class="icon">SND</span><h3>Board-specific audio</h3><p>Each cabinet keeps its own sound hardware path, from Namco wave sound to SCSP and C352 audio.</p></article>
         <article class="feature"><span class="icon">↻</span><h3>Switch without restarting</h3><p>Return to the game selector and launch another board while the host window stays alive.</p></article>
       </div>
@@ -379,7 +410,7 @@
   <section id="catalog">
     <div class="wrap">
       <div class="section-head">
-        <div><p class="eyebrow">Current working shelf</p><h2>26 sets across eleven groups</h2></div>
+        <div><p class="eyebrow">Current working shelf</p><h2>30 sets across eleven groups</h2></div>
         <p>The focus is depth, not a huge compatibility number. Ridge Racer Full Scale is recognised but deliberately marked not working rather than shown as playable.</p>
       </div>
       <div class="catalog">
