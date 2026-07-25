@@ -120,6 +120,11 @@ public:
     uint32_t last_unmapped_read() const { return m_last_unmapped_read; }
     uint32_t last_unmapped_write() const { return m_last_unmapped_write; }
 
+    // Lets a diagnostic report the i960 instruction behind a bus access.
+    void set_program_counter_probe(std::function<uint32_t()> probe) {
+        m_program_counter_probe = std::move(probe);
+    }
+
 private:
     void load_nvram();
     bool save_nvram();
@@ -270,6 +275,7 @@ private:
     uint32_t m_tgp_host_read_latch{0xffffffffU};
     uint32_t m_tgp_program_index{};
     uint32_t m_tgp_bank{};
+    std::function<uint32_t()> m_program_counter_probe;
     uint32_t m_tgp_sincos_base{};
     std::array<uint32_t, 4> m_tgp_atan_base{};
     uint32_t m_tgp_inv_base{};
@@ -280,6 +286,9 @@ private:
     sound_uart_callback m_sound_uart_callback;
 
     void push_geometry_word(uint32_t value);
+    // Diagnostic hook shared by every display-list writer; see the definition.
+    void trace_geometry_write(const char* source, std::size_t offset,
+                              uint32_t value);
     uint8_t io_read(uint8_t offset);
     void io_write(uint8_t offset, uint8_t value);
     void eeprom_write_lines(uint8_t value);

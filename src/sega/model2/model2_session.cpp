@@ -99,6 +99,10 @@ public:
 
     void run_frame() override {
         m_input->set_suppressed(m_gpu_renderer->settings_visible());
+        int gx = 0, gy = 0, gw = 0, gh = 0, gdw = 0, gdh = 0;
+        if (m_gpu_renderer &&
+            m_gpu_renderer->picture_rect(gx, gy, gw, gh, gdw, gdh))
+            m_input->set_picture_rect(gx, gy, gw, gh, gdw, gdh);
         m_input->update();
         input_state next = m_input->state();
         // Sega Model 2 driving cabinets expose one VR/view-change line rather
@@ -268,6 +272,22 @@ private:
         double machine_ms = 0.0;
         double layers_ms = 0.0;
         double packet_ms = 0.0;
+        // Boot diagnostic, enabled with MODEL2_BOOT_DIAG=1 (fresh file per
+        // run): periodically record the i960 and TGP program counters so a
+        // game that misbehaves on the cabinet can be pinpointed afterwards
+        // from the log. A stuck i960 PC means a boot hang (for example
+        // waiting on the I/O-board handshake); an advancing PC with nothing
+        // on screen means a rendering or geometry problem. ~2 samples/sec.
+        const bool boot_diag = std::getenv("MODEL2_BOOT_DIAG") != nullptr;
+        uint64_t diag_frame = 0;
+        if (boot_diag) {
+            if (std::FILE* f = std::fopen("/tmp/model2_diag.log", "w")) {
+                std::fprintf(f, "== Model 2 boot diag: %s ==\n",
+                             model2_rom_loader::set_short_name(
+                                 m_machine->rom_set()));
+                std::fclose(f);
+            }
+        }
         while (m_cpu_running.load(std::memory_order_acquire)) {
             input_state input;
             {
@@ -309,6 +329,15 @@ private:
             const auto machine_begin = std::chrono::steady_clock::now();
             m_machine->run_frame(false);
             const auto machine_end = std::chrono::steady_clock::now();
+            if (boot_diag && (diag_frame++ % 30) == 0) {
+                if (std::FILE* f = std::fopen("/tmp/model2_diag.log", "a")) {
+                    std::fprintf(f, "frame=%llu i960_pc=%08x tgp_pc=%04x\n",
+                                 static_cast<unsigned long long>(diag_frame),
+                                 m_machine->program_counter(),
+                                 m_machine->tgp_program_counter());
+                    std::fclose(f);
+                }
+            }
             if (m_link_cabinet &&
                 m_machine->communication_linked() != m_link_connected) {
                 m_link_connected = m_machine->communication_linked();

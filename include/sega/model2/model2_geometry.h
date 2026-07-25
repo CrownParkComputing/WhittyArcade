@@ -112,5 +112,8 @@ private:
     uint16_t m_current_window{};
     uint8_t m_center_select{};
     uint32_t m_master_z_clip{0xff};
+    // Set once a parsed list produced polygons; gates the MODEL2_TRACE_GEO
+    // diagnostic so it captures real display lists, not boot-time stubs.
+    bool m_trace_armed{false};
     std::vector<model2_geometry_polygon> m_polygons;
 };

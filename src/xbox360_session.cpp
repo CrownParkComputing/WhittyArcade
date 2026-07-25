@@ -150,11 +150,96 @@ private:
     std::uint32_t m_input_packet{};
 };
 
+// Which titles are served by a native port rather than by an in-process module.
+// The module path below predates the native runtime and is kept only for the
+// title it was written for.
+bool served_by_native_runtime(xbox360_rom_set set) {
+    return set == xbox360_rom_set::geometry_wars;
+}
+
+// Routing decided by the ROM, not by the factory, because which runtime a title
+// needs is a property of the title and the board's factory is only handed the
+// board. A session that turns out to be the wrong kind never starts: the
+// delegate is built here, from the path, before anything is initialized.
+class xbox360_board final : public emulator_session {
+public:
+    xbox360_board(std::shared_ptr<arcade_video_worker> video,
+                  std::shared_ptr<arcade_cabinet_state> cabinet)
+        : m_video(std::move(video)), m_cabinet(std::move(cabinet)) {}
+
+    arcade_board_type board_type() const noexcept override {
+        return arcade_board_type::xbox360;
+    }
+
+    bool initialize(const std::string& rom_path, const std::string& bios_path,
+                    const emulator_settings& settings) override {
+        const xbox360_rom_set set =
+            xbox360_rom_loader::inspect(rom_path, false).set;
+        m_delegate = served_by_native_runtime(set) ?
+            make_xbox360_native_session(m_video, m_cabinet) :
+            std::unique_ptr<emulator_session>(
+                std::make_unique<xbox360_emulator>(m_video, m_cabinet));
+        return m_delegate->initialize(rom_path, bios_path, settings);
+    }
+
+    void run_frame() override {
+        if (m_delegate) m_delegate->run_frame();
+    }
+    arcade_host_action process_events() override {
+        return m_delegate ? m_delegate->process_events() :
+                            arcade_host_action::return_to_menu;
+    }
+    void set_rom_choices(const std::vector<rom_choice>& choices) override {
+        if (m_delegate) m_delegate->set_rom_choices(choices);
+    }
+    bool take_rom_selection(std::string& path) override {
+        return m_delegate && m_delegate->take_rom_selection(path);
+    }
+    bool take_operator_settings_request() override {
+        return m_delegate && m_delegate->take_operator_settings_request();
+    }
+    bool take_controls_request() override {
+        return m_delegate && m_delegate->take_controls_request();
+    }
+    void open_operator_settings() override {
+        if (m_delegate) m_delegate->open_operator_settings();
+    }
+    void reload_input_mappings() override {
+        if (m_delegate) m_delegate->reload_input_mappings();
+    }
+    bool take_settings_change(emulator_settings& settings) override {
+        return m_delegate && m_delegate->take_settings_change(settings);
+    }
+    bool paused() const override {
+        return m_delegate && m_delegate->paused();
+    }
+    void set_paused(bool paused) override {
+        if (m_delegate) m_delegate->set_paused(paused);
+    }
+    void refresh_output() override {
+        if (m_delegate) m_delegate->refresh_output();
+    }
+    double frame_seconds() const override {
+        return m_delegate ? m_delegate->frame_seconds() : 1.0 / 60.0;
+    }
+    int active_player() const override {
+        return m_delegate ? m_delegate->active_player() : -1;
+    }
+    bool producer_paced() const override {
+        return m_delegate && m_delegate->producer_paced();
+    }
+
+private:
+    std::shared_ptr<arcade_video_worker> m_video;
+    std::shared_ptr<arcade_cabinet_state> m_cabinet;
+    std::unique_ptr<emulator_session> m_delegate;
+};
+
 } // namespace
 
 std::unique_ptr<emulator_session> make_xbox360_session(
         std::shared_ptr<arcade_video_worker> video,
         std::shared_ptr<arcade_cabinet_state> cabinet) {
-    return std::make_unique<xbox360_emulator>(
-        std::move(video), std::move(cabinet));
+    return std::make_unique<xbox360_board>(std::move(video),
+                                           std::move(cabinet));
 }

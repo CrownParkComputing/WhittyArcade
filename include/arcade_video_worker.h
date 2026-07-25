@@ -57,6 +57,13 @@ public:
     bool take_controls_request();
     bool take_settings_change(emulator_settings& settings);
     void set_lightgun_cursor(bool enabled, uint8_t player = 0);
+
+    // Where the emulated picture was last drawn (drawable pixels, origin
+    // top-left) and the drawable's size, snapshotted from the renderer after
+    // each present. The light gun maps the pointer onto this rather than
+    // guessing the layout from the window size. False until a frame is drawn.
+    bool picture_rect(int& x, int& y, int& width, int& height,
+                      int& drawable_width, int& drawable_height) const;
     void apply_display_settings(const emulator_settings& settings);
 
     void submit_polygons(const polygon_object* polygons, int count);
@@ -85,6 +92,18 @@ public:
     void read_framebuffer(uint32_t* output);
 
 private:
+    void snapshot_picture_rect(polygon_renderer_gpu& renderer);
+    struct picture_rect_snapshot {
+        int x{0};
+        int y{0};
+        int width{0};
+        int height{0};
+        int drawable_width{0};
+        int drawable_height{0};
+    };
+    mutable std::mutex m_picture_rect_mutex;
+    picture_rect_snapshot m_picture_rect;
+
     using task = std::function<void(polygon_renderer_gpu&)>;
     struct rgba_frame {
         std::vector<uint8_t> pixels;

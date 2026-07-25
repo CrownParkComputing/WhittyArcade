@@ -246,6 +246,8 @@ bool model2_machine::initialize(const std::string& rom_path) {
                 m_impl->cpu.i960_yield();
             update_interrupt_lines();
         });
+    m_impl->bus.set_program_counter_probe(
+        [this]() { return m_impl->cpu.previous_program_counter(); });
     m_impl->tgp.set_program_callbacks(
         [this](uint16_t address) {
             return m_impl->bus.tgp_program_read(address);
@@ -592,6 +594,10 @@ uint32_t model2_machine::tgp_data_word(uint16_t address) const {
 
 uint32_t model2_machine::tgp_uploaded_words() const {
     return m_impl->bus.tgp_uploaded_words();
+}
+
+uint32_t model2_machine::tgp_program_word(uint16_t address) const {
+    return m_impl->bus.tgp_program_read(address);
 }
 
 std::size_t model2_machine::tgp_input_words() const {

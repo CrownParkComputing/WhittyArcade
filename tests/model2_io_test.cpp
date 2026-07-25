@@ -406,5 +406,67 @@ int main() {
     model2_bus reloaded;
     reloaded.attach(roms);
     assert(read_eeprom_word(reloaded, 5) == 0x5aa5);
+
+    // The geometry coprocessor's arithmetic ports answer on every word of
+    // their address range, not just the first. Virtua Cop 2 latches the
+    // arctangent operands at 0x24-0x27 and reads the answer back from 0x27;
+    // decoding only 0x24 returned zero for every camera-direction query,
+    // which drove the attract camera's field of view to zero and made the
+    // focal length infinite, so no polygon survived projection.
+    model2_roms atan_roms;
+    atan_roms.copro_data.assign(0x1000, 0);
+    atan_roms.copro_tgp_tables.assign(0x40000, 0);
+    // Table entry for the clamped index this operand set selects.
+    store_word(atan_roms.copro_tgp_tables, 0x7fff * 4, 0x12340000);
+    atan_roms.set = model2_rom_set::sega_rally_revision_c;
+    model2_bus atan_bus;
+    atan_bus.attach(atan_roms);
+    for (uint16_t port = 0x24; port <= 0x27; ++port)
+        atan_bus.tgp_io_write(port, port == 0x27 ? 0x3f800000 : 0);
+    // Both operands are zero, so the unit takes its "second octant" path:
+    // the table word is shifted down and offset by a quarter turn.
+    constexpr uint32_t expected_atan = (0x12340000U >> 16) + 0x4000U;
+    for (uint16_t port = 0x24; port <= 0x27; ++port)
+        assert(atan_bus.tgp_io_read(port) == expected_atan);
+
+    // Virtua Cop 2 reloads by shooting off the screen, so the gun's
+    // off-screen line has to reach the game. It arrives through the
+    // 315-5649's serial-channel-2 mux: register 0x0a selects the field and
+    // 0x0c returns it, with mux values of 8 and above giving the off-screen
+    // status (bit 0 = player 1, bit 1 = player 2). Register n sits on the
+    // even byte lane at 0x01c00000 + n * 2.
+    model2_roms gun_roms;
+    gun_roms.copro_data.assign(0x1000, 0);
+    gun_roms.copro_tgp_tables.assign(0x40000, 0);
+    gun_roms.set = model2_rom_set::virtua_cop_2;
+    model2_bus gun_bus;
+    model2_game_profile gun_profile;
+    gun_profile.io = model2_game_profile::io_kind::crx_gun;
+    gun_profile.lightgun = true;
+    gun_profile.nvram_leaf = "whitty-model2-io-test";
+    gun_bus.attach(gun_roms, gun_profile);
+    const auto read_offscreen = [](model2_bus& target) {
+        target.write8(0x01c00000 + 0x0a * 2, 8);
+        return target.read8(0x01c00000 + 0x0c * 2);
+    };
+    input_state aiming;
+    gun_bus.set_inputs(aiming);
+    assert((read_offscreen(gun_bus) & 0x03) == 0);
+    input_state off_screen;
+    off_screen.buttons[1] = true;
+    gun_bus.set_inputs(off_screen);
+    assert((read_offscreen(gun_bus) & 0x01) != 0);
+    input_state player_two_off_screen;
+    player_two_off_screen.p2_buttons[1] = true;
+    gun_bus.set_inputs(player_two_off_screen);
+    assert((read_offscreen(gun_bus) & 0x03) == 0x02);
+
+    // The sine/cosine, reciprocal and inverse-square-root ports do vary with
+    // the word being read; keep that distinction from regressing too.
+    store_word(atan_roms.copro_tgp_tables, 0, 0x11111111);
+    store_word(atan_roms.copro_tgp_tables, 0x3fff * 4, 0x22222222);
+    atan_bus.tgp_io_write(0x20, 0);
+    assert(atan_bus.tgp_io_read(0x20) == 0x11111111);
+    assert(atan_bus.tgp_io_read(0x21) == 0x22222222);
     return 0;
 }

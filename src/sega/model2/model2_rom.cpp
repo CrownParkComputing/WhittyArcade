@@ -572,8 +572,12 @@ model2_rom_load_result load_virtua_cop(const source_reader& source) {
     roms.multipcm_samples_1.assign(0x400000, 0x00);
     copy_linear(source, {"mpr-17172.32", 0x100000, 0xab22cac3},
                 roms.multipcm_samples_1, 0x000000, errors);
+    copy_linear(source, {"mpr-17172.32", 0x100000, 0xab22cac3},
+                roms.multipcm_samples_1, 0x100000, errors);
     copy_linear(source, {"mpr-17173.33", 0x100000, 0x3cb4005c},
                 roms.multipcm_samples_1, 0x200000, errors);
+    copy_linear(source, {"mpr-17173.33", 0x100000, 0x3cb4005c},
+                roms.multipcm_samples_1, 0x300000, errors);
 
     // MultiPCM bus 2: two 0x200000 samples at 0x000000 and 0x200000.
     roms.multipcm_samples_2.assign(0x400000, 0x00);

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
@@ -62,6 +64,22 @@ uint16_t model2_z_value(float value, uint32_t adjustment) {
 int16_t signed_12(uint32_t value) {
     value &= 0xfff;
     return static_cast<int16_t>((value & 0x800) ? value - 0x1000 : value);
+}
+
+// Diagnostic switches, read once: the display-list decoder runs over
+// thousands of commands per frame and must not call getenv per command.
+unsigned trace_command_limit() {
+    static const unsigned limit = [] {
+        const char* value = std::getenv("MODEL2_TRACE_GEO");
+        return value ? static_cast<unsigned>(
+            std::strtoul(value, nullptr, 0)) : 0U;
+    }();
+    return limit;
+}
+
+bool trace_infinities() {
+    static const bool enabled = std::getenv("MODEL2_TRACE_INF") != nullptr;
+    return enabled;
 }
 } // namespace
 
@@ -282,6 +300,23 @@ void model2_geometry::parse(const std::vector<uint8_t>& buffer,
         ++m_summary.command_counts[command];
         uint32_t count{};
         uint32_t ignored{};
+        // Diagnostic: MODEL2_TRACE_GEO=<n> prints the first n commands of a
+        // display list with the camera state they leave behind. A game whose
+        // polygons vanish while its tile layers draw is almost always being
+        // handed a bad matrix or focus.
+        if (const unsigned limit = trace_command_limit()) {
+            static unsigned traced = 0;
+            if (traced < limit && m_trace_armed) {
+                ++traced;
+                std::printf("GEO cmd=%02x opcode=%08x focus=%g/%g "
+                            "matrix=%g,%g,%g/%g,%g,%g/%g,%g,%g/%g,%g,%g\n",
+                            command, opcode, m_focus[0], m_focus[1],
+                            m_matrix[0], m_matrix[1], m_matrix[2],
+                            m_matrix[3], m_matrix[4], m_matrix[5],
+                            m_matrix[6], m_matrix[7], m_matrix[8],
+                            m_matrix[9], m_matrix[10], m_matrix[11]);
+            }
+        }
         switch (command) {
         case 0x00:
             break;
@@ -294,6 +329,9 @@ void model2_geometry::parse(const std::vector<uint8_t>& buffer,
                 !take(object_address) || !take(count))
                 break;
             ++m_summary.object_mode_counts[m_mode & 3];
+            // Arm the diagnostics as soon as a list draws objects; a decoder
+            // fed a captured reference buffer has no earlier list to arm on.
+            m_trace_armed = true;
             const unsigned source = (object_address & 0x01000000U) ? 2 :
                                     (object_address & 0x00800000U) ? 1 : 0;
             ++m_summary.object_source_counts[source];
@@ -336,6 +374,26 @@ void model2_geometry::parse(const std::vector<uint8_t>& buffer,
 
             model2_geometry_vertex previous0 = object_point();
             model2_geometry_vertex previous1 = object_point();
+            // Diagnostic: report the first objects whose transform overflows,
+            // together with the camera state that produced them. A finite
+            // model point that lands at infinity means the matrix or focus
+            // reaching the geometrizer is wrong, not the model data.
+            if (trace_infinities() &&
+                (!std::isfinite(previous0.x) || !std::isfinite(previous0.y) ||
+                 !std::isfinite(previous0.z))) {
+                static unsigned traced_infinities = 0;
+                if (traced_infinities < 8) {
+                    ++traced_infinities;
+                    std::printf("INF oba=%08x p0=%g,%g,%g focus=%g/%g "
+                                "matrix=%g,%g,%g/%g,%g,%g/%g,%g,%g/%g,%g,%g\n",
+                                object_address, previous0.x, previous0.y,
+                                previous0.z, m_focus[0], m_focus[1],
+                                m_matrix[0], m_matrix[1], m_matrix[2],
+                                m_matrix[3], m_matrix[4], m_matrix[5],
+                                m_matrix[6], m_matrix[7], m_matrix[8],
+                                m_matrix[9], m_matrix[10], m_matrix[11]);
+                }
+            }
             // A zero object count wraps on the hardware; the rope's link
             // terminator ends it. Virtual On and Gunblade rely on this, and
             // dynamic Model 2 objects are allowed to use the same encoding.
@@ -795,4 +853,7 @@ void model2_geometry::parse(const std::vector<uint8_t>& buffer,
     if (!m_summary.ended && m_summary.commands >= maximum_commands)
         m_summary.truncated = true;
     m_summary.decoded_polygons = static_cast<uint32_t>(m_polygons.size());
+    // Arm MODEL2_TRACE_GEO only once the game is submitting real display
+    // lists, so the trace budget isn't spent on the empty boot-time lists.
+    m_trace_armed = !m_polygons.empty();
 }

@@ -3,7 +3,7 @@
 WhittyArcade is a focused standalone multi-board arcade emulator for Windows
 and Linux. Its 26 working sets span Namco System 22 / Super System 22, System
 246, Model 1, Model 2, Namco System 1, Galaga, Galaxian, Phoenix, Sega System
-16B, Ghosts'n Goblins hardware and an isolated offline Xbox 360 runtime.
+16B, Ghosts'n Goblins hardware and the Xbox 360.
 MAME's BSD hardware implementations are the primary behaviour reference;
 machine integration, scheduling, frontend, storage and host output are
 standalone.
@@ -307,7 +307,7 @@ Required MAME short names for this build:
 | Namco System 22 | `ridgerac`, `ridgera2`, `raverace`, `acedrive`, `victlap`, `cybrcomm`, `ridgeracf` (not working) | `namcoc71.zip`, `namcoc74.zip` |
 | Namco Super System 22 | `timecris` (World, TS2 Ver.B), `dirtdash` (World, DT2 Ver.C), `aquajet` (World, AJ2 Ver.B) | `namcoc71.zip`; each set carries its M37710 firmware data |
 | Namco System 246 | `rrvac` (Ridge Racer V: Arcade Battle) | `rrv1-a.chd` |
-| Xbox 360 offline | `robotron` (Robotron: 2084) | Extracted `default.xex` with `classic/` and `media/` data |
+| Microsoft Xbox 360 | `geometrywars` (Geometry Wars: Retro Evolved), `robotron` (Robotron: 2084) | Extracted `default.xex` plus that title's data. Geometry Wars is a native port launched through the `whitty_xenon` runtime, not emulated - see below |
 | Sega Model 1 | `vformula`, `vf`, `swa`, `wingwar` | Split `vformula` also needs `vr.zip`; merged `vr.zip` works directly |
 | Sega Model 2 | `srallyc`, `vcop2`, `vcop` | None (`segabill.zip` is optional for `srallyc`) |
 | Phoenix hardware | `phoenix` | None |
@@ -340,6 +340,34 @@ Expected firmware:
 The firmware may be loose or stored in `namcoc71.zip` and `namcoc74.zip`.
 Time Crisis and Dirt Dash need `c71.bin` but use the M37710 program contained
 in their own sets, so neither requires `namcoc74.zip`.
+
+### Xbox 360 titles
+
+An Xbox 360 title is an extracted game directory - `default.xex` and its data -
+rather than a MAME archive, so it is not a ZIP in the ROM folder. Two layouts
+are found automatically:
+
+- `<ROM folder>/xbox360/<game>/`, alongside every other board's directory.
+- `~/Downloads/xbla-recomp-suite/games/<game>/extracted/`, where the
+  recompilation suite keeps its titles. Set `WHITTY_XBOX360_GAME_ROOT` to scan
+  somewhere else.
+
+Geometry Wars: Retro Evolved is a **native port**, not an emulated title. There
+is no Xbox 360 emulation in WhittyArcade: selecting it launches the executable
+that the [`whitty_xenon`](../xenon-native) runtime produces by statically
+recompiling the title, and that program owns its own window, controller and
+audio. Closing it returns to the WhittyArcade menu, exactly as leaving an
+emulated cabinet does. The runtime is looked for in this order:
+
+1. `WHITTY_XENON_RUNTIME` - the full path to the binary.
+2. `$WHITTY_XENON_ROOT/build/recompiled/<game>/<game>`.
+3. Beside the WhittyArcade executable, as `<game>` or `whitty_xenon/<game>`.
+4. `~/development/xenon-native/projects/whitty_xenon/build/recompiled/<game>/<game>`.
+
+The title is started with `WHITTY_WINDOW=1`, `WHITTY_FPS=60` and
+`WHITTY_XMA_BYPASS=1` unless those are already set in the environment, matching
+the runtime's own `tools/play.sh`. The credit in the corner of the picture is
+the runtime's, and `WHITTY_OVERLAY=0` removes it.
 
 ## WhittyArcade compared with FinalBurn Neo
 
@@ -530,6 +558,10 @@ switch word, three calibrated ADC values and credit counters once per second.
 - `src/arcade_session.cpp` — sole board-session factory
 - `src/*_session.cpp` — per-board input/audio/operator/video runtime wiring
 - `src/main.cpp` — board-neutral launcher, restart loop and frame pacing
+- `src/xbox360_native_runtime.cpp` — resolving and launching a native port's
+  own executable, separately from starting it
+- `src/xbox360_native_session.cpp` — the Xbox 360 session for a native port:
+  a child process rather than a machine, and no host window of its own
 - `src/system22_cpu.cpp` — MC68020 wrapper and System 22 main bus
 - `src/system22_dsp.cpp` — dual-C71 maps, point memory and render transport
 - `src/system22_mcu.cpp` — C74/M37710 maps and C352 command producer

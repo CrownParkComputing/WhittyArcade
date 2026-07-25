@@ -394,6 +394,19 @@ bool arcade_input::watch_cabinet_button_events(void* userdata,
     return 0;
 }
 
+bool arcade_input::is_lightgun_game(std::string_view game_short_name) {
+    // The System 246/256 gun games arrive from the PCSX2 collection, where a
+    // game's short name is its .acgame folder name rather than a MAME set, so
+    // they are listed by the names those folders carry.
+    static constexpr std::string_view lightgun_games[] = {
+        "vcop", "vcop2",                                       // Model 2
+        "timecrisis3", "timecrisis4", "vampirenight", "cobra", // System 246/256
+    };
+    for (std::string_view game : lightgun_games)
+        if (game_short_name == game) return true;
+    return false;
+}
+
 bool arcade_input::initialize(std::string_view game_short_name) {
     std::lock_guard<std::mutex> sdl_lock(arcade_sdl_mutex());
     if (m_initialized) return true;
@@ -410,8 +423,9 @@ bool arcade_input::initialize(std::string_view game_short_name) {
     // Time Crisis (System 22) and the Model 2 light-gun games (Virtua Cop and
     // Virtua Cop 2) all drive the crosshair from the mouse; only their ADC
     // calibration differs. The Model 2 guns use the full 0..255 axis.
-    m_lightgun_full_range = m_game_short_name == "vcop" ||
-                            m_game_short_name == "vcop2";
+    m_lightgun_full_range = is_lightgun_game(m_game_short_name);
+    // Time Crisis cabinets have a foot pedal; the other gun games do not.
+    m_lightgun_pedal = m_game_short_name.rfind("timecrisis", 0) == 0;
     m_time_crisis_mouse = m_game_short_name == "timecris" ||
                           m_lightgun_full_range;
     m_lightgun_mouse_active = false;
@@ -439,7 +453,12 @@ bool arcade_input::initialize(std::string_view game_short_name) {
     scan_for_controller();
     if (!m_controller)
         std::printf("Input: keyboard active; waiting for an SDL controller\n");
-    if (m_time_crisis_mouse)
+    if (m_lightgun_full_range)
+        std::printf("Light gun: move to aim, left click fires, shoot off the "
+                    "screen to reload%s\n",
+                    m_lightgun_pedal ? ", hold Space for the pedal"
+                                     : " (right click also reloads)");
+    else if (m_time_crisis_mouse)
         std::printf("Time Crisis mouse gun: move to aim, left click fires, "
                     "hold Space to stand, release Space or right click to "
                     "take cover/reload\n");
@@ -743,6 +762,14 @@ void arcade_input::update() {
     m_state.buttons[1] = action2 >= cabinet_press_threshold;
     m_state.buttons[2] = action_value(input_action::p1_action3, keys) >=
                          cabinet_press_threshold;
+    if (m_lightgun_pedal) {
+        // A Time Crisis cabinet has a foot pedal, and it must work whether or
+        // not the player is currently moving the mouse, so it is mapped here
+        // rather than alongside the pointer. The gun's off-screen line is the
+        // pointer's business alone, so no key asserts it.
+        m_state.buttons[1] = false;
+        m_state.buttons[2] = action2 >= cabinet_press_threshold;
+    }
     m_state.p2_buttons[0] = action_value(input_action::p2_action1, keys) >=
                             cabinet_press_threshold;
     m_state.p2_buttons[1] = action_value(input_action::p2_action2, keys) >=
@@ -751,8 +778,16 @@ void arcade_input::update() {
     if (m_time_crisis_mouse) {
         const bool mouse_activity = m_mouse_activity.exchange(
             false, std::memory_order_relaxed);
+        // Only a deliberate push on the alternate aim stick takes the gun away
+        // from the mouse. Testing for any non-zero deflection at all meant a
+        // controller resting slightly off centre stole the aim on every frame
+        // the mouse was not moving - and a mouse that is being held steady on
+        // a target sends no motion events, so the gun kept snapping back to
+        // the stick exactly when the player was trying to hold it still.
+        constexpr float alternate_gun_deadzone = 0.35f;
         const bool alternate_gun_activity =
-            std::fabs(left_x) > 0.0f || std::fabs(left_y) > 0.0f;
+            std::fabs(left_x) > alternate_gun_deadzone ||
+            std::fabs(left_y) > alternate_gun_deadzone;
         if (mouse_activity)
             m_lightgun_mouse_active = true;
         else if (alternate_gun_activity)
@@ -777,21 +812,44 @@ void arcade_input::update() {
                 int content_y = 0;
                 int content_width = window_width;
                 int content_height = window_height;
-                if (window_width * 3 > window_height * 4) {
+                float pointer_px = static_cast<float>(mouse_x);
+                float pointer_py = static_cast<float>(mouse_y);
+                if (m_picture_width > 0 && m_picture_height > 0) {
+                    // The renderer said exactly where it drew the picture, in
+                    // drawable pixels. Those differ from window coordinates
+                    // under display scaling, so move the pointer into the same
+                    // space before measuring against the rectangle.
+                    content_x = m_picture_x;
+                    content_y = m_picture_y;
+                    content_width = m_picture_width;
+                    content_height = m_picture_height;
+                    pointer_px *= static_cast<float>(m_picture_drawable_width) /
+                                  static_cast<float>(std::max(window_width, 1));
+                    pointer_py *= static_cast<float>(m_picture_drawable_height) /
+                                  static_cast<float>(std::max(window_height, 1));
+                } else if (window_width * 3 > window_height * 4) {
                     content_width = window_height * 4 / 3;
                     content_x = (window_width - content_width) / 2;
                 } else if (window_height * 4 > window_width * 3) {
                     content_height = window_width * 3 / 4;
                     content_y = (window_height - content_height) / 2;
                 }
-                const float normalized_x = std::clamp(
-                    static_cast<float>(mouse_x - content_x) /
-                        static_cast<float>(std::max(content_width - 1, 1)),
-                    0.0f, 1.0f);
-                const float normalized_y = std::clamp(
-                    static_cast<float>(mouse_y - content_y) /
-                        static_cast<float>(std::max(content_height - 1, 1)),
-                    0.0f, 1.0f);
+                const float pointer_x =
+                    (pointer_px - static_cast<float>(content_x)) /
+                    static_cast<float>(std::max(content_width - 1, 1));
+                const float pointer_y =
+                    (pointer_py - static_cast<float>(content_y)) /
+                    static_cast<float>(std::max(content_height - 1, 1));
+                // A real light gun sees no screen once it is aimed past the
+                // edge of the tube, and the board reports that as off-screen.
+                // Anything outside the 4:3 image - the pillarbox or letterbox
+                // margins the host presentation leaves around it - is off the
+                // screen for the same reason.
+                const bool pointer_off_screen =
+                    pointer_x < 0.0f || pointer_x > 1.0f ||
+                    pointer_y < 0.0f || pointer_y > 1.0f;
+                const float normalized_x = std::clamp(pointer_x, 0.0f, 1.0f);
+                const float normalized_y = std::clamp(pointer_y, 0.0f, 1.0f);
                 if (m_lightgun_full_range) {
                     m_state.left_stick_x = static_cast<uint8_t>(
                         std::lround(normalized_x * 255.0f));
@@ -803,15 +861,55 @@ void arcade_input::update() {
                     m_state.left_stick_y =
                         cyber_axis(normalized_y * 2.0f - 1.0f);
                 }
+                // WHITTY_GUN_TRACE=1 reports where the pointer is, what the
+                // picture's rectangle inside the window is, and the fraction
+                // of the picture the gun is told to aim at. Comparing that
+                // fraction with where the shot lands says whether the aim is
+                // being measured wrongly or converted wrongly further down.
+                static const bool trace_gun =
+                    std::getenv("WHITTY_GUN_TRACE") != nullptr;
+                if (trace_gun && (m_update_count % 30) == 0) {
+                    std::printf("GUN pointer=%d,%d window=%dx%d "
+                                "picture=%d,%d %dx%d aim=%.3f,%.3f "
+                                "offscreen=%d mouse_source=%d\n",
+                                mouse_x, mouse_y, window_width, window_height,
+                                content_x, content_y, content_width,
+                                content_height, normalized_x, normalized_y,
+                                pointer_off_screen ? 1 : 0,
+                                m_lightgun_mouse_active ? 1 : 0);
+                    std::fflush(stdout);
+                }
+                // A cabinet reloads when the trigger is pulled while the gun is
+                // off the screen, so the right button has to produce a shot as
+                // well as the off-screen line. Asserting off-screen on its own
+                // left the gun pointing away with the trigger never pulled,
+                // which no game reads as a reload.
+                const bool reload_click =
+                    m_lightgun_full_range &&
+                    (mouse_buttons & SDL_BUTTON_RMASK) != 0;
                 m_state.buttons[0] =
                     (mouse_buttons & SDL_BUTTON_LMASK) != 0 ||
+                    reload_click ||
                     action1 >= cabinet_press_threshold;
-                // The real pedal is held while Richard is exposed. Releasing
-                // it ducks into cover and reloads, so right mouse reverses
-                // the held Space/controller pedal for an intuitive reload.
-                m_state.buttons[1] =
-                    action2 >= cabinet_press_threshold &&
-                    (mouse_buttons & SDL_BUTTON_RMASK) == 0;
+                if (m_lightgun_full_range) {
+                    // Reload the way the cabinet does: aim off the screen and
+                    // pull the trigger. Button 1 is the gun's off-screen line,
+                    // so it follows the pointer, with the right mouse button
+                    // as a shortcut for windows with no margin to aim into.
+                    m_state.buttons[1] = pointer_off_screen ||
+                        (mouse_buttons & SDL_BUTTON_RMASK) != 0 ||
+                        (!m_lightgun_pedal &&
+                         action2 >= cabinet_press_threshold);
+                    // The pedal is mapped with the other cabinet switches
+                    // above, so it keeps working while the mouse is still.
+                } else {
+                    // Time Crisis instead holds a pedal while Richard is
+                    // exposed. Releasing it ducks into cover and reloads, so
+                    // right mouse reverses the held Space/controller pedal.
+                    m_state.buttons[1] =
+                        action2 >= cabinet_press_threshold &&
+                        (mouse_buttons & SDL_BUTTON_RMASK) == 0;
+                }
             }
         }
     }
