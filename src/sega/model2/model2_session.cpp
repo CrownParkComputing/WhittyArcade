@@ -215,6 +215,9 @@ private:
             m_audio->set_mix_levels(settings.master_volume,
                                     settings.music_volume,
                                     settings.effects_volume);
+            if (m_machine->roms().set == model2_rom_set::virtua_cop_2) {
+                m_audio->set_output_gain(2.5f);
+            }
             m_machine->set_sound_uart_callback([this](uint8_t data) {
                 if (m_audio) m_audio->enqueue_midi(data);
             });

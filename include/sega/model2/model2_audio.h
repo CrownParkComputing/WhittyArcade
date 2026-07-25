@@ -39,6 +39,9 @@ public:
         m_paused.store(paused, std::memory_order_relaxed);
     }
     void set_mix_levels(int master, int music, int effects);
+    void set_output_gain(float gain) {
+        m_host_output_gain.store(gain, std::memory_order_relaxed);
+    }
 
     uint32_t program_counter() const { return m_program_counter.load(); }
     uint64_t executed_cycles() const { return m_executed_cycles.load(); }
@@ -154,6 +157,7 @@ private:
     std::atomic<int> m_master_volume{100};
     std::atomic<int> m_music_volume{100};
     std::atomic<int> m_effects_volume{100};
+    std::atomic<float> m_host_output_gain{1.0f};
     std::atomic<uint32_t> m_program_counter{};
     std::atomic<uint64_t> m_executed_cycles{};
     std::atomic<uint64_t> m_midi_bytes{};

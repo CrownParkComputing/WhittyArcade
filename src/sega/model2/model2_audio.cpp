@@ -17,8 +17,8 @@ extern "C" {
 
 namespace {
 constexpr uint32_t address_mask = 0x00ffffff;
+constexpr double sound_cpu_clock = 11289600.0;
 constexpr double scsp_clock = 45158400.0 / 2.0;
-constexpr double sound_cpu_clock = 45158400.0 / 4.0;
 constexpr double model2_refresh = 60.0;
 // MAME/ElSemi's SCSP pan table carries a 4x mixer-line gain, but the 16-bit
 // DAC stage divides the accumulated mix by four again ("smpl >> 2"), so the
@@ -922,7 +922,7 @@ void model2_audio_system::render_scsp_wide(int32_t* output, int frames,
             left += effects[effect] * gain * (pan < 16 ? pan_gain : 1.0);
             right += effects[effect] * gain * (pan < 16 ? 1.0 : pan_gain);
         }
-        const double board_mix = host_output_gain * master * ui_mix / 100.0;
+        const double board_mix = m_host_output_gain.load(std::memory_order_relaxed) * master * ui_mix / 100.0;
         const auto to_wide_sample = [board_mix](double sample) {
             const double scaled = std::clamp(
                 sample * board_mix,
