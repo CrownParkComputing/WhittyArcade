@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
@@ -59,27 +60,62 @@ inline bool run_hyprctl_move(const char* title, int x, int y) {
     const char* driver = SDL_GetCurrentVideoDriver();
     if (!driver || std::string(driver) != "wayland") return false;
 
-    const std::string x_text = std::to_string(x);
-    const std::string target = std::to_string(y) + ",title:^(" + title + ")$";
-    const char* arguments[]{
-        "hyprctl", "dispatch", "movewindowpixel", "exact",
-        x_text.c_str(), target.c_str(), nullptr,
+    // Hyprland's movewindowpixel selector is unreliable from
+    // non-interactive spawned processes. Use a reliable two-step
+    // approach instead: focus our own window by PID, then nudge
+    // it left or right with directional moves.
+    const int direction = x <= 0 ? -1 : 1;
+    const std::string focus_spec = "pid:" + std::to_string(getpid());
+    const char* focus_argv[] = {
+        "hyprctl", "dispatch", "focuswindow",
+        focus_spec.c_str(), nullptr,
     };
-    pid_t process = -1;
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
+    pid_t focus_pid = -1;
+    posix_spawn_file_actions_t focus_actions;
+    posix_spawn_file_actions_init(&focus_actions);
     posix_spawn_file_actions_addopen(
-        &actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+        &focus_actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
     posix_spawn_file_actions_addopen(
-        &actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-    const int spawned = posix_spawnp(
-        &process, "hyprctl", &actions, nullptr,
-        const_cast<char* const*>(arguments), environ);
-    posix_spawn_file_actions_destroy(&actions);
-    if (spawned != 0) return false;
-    int status = 0;
-    return waitpid(process, &status, 0) == process &&
-           WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        &focus_actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    const int focus_spawned = posix_spawnp(
+        &focus_pid, "hyprctl", &focus_actions, nullptr,
+        const_cast<char* const*>(focus_argv), environ);
+    posix_spawn_file_actions_destroy(&focus_actions);
+    if (focus_spawned != 0) return false;
+    int focus_status = 0;
+    if (waitpid(focus_pid, &focus_status, 0) != focus_pid ||
+        !WIFEXITED(focus_status) || WEXITSTATUS(focus_status) != 0) {
+        return false;
+    }
+
+    // Nudge the window to the correct side of the display. Use a
+    // few movewindow calls to get past any attached side.
+    const char* move_dir = direction < 0 ? "l" : "r";
+    const char* move_argv[] = {
+        "hyprctl", "dispatch", "movewindow", move_dir, nullptr,
+    };
+    const int moves = 5;
+    for (int i = 0; i < moves; ++i) {
+        pid_t move_proc = -1;
+        posix_spawn_file_actions_t move_actions;
+        posix_spawn_file_actions_init(&move_actions);
+        posix_spawn_file_actions_addopen(
+            &move_actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+        posix_spawn_file_actions_addopen(
+            &move_actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+        const int move_spawned = posix_spawnp(
+            &move_proc, "hyprctl", &move_actions, nullptr,
+            const_cast<char* const*>(move_argv), environ);
+        posix_spawn_file_actions_destroy(&move_actions);
+        if (move_spawned != 0) return false;
+        int move_status = 0;
+        if (waitpid(move_proc, &move_status, 0) != move_proc ||
+            !WIFEXITED(move_status)) {
+            return false;
+        }
+        usleep(50000);
+    }
+    return true;
 }
 #endif
 

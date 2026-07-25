@@ -28,10 +28,16 @@ uint16_t scale_gun(uint8_t value, int minimum, int maximum) {
 // firmware, whose service loop is driven by a periodic CTC interrupt. Channels
 // 2 and 3 are used by the firmware as the SIO baud-rate clock and never enable
 // interrupts, so a plain down-counter models every channel the firmware uses.
+// The board is clocked a T-cycle at a time, so this runs 9.83 million times a
+// second and its cost lands squarely in the frame budget. Channels therefore
+// keep an absolute expiry rather than a per-tick countdown: `tick` then costs
+// one add and one compare until a channel is actually due, instead of walking
+// all four channels twice per clock.
 struct z80_ctc {
     struct channel {
         uint16_t time_constant{256};
-        int32_t counter{};       // remaining CTC clocks until the next zero
+        int64_t deadline{};      // clock at which this channel next hits zero
+        int32_t counter{};       // remaining clocks, held while stopped
         int prescale{16};
         bool running{};
         bool int_enable{};
@@ -41,20 +47,41 @@ struct z80_ctc {
     std::array<channel, 4> ch{};
     uint8_t vector_base{};
     int in_service{-1};
+    int64_t now{};
+    // Sentinel far beyond any real session: nothing is due to expire.
+    static constexpr int64_t never = INT64_MAX;
+    int64_t next_deadline{never};
+    uint8_t pending_mask{};
 
     void reset() {
         ch = {};
         vector_base = 0;
         in_service = -1;
+        now = 0;
+        next_deadline = never;
+        pending_mask = 0;
+    }
+
+    // Remaining clocks on a channel: live while it runs, frozen once stopped.
+    int32_t remaining(const channel& c) const {
+        return c.running ? static_cast<int32_t>(c.deadline - now) : c.counter;
+    }
+
+    void refresh_next_deadline() {
+        next_deadline = never;
+        for (const channel& c : ch)
+            if (c.running && c.deadline < next_deadline)
+                next_deadline = c.deadline;
     }
 
     void write(unsigned index, uint8_t data) {
         channel& c = ch[index & 3];
         if (c.tc_follows) {
             c.time_constant = data ? data : 256;
-            c.counter = c.time_constant * c.prescale;
+            c.deadline = now + c.time_constant * c.prescale;
             c.running = true;
             c.tc_follows = false;
+            refresh_next_deadline();
             return;
         }
         if (data & 0x01) { // control word
@@ -62,8 +89,11 @@ struct z80_ctc {
             c.prescale = (data & 0x20) ? 256 : 16;
             c.tc_follows = (data & 0x04) != 0;
             if (data & 0x02) { // software reset
+                c.counter = remaining(c);
                 c.running = false;
                 c.int_pending = false;
+                pending_mask &= static_cast<uint8_t>(~(1u << (index & 3)));
+                refresh_next_deadline();
             }
         } else if ((index & 3) == 0) {
             vector_base = data & 0xf8; // channel 0 carries the vector base
@@ -73,32 +103,36 @@ struct z80_ctc {
     uint8_t read(unsigned index) const {
         const channel& c = ch[index & 3];
         const int down = c.prescale ?
-            (c.counter + c.prescale - 1) / c.prescale : 0;
+            (remaining(c) + c.prescale - 1) / c.prescale : 0;
         return static_cast<uint8_t>(down & 0xff);
     }
 
     void tick(int cycles) {
-        for (channel& c : ch) {
-            if (!c.running) continue;
-            c.counter -= cycles;
-            while (c.counter <= 0) {
-                c.counter += c.time_constant * c.prescale;
-                if (c.int_enable) c.int_pending = true;
-            }
+        now += cycles;
+        if (now < next_deadline) return; // nothing due: the usual case
+        for (unsigned index = 0; index < ch.size(); ++index) {
+            channel& c = ch[index];
+            if (!c.running || c.deadline > now) continue;
+            do {
+                c.deadline += c.time_constant * c.prescale;
+                if (c.int_enable) {
+                    c.int_pending = true;
+                    pending_mask |= static_cast<uint8_t>(1u << index);
+                }
+            } while (c.deadline <= now);
         }
+        refresh_next_deadline();
     }
 
     bool interrupt_requested() const {
-        if (in_service >= 0) return false;
-        for (const channel& c : ch)
-            if (c.int_pending) return true;
-        return false;
+        return in_service < 0 && pending_mask != 0;
     }
 
     uint8_t acknowledge() {
         for (int index = 0; index < 4; ++index) {
             if (ch[index].int_pending) {
                 ch[index].int_pending = false;
+                pending_mask &= static_cast<uint8_t>(~(1u << index));
                 in_service = index;
                 return static_cast<uint8_t>(vector_base | (index << 1));
             }

@@ -19,7 +19,10 @@ struct arcade_board_descriptor {
 
 struct arcade_game_identity {
     arcade_board_type board;
-    const char* short_name;
+    // std::string (not const char*) so boards whose short name is derived at
+    // runtime -- e.g. a System 246/256 game keyed by its ".acgame" basename --
+    // can carry a dynamic name rather than only a static catalog literal.
+    std::string short_name;
 };
 
 enum class arcade_multiplayer_mode : uint8_t {
@@ -45,7 +48,7 @@ struct rom_set_manifest {
 constexpr std::size_t arcade_board_count = 11;
 using arcade_board_list =
     std::array<arcade_board_descriptor, arcade_board_count>;
-constexpr std::size_t arcade_game_count = 27;
+constexpr std::size_t arcade_game_count = 29;
 using arcade_game_list =
     std::array<rom_set_manifest, arcade_game_count>;
 

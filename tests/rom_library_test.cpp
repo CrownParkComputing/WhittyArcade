@@ -5,6 +5,7 @@
 #include <minizip/zip.h>
 
 #include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -30,6 +31,13 @@ void make_zip(const fs::path& path, const std::vector<std::string>& entries) {
 } // namespace
 
 int main() {
+    // Keep discovery isolated from the machine's real PCSX2 arcade tree so the
+    // System 246 .acgame scan does not add extra games to this fixture.
+    ::setenv("WHITTY_SYSTEM246_ACGAME_ROOT", "/nonexistent-system246-acgame-root",
+             1);
+    // And from the machine's real extracted Xbox 360 titles, for the same
+    // reason: the native-port scan would otherwise add whatever is installed.
+    ::setenv("WHITTY_XBOX360_GAME_ROOT", "/nonexistent-xbox360-game-root", 1);
     const fs::path root = fs::temp_directory_path() /
         ("whittyarcade-rom-library-test-" +
          std::to_string(test_process_id()));

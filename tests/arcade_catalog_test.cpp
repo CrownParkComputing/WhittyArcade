@@ -62,18 +62,21 @@ int main() {
     }
     for (std::size_t count : games_per_board) assert(count != 0);
 
-    // Native arcade System Link is deliberately opt-in. Sega Rally is the
-    // only title whose cabinet communications path is currently enabled;
-    // ordinary alternating/simultaneous games use the separate network 2P
-    // path and must never appear in the System Link list.
+    // Native arcade System Link is deliberately opt-in. Only titles whose
+    // cabinet communications path is currently enabled (Ridge Racer 2, Rave
+    // Racer and Sega Rally) advertise it; ordinary alternating/simultaneous
+    // games use the separate network 2P path and must never appear in the
+    // System Link list.
     std::size_t system_link_games = 0;
     for (const rom_set_manifest& game : supported_rom_sets()) {
         if (!supports_native_system_link(game)) continue;
         ++system_link_games;
-        assert(std::string(game.short_name) == "srallyc");
+        const std::string name(game.short_name);
+        assert(name == "ridgera2" || name == "raverace" ||
+               name == "srallyc");
         assert(!supports_network_two_player(game));
     }
-    assert(system_link_games == 1);
+    assert(system_link_games == 3);
     assert(supports_network_two_player(
         *find_supported_rom_set("galaga")));
     assert(!supports_native_system_link(
@@ -97,9 +100,11 @@ int main() {
     assert_registered(system246_rom_loader::set_short_name(
                           system246_rom_set::ridge_racer_v_arcade_battle),
                       arcade_board_type::system246);
-    assert_registered(xbox360_rom_loader::set_short_name(
-                          xbox360_rom_set::robotron_2084),
-                      arcade_board_type::xbox360);
+    for (xbox360_rom_set set : {
+             xbox360_rom_set::robotron_2084,
+             xbox360_rom_set::geometry_wars})
+        assert_registered(xbox360_rom_loader::set_short_name(set),
+                          arcade_board_type::xbox360);
     for (model1_rom_set set : {
              model1_rom_set::virtua_formula,
              model1_rom_set::virtua_fighter,

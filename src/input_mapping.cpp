@@ -636,10 +636,14 @@ input_binding_table keyboard_bindings_for(
         std::string_view game_short_name) {
     if (game_short_name.empty()) return config.keyboard;
     input_binding_table bindings = config.keyboard;
-    if (game_short_name == "timecris") {
-        // A desktop light gun keeps the virtual pedal held while exposed;
-        // Space releases it to take cover and reload. Per-game mappings below
-        // can still replace this built-in default.
+    // A desktop light gun keeps the virtual pedal held while exposed; Space
+    // releases it to take cover and reload. Every Time Crisis cabinet has that
+    // pedal, so the System 246/256 games in the collection get the same key as
+    // the System 22 original rather than the generic action-2 default, which
+    // no player would think to press. Per-game mappings below can still
+    // replace this built-in default.
+    if (game_short_name == "timecris" ||
+        game_short_name.rfind("timecrisis", 0) == 0) {
         bindings[input_action_index(input_action::p1_action2)] =
             key(SDL_SCANCODE_SPACE);
     }

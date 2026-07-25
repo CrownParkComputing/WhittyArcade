@@ -762,7 +762,7 @@ void multipcm_set_bank(multipcm_t *m, u8 bank)
     /* Each bank step is 1 MB (0x100000 bytes); the upper half of 22-bit
      * space starts at 0x200000.  bank bits[1:0] select the 1 MB page. */
     /* MAME: m_mpcmbank->configure_entries(0, 4, region->base(), 0x100000)
-     * Ã¢ÂÂ four 1 MB entries starting at ROM offset 0. Bank N exposes
+     * — four 1 MB entries starting at ROM offset 0. Bank N exposes
      * ROM[N*1MB .. (N+1)*1MB - 1] in the 0x100000-0x1FFFFF window. */
     m->bank_offset = (u32)(bank & 3u) * 0x100000u;
 }

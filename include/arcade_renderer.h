@@ -204,6 +204,12 @@ private:
                          bool flip_y, int display_width = 0,
                          int display_height = 0);
     uint32_t m_last_present_texture{0};
+    int m_picture_rect_x{0};
+    int m_picture_rect_y{0};
+    int m_picture_rect_width{0};
+    int m_picture_rect_height{0};
+    int m_picture_drawable_width{0};
+    int m_picture_drawable_height{0};
     int m_last_present_width{0};
     int m_last_present_height{0};
     int m_last_present_display_width{0};
@@ -230,6 +236,25 @@ public:
     bool take_controls_request();
     bool take_settings_change(emulator_settings& settings);
     void set_lightgun_cursor(bool enabled, uint8_t player = 0);
+
+    // Where the emulated picture was last drawn, in drawable pixels with the
+    // origin at the top-left, plus the drawable's own size. A light gun maps
+    // the pointer onto this rectangle; deriving it from the window size
+    // instead misses letterboxing, integer scaling and the twin-screen
+    // margins, and aims the gun at the wrong place. Returns false until a
+    // frame has been presented.
+    bool picture_rect(int& x, int& y, int& width, int& height,
+                      int& drawable_width, int& drawable_height) const {
+        if (m_picture_rect_width <= 0 || m_picture_rect_height <= 0)
+            return false;
+        x = m_picture_rect_x;
+        y = m_picture_rect_y;
+        width = m_picture_rect_width;
+        height = m_picture_rect_height;
+        drawable_width = m_picture_drawable_width;
+        drawable_height = m_picture_drawable_height;
+        return true;
+    }
     bool lightgun_cursor_enabled() const {
         return m_lightgun_cursor_enabled;
     }

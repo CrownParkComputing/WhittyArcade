@@ -1,5 +1,6 @@
 #include "sega/model2/model2_bus.h"
 #include "sega/model1/model1_io_board.h"
+#include "mb86233_native.h"
 #include "platform_paths.h"
 
 #include <algorithm>
@@ -70,6 +71,45 @@ native_socket to_native_socket(std::intptr_t value) {
     return static_cast<native_socket>(value);
 }
 #endif
+
+// Diagnostic switches, read once each: these sit on the memory-access paths
+// and must not call getenv per access.
+//
+// MODEL2_WATCH_WRITE=<hex address> reports the i960 instruction that stores
+// to a work-RAM variable, which is how a bad display-list value gets traced
+// back to the code that computed it.
+uint32_t watched_work_address() {
+    static const uint32_t address = [] {
+        const char* value = std::getenv("MODEL2_WATCH_WRITE");
+        return value ? static_cast<uint32_t>(
+            std::strtoul(value, nullptr, 16)) : 0U;
+    }();
+    return address;
+}
+
+// MODEL2_WATCH_GEO=<hex word> reports which bus master wrote a given word
+// into the display-list buffer: the i960, the TGP or the geometry FIFO.
+bool watched_geometry_word(uint32_t& word) {
+    static const bool enabled = std::getenv("MODEL2_WATCH_GEO") != nullptr;
+    static const uint32_t value = [] {
+        const char* text = std::getenv("MODEL2_WATCH_GEO");
+        return text ? static_cast<uint32_t>(
+            std::strtoul(text, nullptr, 16)) : 0U;
+    }();
+    word = value;
+    return enabled;
+}
+
+// MODEL2_TGP_TRACE_CMD=<hex command> starts a TGP instruction trace when that
+// command word is dispatched, for diffing one routine against MAME's trace.
+uint32_t traced_tgp_command() {
+    static const uint32_t command = [] {
+        const char* value = std::getenv("MODEL2_TGP_TRACE_CMD");
+        return value ? static_cast<uint32_t>(
+            std::strtoul(value, nullptr, 16)) : 0U;
+    }();
+    return command;
+}
 
 bool trace_fifo_words(uint32_t frame) {
     if (!std::getenv("MODEL2_FIFO_WORD_TRACE")) return false;
@@ -963,12 +1003,25 @@ void model2_bus::write32(uint32_t address, uint32_t value) {
         return;
     }
     if (contained(0x00500000, m_work_ram.size())) {
+        if (const uint32_t watch = watched_work_address()) {
+            // Report the whole 16-byte block: game variables travel in small
+            // structures, and the neighbours identify what a field means.
+            static unsigned reported = 0;
+            if ((address & ~0xfU) == (watch & ~0xfU) && reported < 4096) {
+                ++reported;
+                std::printf("WORKWRITE addr=%08x value=%08x pc=%08x\n",
+                            address, value,
+                            m_program_counter_probe ?
+                                m_program_counter_probe() : 0);
+            }
+        }
         write_dword(m_work_ram, address - 0x00500000, value);
         return;
     }
     if (in_range(address, 0x00900000, 0x80000)) {
         const std::size_t offset = (address - 0x00900000) & 0x1ffff;
         if (offset + 3 < m_buffer_ram.size()) {
+            trace_geometry_write("i960", offset, value);
             write_dword(m_buffer_ram, offset, value);
             return;
         }
@@ -982,6 +1035,16 @@ void model2_bus::write32(uint32_t address, uint32_t value) {
 
 void model2_bus::write8(uint32_t address, uint8_t value) {
     if (!m_roms) return;
+    if (const uint32_t watch = watched_work_address()) {
+        static unsigned reported = 0;
+        if ((address & ~3U) == (watch & ~3U) && reported < 256) {
+            ++reported;
+            std::printf("WORKWRITE8 addr=%08x value=%02x pc=%08x\n",
+                        address, value,
+                        m_program_counter_probe ?
+                            m_program_counter_probe() : 0);
+        }
+    }
     if (write_region(m_local_ram, address, 0x00200000, value) ||
         write_region(m_work_ram, address, 0x00500000, value))
         return;
@@ -1866,7 +1929,13 @@ uint32_t model2_bus::tgp_io_read(uint16_t address) {
         if (angle & 0x8000) result ^= 0x80000000U;
         return result;
     }
-    if (address == 0x24) {
+    if (address >= 0x24 && address <= 0x27) {
+        // The arctangent unit answers on every word of its port, not just the
+        // first: the four addresses latch the operands, and a read of any of
+        // them returns the same result. Virtua Cop 2 reads it back from 0x27,
+        // so decoding only 0x24 returned zero for every camera-direction
+        // query. That collapsed the attract camera's field of view to zero,
+        // which made the focal length infinite and every polygon vanish.
         const uint8_t exponent =
             0x88 - static_cast<uint8_t>(m_tgp_atan_base[3] >> 23);
         const bool sign0 = (m_tgp_atan_base[0] & 0x80000000U) != 0;
@@ -1915,10 +1984,14 @@ uint32_t model2_bus::tgp_io_read(uint16_t address) {
 void model2_bus::tgp_io_write(uint16_t address, uint32_t value) {
     if (m_tgp_bank & 0xc00000U) {
         const uint32_t banked = (m_tgp_bank & 0xff0000U) | address;
-        if (banked & 0x400000U)
+        if (banked & 0x400000U) {
+            trace_geometry_write("tgp",
+                                 static_cast<std::size_t>(banked & 0x7fff) * 4,
+                                 value);
             write_dword(m_buffer_ram,
                         static_cast<std::size_t>(banked & 0x7fff) * 4,
                         value);
+        }
         return;
     }
 
@@ -1950,6 +2023,10 @@ uint32_t model2_bus::tgp_rf_read(uint16_t address) {
         if (trace_fifo_words(m_frame_number))
             std::fprintf(stderr, "%u IN-POP %08x\n", m_frame_number,
                          value);
+        // Start a TGP instruction trace when the chosen command is
+        // dispatched, so one routine can be compared with MAME's trace.
+        if (const uint32_t watched = traced_tgp_command())
+            if (value == watched) mb86233_native_core::trace_arm(720);
         return value;
     }
     return 0;
@@ -1979,8 +2056,21 @@ bool model2_bus::take_tgp_boot_request() {
     return requested;
 }
 
+void model2_bus::trace_geometry_write(const char* source, std::size_t offset,
+                                      uint32_t value) {
+    uint32_t watch = 0;
+    if (!watched_geometry_word(watch) || value != watch) return;
+    static unsigned reported = 0;
+    if (reported >= 8) return;
+    ++reported;
+    std::printf("GEOWRITE source=%s offset=%05zx value=%08x pc=%08x\n",
+                source, offset, value,
+                m_program_counter_probe ? m_program_counter_probe() : 0);
+}
+
 void model2_bus::push_geometry_word(uint32_t value) {
     const std::size_t offset = m_geo_write_address & 0x1ffff;
+    trace_geometry_write("fifo", offset, value);
     write_dword(m_buffer_ram, offset, value);
     m_geo_write_address = (m_geo_write_address + 4) & 0xfffff;
 }

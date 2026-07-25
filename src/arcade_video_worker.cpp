@@ -228,6 +228,27 @@ bool arcade_video_worker::take_controls_request() {
     return pending;
 }
 
+void arcade_video_worker::snapshot_picture_rect(polygon_renderer_gpu& renderer) {
+    int x = 0, y = 0, w = 0, h = 0, dw = 0, dh = 0;
+    if (!renderer.picture_rect(x, y, w, h, dw, dh)) return;
+    std::lock_guard<std::mutex> lock(m_picture_rect_mutex);
+    m_picture_rect = {x, y, w, h, dw, dh};
+}
+
+bool arcade_video_worker::picture_rect(int& x, int& y, int& width, int& height,
+                                       int& drawable_width,
+                                       int& drawable_height) const {
+    std::lock_guard<std::mutex> lock(m_picture_rect_mutex);
+    if (m_picture_rect.width <= 0 || m_picture_rect.height <= 0) return false;
+    x = m_picture_rect.x;
+    y = m_picture_rect.y;
+    width = m_picture_rect.width;
+    height = m_picture_rect.height;
+    drawable_width = m_picture_rect.drawable_width;
+    drawable_height = m_picture_rect.drawable_height;
+    return true;
+}
+
 void arcade_video_worker::set_lightgun_cursor(bool enabled, uint8_t player) {
     enqueue([enabled, player](polygon_renderer_gpu& renderer) {
         renderer.set_lightgun_cursor(enabled, player);
@@ -370,6 +391,7 @@ void arcade_video_worker::present_rgba_frame(const uint8_t* pixels,
             renderer.present_rgba_frame(newest.pixels.data(), newest.width,
                                         newest.height, newest.display_width,
                                         newest.display_height);
+            snapshot_picture_rect(renderer);
         });
     }
     m_task_ready.notify_one();

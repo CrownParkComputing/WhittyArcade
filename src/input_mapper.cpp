@@ -669,7 +669,7 @@ std::vector<mapper_profile> make_profiles(
     for (const rom_choice& choice : installed_games) {
         const std::optional<arcade_game_identity> identity =
             identify_arcade_game(choice.path);
-        if (!identity || !identity->short_name ||
+        if (!identity || identity->short_name.empty() ||
             !seen.emplace(identity->short_name).second)
             continue;
         const rom_set_manifest* manifest =

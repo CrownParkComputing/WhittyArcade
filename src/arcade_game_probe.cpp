@@ -27,6 +27,17 @@ std::optional<arcade_game_identity> identify_arcade_game(
             arcade_board_type::system246,
             system246_rom_loader::set_short_name(system246)};
 
+    // Any other ".acgame" manifest is still a System 246/256 game -- the board
+    // boots any manifest directly, so a collection title with no built-in enum
+    // entry (e.g. Tekken 5) must route here too, keyed by its basename. Without
+    // this, identify_arcade_game() returns nullopt for such a game and the
+    // launch aborts ("Unsupported or incomplete ROM archive") before PCSX2 ever
+    // starts. Mirrors the rom_library discovery pass that surfaces these games.
+    const std::string acgame_key =
+        system246_rom_loader::acgame_short_name(path);
+    if (!acgame_key.empty())
+        return arcade_game_identity{arcade_board_type::system246, acgame_key};
+
     const xbox360_rom_set xbox360 = xbox360_rom_loader::identify_set(path);
     if (xbox360 != xbox360_rom_set::unknown)
         return arcade_game_identity{

@@ -37,9 +37,17 @@ std::array<int, 2> bounded_window_size(SDL_Window* window,
     if (window)
         SDL_GetWindowBordersSize(window, &border_top, &border_left,
                                  &border_bottom, &border_right);
-    const int maximum_width = std::max(320, std::min(
+    int maximum_width = std::min(
         usable.w - border_left - border_right,
-        (usable.h - border_top - border_bottom) * 4 / 3));
+        (usable.h - border_top - border_bottom) * 4 / 3);
+    // Linked cabinets that share one desktop are constrained to half the
+    // usable width so the two side-by-side windows never overlap.
+    const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+    const bool cabinet_node = node_text && *node_text &&
+        (node_text[0] == '1' || node_text[0] == '2');
+    if (cabinet_node)
+        maximum_width = std::min(maximum_width, usable.w / 2);
+    maximum_width = std::max(320, maximum_width);
     const int width = std::clamp(requested_width, 320, maximum_width);
     return {width, width * 3 / 4};
 }
@@ -76,6 +84,51 @@ bool place_window_on_display(SDL_Window* window, int display_index,
         x += std::max((bounds.w - width) / 2, 0);
         y += std::max((bounds.h - height) / 2, 0);
     }
+    return SDL_SetWindowPosition(window, x, y);
+}
+
+// Place a linked cabinet on its half of the only physical display.
+// Used when the host machine has one monitor and is running two separate
+// WhittyArcade processes for cabinet 1 / cabinet 2 — each process needs
+// to position its own window without help from the other. Cabinet 1 →
+// left half, cabinet 2 → right half, so the two side-by-side windows fit
+// a single ultrawide without overlap.
+bool place_window_on_cabinet_half(SDL_Window* window, int cabinet_node) {
+    if (!window || cabinet_node < 1 || cabinet_node > 2) return false;
+    int count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&count);
+    if (!displays || count == 0) {
+        if (displays) SDL_free(displays);
+        return false;
+    }
+    SDL_Rect usable{0, 0, 1920, 1080};
+    const SDL_DisplayID display = displays[0];
+    if (!SDL_GetDisplayUsableBounds(display, &usable))
+        SDL_GetDisplayBounds(display, &usable);
+    SDL_free(displays);
+    const int half_w = usable.w / 2;
+    // Size the window to the largest 4:3 fit inside its half of the
+    // desktop. bounded_window_size() applies the same half-width cap, but
+    // callers may also call this directly, so enforce it here too.
+    int width = std::min(half_w, usable.h * 4 / 3);
+    int height = width * 3 / 4;
+    if (height > usable.h) {
+        height = usable.h;
+        width = height * 4 / 3;
+    }
+    SDL_SetWindowSize(window, width, height);
+    const int x = cabinet_node == 1
+        ? usable.x
+        : usable.x + half_w;
+    const int y = usable.y + std::max((usable.h - height) / 2, 0);
+    // On Wayland, SDL_SetWindowPosition typically reports success while
+    // the compositor keeps the window at the compositor-managed position.
+    // Try a compositor-specific move first, then fall back to SDL on
+    // non-Wayland platforms where it actually works.
+    const char* title = SDL_GetWindowTitle(window);
+    if (whitty_window::run_hyprctl_move(
+            title ? title : "WhittyArcade", x, y))
+        return true;
     return SDL_SetWindowPosition(window, x, y);
 }
 
@@ -1845,9 +1898,17 @@ void polygon_renderer_gpu::apply_display_settings(
                     settings.twin_separate_monitors
                 ? 0
                 : settings.display_index;
-        if (!place_window_on_display(window, target_display, true))
-            SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
-                                  SDL_WINDOWPOS_CENTERED);
+        if (!place_window_on_display(window, target_display, true)) {
+            // The requested display doesn't exist (typical: single-
+            // monitor host running two linked_network processes).
+            // Fall back to a per-cabinet half of the primary display
+            // so the two windows don't stack on top of each other.
+            const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+            const int node = node_text ? std::atoi(node_text) : 0;
+            if (!place_window_on_cabinet_half(window, node))
+                SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
+                                      SDL_WINDOWPOS_CENTERED);
+        }
         if (SDL_Window* window2 =
                 static_cast<SDL_Window*>(m_ctx->window2)) {
             if (!settings.twin_separate_monitors ||
@@ -2740,6 +2801,21 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
     glBindVertexArray(m_post_vertex_array);
     for (int pane = 0; pane < pane_count; ++pane) {
         const present_pane fit = fit_pane(panes[pane]);
+        if (pane == 0) {
+            // Publish where the picture actually landed. A light gun has to
+            // map the pointer onto the game's image, and the rules that put it
+            // there (letterbox to the monitor aspect, integer scaling, the
+            // twin-screen margins) live here -- anything reconstructing that
+            // from the window size alone gets a different rectangle and aims
+            // the gun at the wrong place. Y is flipped into top-down window
+            // coordinates, which is what pointer positions use.
+            m_picture_rect_x = fit.x;
+            m_picture_rect_y = m_ctx->height - (fit.y + fit.h);
+            m_picture_rect_width = fit.w;
+            m_picture_rect_height = fit.h;
+            m_picture_drawable_width = m_ctx->width;
+            m_picture_drawable_height = m_ctx->height;
+        }
         draw_cabinet_frame(fit, m_ctx->width, m_ctx->height);
         glViewport(fit.x, fit.y, fit.w, fit.h);
         glUniform2i(output_size_loc, fit.w, fit.h);

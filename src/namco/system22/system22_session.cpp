@@ -363,6 +363,10 @@ void system22_emulator::run_frame() {
     // ADC channels immediately before vblank, matching the real board/MAME
     // handoff into the sound-C74 shared RAM.
     m_input->set_suppressed(m_gpu_renderer->settings_visible());
+    int gx = 0, gy = 0, gw = 0, gh = 0, gdw = 0, gdh = 0;
+    if (m_gpu_renderer &&
+        m_gpu_renderer->picture_rect(gx, gy, gw, gh, gdw, gdh))
+        m_input->set_picture_rect(gx, gy, gw, gh, gdw, gdh);
     m_input->update();
     if (m_roms->super_system22) {
         m_bus->update_game_inputs(m_input->state());

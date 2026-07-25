@@ -43,6 +43,53 @@ fs::path child_case_insensitive(const fs::path& directory,
     return {};
 }
 
+// A "classic/fw.sr"-style path, resolved a component at a time so a collection
+// extracted with different capitalisation still validates.
+fs::path resolve_relative(const fs::path& root, const char* relative) {
+    fs::path current = root;
+    for (const fs::path& part : fs::path(relative)) {
+        current = child_case_insensitive(current, part.string().c_str());
+        if (current.empty()) return {};
+    }
+    return current;
+}
+
+// Everything the board needs to know about one title. `required` lists the data
+// files the game reads beside its default.xex; a title whose files are all
+// present is ready to launch, and one that is missing any of them says so with
+// the list rather than with a generic failure.
+struct rom_set_definition {
+    xbox360_rom_set set;
+    std::uint32_t title_id;
+    const char* short_name;
+    const char* display_name;
+    const char* required[4];
+};
+
+constexpr rom_set_definition kRomSets[] = {
+    {xbox360_rom_set::robotron_2084, 0x584107e0u, "robotron",
+     "Robotron: 2084 (offline Xbox 360)",
+     {"classic/fw.sr", "classic/robotron.sr", "media/uiresource.xpr",
+      nullptr}},
+    // Geometry Wars keeps its data flat beside default.xex: the level/entity
+    // tables in the .dat files and the sound banks in the .xwb wave banks.
+    {xbox360_rom_set::geometry_wars, 0x584107edu, "geometrywars",
+     "Geometry Wars: Retro Evolved (Xbox 360)",
+     {"GeometryWars1.dat", "GW1.xwb", nullptr, nullptr}},
+};
+
+const rom_set_definition* definition_for(xbox360_rom_set set) {
+    for (const rom_set_definition& candidate : kRomSets)
+        if (candidate.set == set) return &candidate;
+    return nullptr;
+}
+
+const rom_set_definition* definition_for_title(std::uint32_t title_id) {
+    for (const rom_set_definition& candidate : kRomSets)
+        if (candidate.title_id == title_id) return &candidate;
+    return nullptr;
+}
+
 fs::path resolve_xex(const fs::path& selected) {
     std::error_code error;
     if (fs::is_regular_file(selected, error) &&
@@ -119,36 +166,37 @@ xbox360_rom_info xbox360_rom_loader::inspect(
     }
     const fs::path xex = resolve_xex(fs::path(path));
     if (xex.empty()) {
-        result.error = "Select Robotron's extracted directory or default.xex.";
+        result.error = "Select the extracted game directory or its default.xex.";
         return result;
     }
     if (!read_title_id(xex, result.title_id, result.error)) return result;
-    if (result.title_id != robotron_title_id) {
-        result.error = "The XEX title ID is not Robotron: 2084 (584107E0).";
+    const rom_set_definition* definition = definition_for_title(result.title_id);
+    if (definition == nullptr) {
+        result.error = "The XEX title ID is not a supported Xbox 360 title.";
         return result;
     }
 
     const fs::path root = xex.parent_path();
     if (require_game_data) {
-        const fs::path classic = child_case_insensitive(root, "classic");
-        const fs::path media = child_case_insensitive(root, "media");
-        const fs::path robotron = child_case_insensitive(classic, "robotron.sr");
-        const fs::path firmware = child_case_insensitive(classic, "fw.sr");
-        const fs::path ui = child_case_insensitive(media, "uiresource.xpr");
-        std::error_code type_error;
-        if (classic.empty() || media.empty() || robotron.empty() ||
-            firmware.empty() || ui.empty() ||
-            !fs::is_regular_file(robotron, type_error) ||
-            !fs::is_regular_file(firmware, type_error) ||
-            !fs::is_regular_file(ui, type_error)) {
-            result.error = "Robotron game data is incomplete: default.xex, "
-                           "classic/fw.sr, classic/robotron.sr and "
-                           "media/uiresource.xpr are required.";
+        std::string missing;
+        for (const char* relative : definition->required) {
+            if (relative == nullptr) break;
+            const fs::path resolved = resolve_relative(root, relative);
+            std::error_code type_error;
+            if (!resolved.empty() && fs::is_regular_file(resolved, type_error))
+                continue;
+            if (!missing.empty()) missing += ", ";
+            missing += relative;
+        }
+        if (!missing.empty()) {
+            result.error = std::string(definition->display_name) +
+                           " game data is incomplete: missing " + missing +
+                           " beside default.xex.";
             return result;
         }
     }
 
-    result.set = xbox360_rom_set::robotron_2084;
+    result.set = definition->set;
     result.game_root = root.lexically_normal().string();
     result.xex_path = xex.lexically_normal().string();
     return result;
@@ -159,10 +207,12 @@ xbox360_rom_set xbox360_rom_loader::identify_set(const std::string& path) {
 }
 
 const char* xbox360_rom_loader::set_short_name(xbox360_rom_set set) {
-    return set == xbox360_rom_set::robotron_2084 ? "robotron" : "";
+    const rom_set_definition* definition = definition_for(set);
+    return definition != nullptr ? definition->short_name : "";
 }
 
 const char* xbox360_rom_loader::set_display_name(xbox360_rom_set set) {
-    return set == xbox360_rom_set::robotron_2084 ?
-        "Robotron: 2084 (offline Xbox 360)" : "Unknown Xbox 360 title";
+    const rom_set_definition* definition = definition_for(set);
+    return definition != nullptr ? definition->display_name :
+                                   "Unknown Xbox 360 title";
 }

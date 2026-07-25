@@ -232,7 +232,7 @@ uint32_t model1_tgp_lle::io_read(uint16_t address) {
         }
         if (address >= 0x20 && address <= 0x23) {
             const uint32_t angle = m_native_sincos_base +
-                uint32_t{address - 0x20} * 0x4000;
+                static_cast<uint32_t>(address - 0x20) * 0x4000;
             uint32_t index = angle & 0x3fff;
             if (angle & 0x4000)
                 index = std::min<uint32_t>(0x4000 - index, 0x3fff);
@@ -313,7 +313,7 @@ uint32_t model1_tgp_lle::io_read(uint16_t address) {
 
     if (address <= 0x0023) {
         const uint32_t angle = m_external_ports[0] +
-            uint32_t{address - 0x20} * 0x4000;
+            static_cast<uint32_t>(address - 0x20) * 0x4000;
         const uint32_t phase = angle & 0x7fff;
         uint32_t result = 0;
         if (phase == 0x4000) {

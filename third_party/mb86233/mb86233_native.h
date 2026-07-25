@@ -38,6 +38,11 @@ public:
     void reset();
     int execute(int cycles);
     void stall() { m_stall = true; }
+
+    // Diagnostic: arm an instruction trace of the next `count` instructions
+    // (written to the path in MODEL2_TGP_TRACE) so a TGP routine can be
+    // diffed against MAME's `trace` output for the same routine.
+    static void trace_arm(int count);
     // Stop after the current instruction while preserving its side effects.
     // Used when a completed FIFO write fills the hardware's overflow slot.
     void request_yield() { m_yield = true; }

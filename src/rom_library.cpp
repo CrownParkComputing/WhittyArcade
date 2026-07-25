@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <system_error>
 #include <unordered_set>
@@ -160,14 +161,31 @@ std::string readiness_suffix(const fs::path& candidate,
             !archive_contains(candidate, "c74.bin"))
             missing.emplace_back("namcoc74.zip");
     } else if (manifest.board == arcade_board_type::system246) {
-        const std::string disc_path =
-            system246_rom_loader::find_disc_path(candidate.string(),
-                                                  chd_library_path());
-        if (disc_path.empty()) {
-            missing.emplace_back("rrv1-a.chd");
-        } else if (!system246_rom_loader::inspect_disc(disc_path)) {
-            missing.emplace_back("valid rrv1-a.chd");
+        // System 246/256 games boot the PCSX2 arcade core from a "<name>.acgame"
+        // manifest (RRV, MotoGP, ...). A game is ready when that manifest and
+        // the files it references are present in its directory.
+        std::string missing_item;
+        if (system246_rom_loader::acgame_ready(candidate.string(),
+                                               &missing_item)) {
+            // Ready: nothing to add.
+        } else if (!system246_rom_loader::find_disc_path(
+                       candidate.string(), chd_library_path()).empty() &&
+                   system246_rom_loader::inspect_disc(
+                       system246_rom_loader::find_disc_path(
+                           candidate.string(), chd_library_path()))) {
+            // Legacy MAME RRV set (dongle + rrv1-a.chd) with no PCSX2 manifest
+            // still counts as ready.
+        } else {
+            missing.emplace_back(missing_item.empty() ? "<game>.acgame"
+                                                      : missing_item);
         }
+    } else if (manifest.board == arcade_board_type::xbox360) {
+        // An extracted Xbox 360 title is ready when its default.xex and the
+        // data files that title reads are all present. The loader knows which
+        // those are, so ask it rather than repeating the list here.
+        const xbox360_rom_info loaded =
+            xbox360_rom_loader::inspect(candidate.string());
+        if (!loaded) missing.emplace_back("game data");
     } else if (std::string(manifest.short_name) == "vformula" &&
                !archive_contains(candidate, "mpr-14890.26") &&
                !sibling_exists(candidate, "vr.zip")) {
@@ -346,6 +364,139 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
     scan(rom_library_path(), true, true, true);
     scan_extracted(rom_library_path(), true);
 
+    // System 246/256 games are PCSX2 `.acgame` manifests living in the pcsx2x6
+    // arcade roms tree, not MAME archives in the library folders -- the scans
+    // above never see them. Surface each game directory's `<name>.acgame` as a
+    // selectable choice, deduped against anything already found in the library
+    // (e.g. Ridge Racer V via its MAME zip).
+    {
+        // Overridable so tests can point it at an empty path and stay isolated
+        // from the machine's real PCSX2 arcade tree.
+        const char* s246_env = std::getenv("WHITTY_SYSTEM246_ACGAME_ROOT");
+        const fs::path s246_roms(s246_env && *s246_env ? s246_env :
+                                 "/home/jon/pcsx2x6/build/bin/roms");
+        std::error_code s246_ec;
+        if (fs::is_directory(s246_roms, s246_ec)) {
+            for (fs::directory_iterator it(s246_roms, s246_ec), end;
+                 !s246_ec && it != end; it.increment(s246_ec)) {
+                std::error_code de;
+                if (!it->is_directory(de)) continue;
+                fs::path acgame;
+                for (fs::directory_iterator f(it->path(), de), fend;
+                     !de && f != fend; f.increment(de)) {
+                    if (f->is_regular_file(de) &&
+                        lower(f->path().extension().string()) == ".acgame") {
+                        acgame = f->path();
+                        break;
+                    }
+                }
+                if (acgame.empty()) continue;
+                const std::string apath = acgame.string();
+
+                // Identity for dedup: a KNOWN set reuses its canonical short
+                // name so this entry collapses with the same game found as a
+                // MAME zip in the library above (e.g. Ridge Racer V). An
+                // UNKNOWN/new collection game keys off the manifest basename so
+                // it still appears -- the board boots any .acgame directly, so
+                // there is no per-title code to add. This is what makes the
+                // board scale to the whole PCSX2X6 collection.
+                const system246_rom_set set =
+                    system246_rom_loader::identify_set(apath);
+                const char* known_sn =
+                    system246_rom_loader::set_short_name(set);
+                const bool known =
+                    set != system246_rom_set::unknown && known_sn && *known_sn &&
+                    std::string(known_sn) != "unknown";
+                const std::string identity =
+                    known ? std::string(known_sn) : acgame.stem().string();
+                if (identity.empty()) continue;
+                if (!seen_sets.insert(identity).second) continue;
+
+                // Display name: known sets use their curated title; unknown
+                // games read the `name =` field from the .acgame manifest,
+                // falling back to the basename.
+                std::string label;
+                if (known) {
+                    label = system246_rom_loader::set_display_name(set);
+                } else {
+                    label = acgame.stem().string();
+                    std::ifstream manifest(acgame);
+                    std::string line;
+                    while (std::getline(manifest, line)) {
+                        const auto eq = line.find('=');
+                        if (eq == std::string::npos) continue;
+                        auto trim = [](std::string s) {
+                            const auto b = s.find_first_not_of(" \t\r\n");
+                            if (b == std::string::npos) return std::string();
+                            const auto e = s.find_last_not_of(" \t\r\n");
+                            return s.substr(b, e - b + 1);
+                        };
+                        if (trim(line.substr(0, eq)) == "name") {
+                            std::string v = trim(line.substr(eq + 1));
+                            if (!v.empty()) label = v;
+                            break;
+                        }
+                    }
+                }
+                std::string missing;
+                label += system246_rom_loader::acgame_ready(apath, &missing) ?
+                    "  [ready]" : "  [missing files]";
+                choices.push_back(
+                    {apath, std::move(label), arcade_board_type::system246});
+            }
+        }
+    }
+
+    // Xbox 360 titles are extracted game directories, not archives, and the
+    // ones that have a native port live in the recompilation suite's own tree
+    // rather than in the library folders - the scans above never see them.
+    // Surface each extracted title there, deduped against anything the library
+    // already found, exactly as the System 246 pass above does for .acgame
+    // manifests. Overridable so a test can point it at an empty path.
+    {
+        const char* xbox_env = std::getenv("WHITTY_XBOX360_GAME_ROOT");
+        std::vector<fs::path> roots;
+        if (xbox_env != nullptr && *xbox_env != '\0') {
+            roots.emplace_back(xbox_env);
+        } else {
+            const char* home = std::getenv("HOME");
+            if (home != nullptr && *home != '\0')
+                roots.push_back(fs::path(home) / "Downloads" /
+                                "xbla-recomp-suite" / "games");
+        }
+        for (const fs::path& root : roots) {
+            std::error_code xbox_error;
+            if (!fs::is_directory(root, xbox_error)) continue;
+            for (fs::directory_iterator it(root, xbox_error), end;
+                 !xbox_error && it != end; it.increment(xbox_error)) {
+                std::error_code type_error;
+                if (!it->is_directory(type_error)) continue;
+                // The suite keeps each title's files in an "extracted" child;
+                // a directory holding default.xex directly works as well.
+                for (const fs::path& candidate :
+                     {it->path() / "extracted", it->path()}) {
+                    if (!fs::is_directory(candidate, type_error)) continue;
+                    const xbox360_rom_set set =
+                        xbox360_rom_loader::identify_set(candidate.string());
+                    if (set == xbox360_rom_set::unknown) continue;
+                    const std::string identity =
+                        xbox360_rom_loader::set_short_name(set);
+                    const std::string normalized = normalized_path(candidate);
+                    if (!seen_paths.insert(normalized).second) break;
+                    if (!seen_sets.insert(identity).second) break;
+                    std::string label =
+                        xbox360_rom_loader::set_display_name(set);
+                    label += xbox360_rom_loader::inspect(candidate.string()) ?
+                        "  [ready]" : "  [missing files]";
+                    if (normalized == normalized_current) label += "  [current]";
+                    choices.push_back({normalized, std::move(label),
+                                       arcade_board_type::xbox360});
+                    break;
+                }
+            }
+        }
+    }
+
     std::sort(choices.begin(), choices.end(),
               [](const rom_choice& left, const rom_choice& right) {
                   if (left.board != right.board) return left.board < right.board;
@@ -355,6 +506,18 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
 }
 
 rom_audit_result audit_rom_path(const std::string& path) {
+    // System 246/256 collection games are ".acgame" manifests with no catalog
+    // entry -- the board boots any of them, so there is nothing per-title to
+    // look up. Audit them against the manifest's own file list instead of
+    // reporting every one as an unsupported set.
+    if (lower(fs::path(path).extension().string()) == ".acgame") {
+        const std::string short_name =
+            system246_rom_loader::acgame_short_name(path);
+        std::string missing;
+        if (!system246_rom_loader::acgame_ready(path, &missing))
+            return {false, short_name, "Missing " + missing + "."};
+        return {true, short_name, {}};
+    }
     const identified_archive identified = identify_archive(fs::path(path));
     if (!identified.manifest)
         return {false, {}, "Archive is not a supported WhittyArcade set."};
@@ -381,10 +544,20 @@ rom_audit_result audit_rom_path(const std::string& path) {
         break;
     }
     case arcade_board_type::system246: {
-        const system246_rom_load_result loaded =
-            system246_rom_loader::load(path, chd_library_path());
-        valid = static_cast<bool>(loaded);
-        loader_error = loaded.error;
+        // PCSX2 .acgame-based games (RRV, MotoGP) validate through their
+        // manifest; fall back to the legacy MAME RRV load for a dongle+disc
+        // set that carries no manifest.
+        std::string missing_item;
+        if (system246_rom_loader::acgame_ready(path, &missing_item)) {
+            valid = true;
+        } else {
+            const system246_rom_load_result loaded =
+                system246_rom_loader::load(path, chd_library_path());
+            valid = static_cast<bool>(loaded);
+            loader_error = !loaded.error.empty() ? loaded.error :
+                (missing_item.empty() ? std::string() :
+                     "Missing " + missing_item);
+        }
         break;
     }
     case arcade_board_type::xbox360: {

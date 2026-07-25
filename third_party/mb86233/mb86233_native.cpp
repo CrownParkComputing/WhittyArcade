@@ -559,10 +559,32 @@ int mb86233_native_core::execute(int cycles)
     return cycles - m_icount;
 }
 
+namespace {
+// Instruction-trace state for trace_arm(); see the header.
+int g_trace_remaining = 0;
+std::FILE* g_trace_file = nullptr;
+}
+
+void mb86233_native_core::trace_arm(int count)
+{
+	const char* path = std::getenv("MODEL2_TGP_TRACE");
+	if(!path) return;
+	if(!g_trace_file) g_trace_file = std::fopen(path, "w");
+	if(g_trace_file) g_trace_remaining = count;
+}
+
 void mb86233_native_core::execute_run()
 {
 	while(m_icount > 0) {
 		m_ppc = m_pc;
+		if(g_trace_remaining > 0 && g_trace_file) {
+			--g_trace_remaining;
+			std::fprintf(g_trace_file,
+				"%04X: a=%08x b=%08x d=%08x p=%012llx st=%08x\n",
+				m_pc, m_a, m_b, m_d,
+				static_cast<unsigned long long>(m_p), m_st);
+			if(g_trace_remaining == 0) std::fflush(g_trace_file);
+		}
 		u32 opcode = program_read(m_pc++);
 
 		switch((opcode >> 26) & 0x3f) {

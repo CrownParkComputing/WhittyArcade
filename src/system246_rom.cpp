@@ -132,6 +132,52 @@ fs::path find_child_case_insensitive(const fs::path& directory,
     return {};
 }
 
+// Case-insensitively return the sole ".acgame" manifest directly inside a
+// directory, or an empty path when there is none.
+fs::path acgame_in_directory(const fs::path& directory) {
+    std::error_code error;
+    if (!fs::is_directory(directory, error)) return {};
+    for (fs::directory_iterator iterator(directory, error), end;
+         !error && iterator != end; iterator.increment(error)) {
+        std::error_code type_error;
+        if (iterator->is_regular_file(type_error) &&
+            lower(iterator->path().extension().string()) == ".acgame")
+            return iterator->path();
+    }
+    return {};
+}
+
+// Resolve the ".acgame" manifest for a selection: the file itself when it is
+// one, the manifest directly inside a directory, or empty otherwise. A plain
+// ROM file (e.g. a MAME .zip) never resolves through its neighbours.
+fs::path resolve_acgame(const fs::path& path) {
+    std::error_code error;
+    if (fs::is_regular_file(path, error) &&
+        lower(path.extension().string()) == ".acgame")
+        return path;
+    if (fs::is_directory(path, error))
+        return acgame_in_directory(path);
+    return {};
+}
+
+// The lowercased basename (without extension) of a selection's ".acgame"
+// manifest -- the game's short name, e.g. "rrvac" or "motogp". Empty when the
+// selection has no manifest.
+std::string acgame_game_key(const fs::path& path) {
+    const fs::path manifest = resolve_acgame(path);
+    return manifest.empty() ? std::string() : lower(manifest.stem().string());
+}
+
+void trim_inplace(std::string& text) {
+    const auto not_space = [](unsigned char character) {
+        return std::isspace(character) == 0;
+    };
+    text.erase(text.begin(),
+               std::find_if(text.begin(), text.end(), not_space));
+    text.erase(std::find_if(text.rbegin(), text.rend(), not_space).base(),
+               text.end());
+}
+
 fs::path disc_below(const fs::path& directory) {
     fs::path candidate = find_child_case_insensitive(directory, disc_name);
     std::error_code error;
@@ -223,6 +269,16 @@ bool read_dongle(const fs::path& path, std::vector<uint8_t>& output,
 system246_rom_set system246_rom_loader::identify_set(const std::string& path) {
     if (path.empty()) return system246_rom_set::unknown;
     const fs::path source(path);
+
+    // PCSX2 arcade builds identify a System 246/256 game by its ".acgame"
+    // manifest, whose basename is the game's short name. This is the primary
+    // path now that the board boots through the isolated PCSX2 module.
+    const std::string acgame_key = acgame_game_key(source);
+    if (acgame_key == "rrvac")
+        return system246_rom_set::ridge_racer_v_arcade_battle;
+    if (acgame_key == "motogp")
+        return system246_rom_set::motogp;
+
     std::error_code error;
     if (fs::is_directory(source, error))
         return directory_has_dongle(source) ?
@@ -236,9 +292,15 @@ system246_rom_set system246_rom_loader::identify_set(const std::string& path) {
         system246_rom_set::unknown;
 }
 
+std::string system246_rom_loader::acgame_short_name(const std::string& path) {
+    if (path.empty()) return std::string();
+    return acgame_game_key(fs::path(path));
+}
+
 const char* system246_rom_loader::set_short_name(system246_rom_set set) {
     switch (set) {
     case system246_rom_set::ridge_racer_v_arcade_battle: return "rrvac";
+    case system246_rom_set::motogp: return "motogp";
     case system246_rom_set::unknown: return "";
     }
     return "";
@@ -248,10 +310,72 @@ const char* system246_rom_loader::set_display_name(system246_rom_set set) {
     switch (set) {
     case system246_rom_set::ridge_racer_v_arcade_battle:
         return "Ridge Racer V: Arcade Battle (RRV3 Ver.A)";
+    case system246_rom_set::motogp:
+        return "MotoGP";
     case system246_rom_set::unknown:
         return "Unknown Namco System 246 set";
     }
     return "Unknown Namco System 246 set";
+}
+
+bool system246_rom_loader::acgame_ready(const std::string& path,
+                                        std::string* missing) {
+    const auto report = [missing](const std::string& item) {
+        if (missing) *missing = item;
+        return false;
+    };
+    if (path.empty()) return report("<game>.acgame");
+    const fs::path manifest = resolve_acgame(fs::path(path));
+    if (manifest.empty()) return report("<game>.acgame");
+
+    std::ifstream input(manifest);
+    if (!input) return report(manifest.filename().string());
+
+    // The module reads elf/dongle/mediasrc from the "[data]" section. Confirm
+    // each referenced file exists beside the manifest so a half-copied game is
+    // reported as not ready rather than failing only at boot.
+    std::string elf;
+    std::string dongle;
+    std::string mediasrc;
+    std::string card;
+    std::string subdir;
+    std::string line;
+    while (std::getline(input, line)) {
+        const std::size_t comment = line.find(';');
+        if (comment != std::string::npos) line.erase(comment);
+        const std::size_t equals = line.find('=');
+        if (equals == std::string::npos) continue;
+        std::string key = line.substr(0, equals);
+        std::string value = line.substr(equals + 1);
+        trim_inplace(key);
+        trim_inplace(value);
+        key = lower(key);
+        if (key == "elf") elf = value;
+        else if (key == "dongle") dongle = value;
+        else if (key == "mediasrc") mediasrc = value;
+        else if (key == "card") card = value;
+        else if (key == "subdir") subdir = value;
+    }
+
+    // A manifest may keep its data in a named subdirectory rather than beside
+    // itself; the published arcade collection ships every game that way, with
+    // the manifests gathered in one folder and each game's media under its own
+    // game-id directory. Resolve against that when it is present.
+    fs::path directory = manifest.parent_path();
+    if (!subdir.empty()) directory /= subdir;
+
+    // "card=" may name the file directly or as key=value (a save-card slot);
+    // only the file name matters for the readiness check.
+    if (const std::size_t assign = card.find('='); assign != std::string::npos)
+        card = card.substr(assign + 1);
+
+    for (const std::string& referenced : {elf, dongle, mediasrc, card}) {
+        if (referenced.empty()) continue;
+        std::error_code error;
+        if (!fs::exists(directory / referenced, error))
+            return report(referenced);
+    }
+    return true;
 }
 
 std::string system246_rom_loader::find_disc_path(

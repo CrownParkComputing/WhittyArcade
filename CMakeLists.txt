@@ -4,10 +4,19 @@ project(WhittyArcade LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(WHITTY_ENABLE_SYSTEM246
-    "Build the Play!-backed Namco System 246/RRV runtime" ON)
-set(WHITTY_PLAY_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/play"
-    CACHE PATH "Pinned Play! source tree used by the System 246 runtime")
+# Default to an optimised build. Individual test executables pass -O2
+# themselves, but the emulated-CPU libraries (chips_z80, i960, mb86233, the
+# 68000 and 6809 cores) take their optimisation from the build type alone.
+# With no build type they compile unoptimised, which costs little for games
+# whose cores step in instruction-sized chunks but is ruinous for one that
+# clocks a whole CPU per T-cycle: Virtua Cop drives the model1io2 board's Z80
+# that way and drops from ~163 fps to ~20 fps.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING
+        "Build type (Debug, Release, RelWithDebInfo, MinSizeRel)" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+        Debug Release RelWithDebInfo MinSizeRel)
+endif()
 
 option(WHITTY_ENABLE_XBOX360
     "Build the isolated ReXGlue Robotron: 2084 runtime module" OFF)
@@ -63,92 +72,6 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(MINIZIP REQUIRED IMPORTED_TARGET minizip)
 pkg_check_modules(SDL3_TTF REQUIRED IMPORTED_TARGET sdl3-ttf)
 pkg_check_modules(MPG123 REQUIRED IMPORTED_TARGET libmpg123)
-
-if(WHITTY_ENABLE_SYSTEM246)
-    if(NOT EXISTS "${WHITTY_PLAY_SOURCE_DIR}/Source/CMakeLists.txt")
-        message(FATAL_ERROR
-            "WHITTY_ENABLE_SYSTEM246=ON requires the pinned Play! submodule. "
-            "Run: git submodule update --init --recursive")
-    endif()
-
-    # Play!'s platform header only sets these variables when Play! itself is
-    # the top-level project. Set the same narrow platform contract here before
-    # adding its core, headless Vulkan GS and OpenAL output targets.
-    if(WIN32)
-        set(TARGET_PLATFORM_WIN32 TRUE)
-        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-            set(TARGET_PLATFORM_WIN32_X64 TRUE)
-        else()
-            set(TARGET_PLATFORM_WIN32_X86 TRUE)
-        endif()
-    elseif(APPLE)
-        set(TARGET_PLATFORM_MACOS TRUE)
-    else()
-        set(TARGET_PLATFORM_UNIX TRUE)
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64.*|AARCH64.*)")
-            set(TARGET_PLATFORM_UNIX_AARCH64 TRUE)
-        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
-            set(TARGET_PLATFORM_UNIX_ARM TRUE)
-        endif()
-    endif()
-    list(PREPEND CMAKE_MODULE_PATH
-        "${WHITTY_PLAY_SOURCE_DIR}/deps/Dependencies/cmake-modules")
-    set(ENABLE_AMAZON_S3 OFF CACHE BOOL
-        "Disable Play! network-backed disc loading" FORCE)
-    # Avoid libchdr's bundled zlib CMake renaming a tracked source header.
-    set(WITH_SYSTEM_ZLIB ON CACHE BOOL
-        "Use WhittyArcade's system zlib for Play!/libchdr" FORCE)
-
-    add_subdirectory("${WHITTY_PLAY_SOURCE_DIR}/Source"
-        "${CMAKE_BINARY_DIR}/play-core" EXCLUDE_FROM_ALL)
-    # Recent system zlib headers no longer define the legacy STDC macros used
-    # by zstd's compatibility wrapper. The wrapper is C99 and safe to mark so.
-    if(TARGET libzstd_zlibwrapper_static AND NOT MSVC)
-        target_compile_definitions(libzstd_zlibwrapper_static PRIVATE
-            STDC=1 STDC99=1 Z_HAVE_STDARG_H=1)
-    endif()
-    add_subdirectory("${WHITTY_PLAY_SOURCE_DIR}/Source/gs/GSH_Vulkan"
-        "${CMAKE_BINARY_DIR}/play-gsh-vulkan" EXCLUDE_FROM_ALL)
-    add_subdirectory("${WHITTY_PLAY_SOURCE_DIR}/Source/sound/SH_OpenAL"
-        "${CMAKE_BINARY_DIR}/play-sh-openal" EXCLUDE_FROM_ALL)
-
-    add_library(system246_rrv_music STATIC
-        src/system246/rrv_music.cpp)
-    target_include_directories(system246_rrv_music PUBLIC
-        ${CMAKE_SOURCE_DIR}/src)
-    target_include_directories(system246_rrv_music SYSTEM PRIVATE
-        ${WHITTY_PLAY_SOURCE_DIR}/deps/libchdr/include)
-    target_link_libraries(system246_rrv_music PUBLIC
-        chdr-static Threads::Threads)
-    target_compile_options(system246_rrv_music PRIVATE
-        -Wall -Wextra -Wpedantic)
-
-    add_library(system246_video_geometry STATIC
-        src/system246/video_deinterlace.cpp)
-    target_include_directories(system246_video_geometry PUBLIC
-        ${CMAKE_SOURCE_DIR}/src)
-    target_compile_options(system246_video_geometry PRIVATE
-        -Wall -Wextra -Wpedantic)
-
-    # Pure ATAPI command state machine (no filesystem/host I/O): a
-    # from-scratch, unit-testable component, not yet wired into any live
-    # session code. See docs/system246_256_board_plan.md's "Modular design
-    # for a clean-room reimplementation" section.
-    add_library(system246_atapi STATIC
-        src/system246/atapi_registers.cpp)
-    target_include_directories(system246_atapi PUBLIC
-        ${CMAKE_SOURCE_DIR}/src)
-    target_compile_options(system246_atapi PRIVATE
-        -Wall -Wextra -Wpedantic)
-
-    # Play!'s System 246/256 IOP HLE modules live inside the vendored tree
-    # (third_party/play/Source/iop/namco_sys246) but are WhittyArcade's own
-    # board-specific code, not upstream Play!; CAcAtaAtapi wires the ATAPI
-    # command state machine above into that layer. PlayCore's own
-    # CMakeLists.txt uses the plain target_link_libraries signature, which
-    # cannot be mixed with the keyword form on the same target.
-    target_link_libraries(PlayCore system246_atapi)
-endif()
 
 # FindGLEW can be backed by either CMake's module or a distribution-provided
 # config package. Prefer its imported target because openSUSE's config does
@@ -393,6 +316,8 @@ set(SOURCES
     src/xbox360_runtime_loader.cpp
     src/xbox360_audio.cpp
     src/xbox360_session.cpp
+    src/xbox360_native_runtime.cpp
+    src/xbox360_native_session.cpp
     src/sega/model1/model1_rom.cpp
     src/sega/model1/model1_machine.cpp
     src/sega/model1/model1_audio.cpp
@@ -425,19 +350,6 @@ set(SOURCES
     src/namco/system1/system1_ym2151.cpp
 )
 
-if(WHITTY_ENABLE_SYSTEM246)
-    list(APPEND SOURCES
-        src/system246_session.cpp
-        src/system246/play_audio.cpp
-        src/system246/play_core.cpp
-        src/system246/play_input.cpp
-        src/system246/play_media_cache.cpp
-        src/system246/play_video.cpp
-    )
-else()
-    list(APPEND SOURCES src/system246_session_stub.cpp)
-endif()
-
 if(WIN32)
     enable_language(RC)
     list(APPEND SOURCES
@@ -455,16 +367,8 @@ else()
     add_executable(WhittyArcade ${SOURCES})
 endif()
 target_include_directories(WhittyArcade PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party/moira/Moira)
-if(WHITTY_ENABLE_SYSTEM246)
-    target_include_directories(WhittyArcade SYSTEM PRIVATE
-        ${WHITTY_PLAY_SOURCE_DIR}/Source
-        ${WHITTY_PLAY_SOURCE_DIR}/deps/CodeGen/include
-        ${WHITTY_PLAY_SOURCE_DIR}/deps/Framework/include
-        ${WHITTY_PLAY_SOURCE_DIR}/deps/libchdr/include)
-    target_compile_definitions(WhittyArcade PRIVATE
-        WHITTY_ENABLE_SYSTEM246=1)
-endif()
 
 # Link libraries
 target_link_libraries(WhittyArcade
@@ -498,70 +402,8 @@ target_link_libraries(WhittyArcade
     ${WHITTY_MATH_LIB}
     ${CMAKE_DL_LIBS}
 )
-if(WHITTY_ENABLE_SYSTEM246)
-    # Static-library order matters: the Vulkan backend consumes GS symbols
-    # implemented by PlayCore, so PlayCore must follow the backend targets.
-    target_link_libraries(WhittyArcade PRIVATE
-        gsh_vulkan sh_openal PlayCore system246_rrv_music
-        system246_video_geometry chdr-static)
-endif()
 if(WIN32)
     target_link_libraries(WhittyArcade PRIVATE ole32 shell32 uuid ws2_32)
-endif()
-
-if(WHITTY_ENABLE_SYSTEM246)
-    # Live, real-VM regression test for the RRV streamed-engine-audio bug
-    # (docs/system246_256_board_plan.md). Boots system246_play_core directly
-    # against the real dongle + disc image with no window (no
-    # arcade_frontend/arcade_renderer involved) and inspects the raw SPU
-    # dump for the "degrades into noise after one chunk" signature. Not
-    # registered as a ctest case unless RRV_TEST_ROM_ZIP names a real
-    # rrvac.zip on this machine.
-    add_executable(system246_rrv_stream_integration_test
-        tests/system246_rrv_stream_integration_test.cpp
-        src/system246_rom.cpp
-        src/system246_controls.cpp
-        src/system246/play_audio.cpp
-        src/system246/play_core.cpp
-        src/system246/play_input.cpp
-        src/system246/play_media_cache.cpp
-        src/system246/play_video.cpp
-    )
-    target_include_directories(system246_rrv_stream_integration_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/src)
-    target_include_directories(system246_rrv_stream_integration_test
-        SYSTEM PRIVATE
-        ${WHITTY_PLAY_SOURCE_DIR}/Source
-        ${WHITTY_PLAY_SOURCE_DIR}/deps/CodeGen/include
-        ${WHITTY_PLAY_SOURCE_DIR}/deps/Framework/include
-        ${WHITTY_PLAY_SOURCE_DIR}/deps/libchdr/include)
-    target_compile_definitions(system246_rrv_stream_integration_test PRIVATE
-        WHITTY_ENABLE_SYSTEM246=1)
-    target_link_libraries(system246_rrv_stream_integration_test PRIVATE
-        gsh_vulkan sh_openal PlayCore system246_rrv_music
-        system246_video_geometry chdr-static
-        arcade_audio_output Vulkan::Vulkan ${OPENAL_LIBRARY} SDL3::SDL3
-        ${WHITTY_GLEW_TARGET} ${OPENGL_LIBRARIES}
-        Threads::Threads PkgConfig::MINIZIP ZLIB::ZLIB
-        ${WHITTY_MATH_LIB} ${CMAKE_DL_LIBS})
-
-    set(RRV_TEST_ROM_ZIP "" CACHE FILEPATH
-        "Optional rrvac.zip used by the RRV streamed-audio integration test")
-    if(RRV_TEST_ROM_ZIP)
-        # The real boot sequence (self-test hardware check, parental
-        # advisory, attract intro) takes ~45 real seconds on its own before
-        # coins can even be inserted, then course/car select and race entry
-        # take another ~30s -- 10800 frames (~180 simulated seconds) reaches
-        # a solidly sustained mid-race streaming segment, confirmed via
-        # screenshots + SPU dump analysis. Real wall-clock runtime is
-        # roughly 1.5x that.
-        add_test(NAME system246_rrv_stream_integration_test
-            COMMAND system246_rrv_stream_integration_test
-                ${RRV_TEST_ROM_ZIP} 10800)
-        set_tests_properties(system246_rrv_stream_integration_test
-            PROPERTIES TIMEOUT 400 LABELS system246)
-    endif()
 endif()
 
 # Compiler flags
@@ -723,40 +565,6 @@ if(GNG_TEST_ROM)
         LABELS "gng;rom;integration")
 endif()
 
-add_executable(system246_rom_test
-    tests/system246_rom_test.cpp
-    src/system246_rom.cpp
-)
-target_include_directories(system246_rom_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(system246_rom_test PRIVATE
-    PkgConfig::MINIZIP ZLIB::ZLIB)
-target_compile_options(system246_rom_test PRIVATE
-    -Wall -Wextra -Wpedantic -UNDEBUG)
-set(SYSTEM246_TEST_ROM "" CACHE FILEPATH
-    "Optional rrvac.zip used by the System 246 ROM/media integration test")
-set(SYSTEM246_TEST_CHD "" CACHE FILEPATH
-    "Optional rrv1-a.chd used by the System 246 ROM/media integration test")
-if(SYSTEM246_TEST_ROM AND SYSTEM246_TEST_CHD)
-    add_test(NAME system246_rom_test
-        COMMAND system246_rom_test ${SYSTEM246_TEST_ROM} ${SYSTEM246_TEST_CHD})
-else()
-add_test(NAME system246_rom_test COMMAND system246_rom_test)
-endif()
-
-add_executable(system246_controls_test
-    tests/system246_controls_test.cpp
-    src/system246_controls.cpp
-)
-target_include_directories(system246_controls_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include)
-target_compile_options(system246_controls_test PRIVATE
-    -Wall -Wextra -Wpedantic -UNDEBUG)
-add_test(NAME system246_controls_test COMMAND system246_controls_test)
-
-set_tests_properties(system246_rom_test system246_controls_test PROPERTIES
-    LABELS system246)
-
 add_executable(xbox360_rom_test
     tests/xbox360_rom_test.cpp
     src/xbox360_rom.cpp
@@ -774,6 +582,24 @@ else()
     add_test(NAME xbox360_rom_test COMMAND xbox360_rom_test)
 endif()
 set_tests_properties(xbox360_rom_test PROPERTIES LABELS xbox360)
+
+# Launching a native port. The stand-in runtimes it spawns are shell scripts, so
+# the test is POSIX-only; the code it covers builds on both platforms.
+if(NOT WIN32)
+    add_executable(xbox360_native_runtime_test
+        tests/xbox360_native_runtime_test.cpp
+        src/xbox360_native_runtime.cpp
+    )
+    target_include_directories(xbox360_native_runtime_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(xbox360_native_runtime_test PRIVATE Threads::Threads)
+    target_compile_options(xbox360_native_runtime_test PRIVATE
+        -Wall -Wextra -Wpedantic -UNDEBUG)
+    add_test(NAME xbox360_native_runtime_test
+        COMMAND xbox360_native_runtime_test)
+    set_tests_properties(xbox360_native_runtime_test PROPERTIES
+        LABELS "xbox360;runtime" TIMEOUT 60)
+endif()
 
 if(WHITTY_ENABLE_XBOX360)
     add_executable(xbox360_runtime_smoke_test
@@ -797,94 +623,6 @@ if(WHITTY_ENABLE_XBOX360)
             LABELS "xbox360;runtime"
             TIMEOUT 45)
     endif()
-endif()
-
-if(WHITTY_ENABLE_SYSTEM246)
-    add_executable(system246_video_test tests/system246_video_test.cpp)
-    target_include_directories(system246_video_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/third_party/play/Source)
-    target_link_libraries(system246_video_test PRIVATE
-        system246_video_geometry)
-    target_compile_options(system246_video_test PRIVATE
-        -Wall -Wextra -Wpedantic -UNDEBUG)
-    add_test(NAME system246_video_test COMMAND system246_video_test)
-    set_tests_properties(system246_video_test PROPERTIES
-        LABELS "system246;video")
-
-    add_executable(system246_atapi_test tests/system246_atapi_test.cpp)
-    target_include_directories(system246_atapi_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(system246_atapi_test PRIVATE
-        system246_atapi)
-    target_compile_options(system246_atapi_test PRIVATE
-        -Wall -Wextra -Wpedantic -UNDEBUG)
-    add_test(NAME system246_atapi_test COMMAND system246_atapi_test)
-    set_tests_properties(system246_atapi_test PROPERTIES
-        LABELS "system246;audio")
-
-    add_executable(system246_music_test tests/system246_music_test.cpp)
-    target_include_directories(system246_music_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${SDL3_INCLUDE_DIRS})
-    target_link_libraries(system246_music_test PRIVATE
-        system246_rrv_music SDL3::SDL3)
-    target_compile_options(system246_music_test PRIVATE
-        -Wall -Wextra -Wpedantic -UNDEBUG)
-    if(SYSTEM246_TEST_CHD)
-        add_test(NAME system246_music_test
-            COMMAND system246_music_test --verify "${SYSTEM246_TEST_CHD}")
-    else()
-        add_test(NAME system246_music_test COMMAND system246_music_test)
-    endif()
-    set_tests_properties(system246_music_test PROPERTIES
-        LABELS "system246;audio;media"
-        TIMEOUT 30)
-
-    add_executable(system246_cd_test tests/system246_cd_test.cpp)
-    target_include_directories(system246_cd_test PRIVATE
-        ${WHITTY_PLAY_SOURCE_DIR}/Source)
-    target_compile_options(system246_cd_test PRIVATE
-        -Wall -Wextra -Wpedantic -UNDEBUG)
-    set(SYSTEM246_TEST_ISO "" CACHE FILEPATH
-        "Optional generated RRV1_A ISO used by the CD/audio integration test")
-    if(SYSTEM246_TEST_ISO)
-        add_test(NAME system246_cd_test
-            COMMAND system246_cd_test "${SYSTEM246_TEST_ISO}")
-    else()
-        add_test(NAME system246_cd_test COMMAND system246_cd_test)
-    endif()
-    set_tests_properties(system246_cd_test PROPERTIES
-        LABELS "system246;media")
-
-    add_executable(system246_spu2_test tests/system246_spu2_test.cpp)
-    target_include_directories(system246_spu2_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-    target_include_directories(system246_spu2_test SYSTEM PRIVATE
-        ${WHITTY_PLAY_SOURCE_DIR}/Source
-        ${WHITTY_PLAY_SOURCE_DIR}/deps/Framework/include)
-    target_link_libraries(system246_spu2_test PRIVATE
-        PlayCore arcade_audio_output)
-    target_compile_options(system246_spu2_test PRIVATE
-        -Wall -Wextra -Wpedantic -UNDEBUG)
-    add_test(NAME system246_spu2_test COMMAND system246_spu2_test)
-    set_tests_properties(system246_spu2_test PROPERTIES
-        LABELS "system246;audio")
-
-    # Builds and runs only the quick, headless System 246 checks. This avoids
-    # starting the emulator or requiring the RRV ROM/CHD for normal iteration.
-    add_custom_target(check_system246
-        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L system246
-        DEPENDS
-            system246_rom_test
-            system246_controls_test
-            system246_cd_test
-            system246_music_test
-            system246_spu2_test
-            system246_video_test
-            system246_atapi_test
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        USES_TERMINAL)
 endif()
 
 add_executable(persistent_data_test
@@ -1098,8 +836,10 @@ add_executable(model2_io_test
     tests/model2_io_test.cpp
     src/sega/model2/model2_bus.cpp
 )
-target_include_directories(model2_io_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(model2_io_test PRIVATE model1_io)
+target_include_directories(model2_io_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/mb86233)
+target_link_libraries(model2_io_test PRIVATE model1_io mb86233)
 if(WIN32)
     target_link_libraries(model2_io_test PRIVATE ws2_32)
 endif()
@@ -1402,3 +1142,280 @@ target_include_directories(m68000_cpu_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(m68000_cpu_test PRIVATE m68000_cpu)
 target_compile_options(m68000_cpu_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME m68000_cpu_test COMMAND m68000_cpu_test)
+
+# ===========================================================================
+# System 246/256 board bring-up: embedded PCSX2 core link test (FOUNDATION).
+#
+# Standalone smoke-test executable that proves WhittyArcade can link against
+# the prebuilt PCSX2 arcade-fork static libraries and stand the PCSX2 CPU
+# thread up and down headlessly (no game boot, no GS device, no UI/audio).
+#
+# It is compiled and linked directly with clang++ in C++20 -- matching how the
+# PCSX2 libraries themselves were built -- so its ABI matches libpcsx2.a even
+# though the main WhittyArcade tree builds with the default (GCC) compiler.
+# The include dirs, compile definitions and flags are copied verbatim from how
+# PCSX2 compiles its own core (pcsx2/VMManager.cpp) so the arcade-fork headers
+# parse identically here.
+#
+# Kept entirely separate from the main WhittyArcade binary and NOT part of the
+# default (ALL) build, so a PCSX2 link failure cannot break the rest of the
+# tree. Build explicitly with:
+#     cmake --build build --target system246_pcsx2_link_test
+#
+# PCSX2 has no ARM backend, so the target only exists on x86-64.
+# ===========================================================================
+set(WHITTY_PCSX2_SRC_ROOT "/home/jon/pcsx2x6" CACHE PATH
+    "PCSX2 arcade-fork source tree used by the System 246 link test")
+set(WHITTY_PCSX2_BUILD_ROOT "/home/jon/pcsx2x6/build" CACHE PATH
+    "PCSX2 arcade-fork build tree containing the prebuilt static libraries")
+
+# Set TRUE once the real PCSX2-backed System 246 session (the dlopen client that
+# drives libsystem246_pcsx2.so) is compiled into WhittyArcade and the .so is
+# built; a stub make_system246_session is added otherwise.
+set(WHITTY_SYSTEM246_PCSX2_LINKED FALSE)
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    find_program(WHITTY_PCSX2_CLANGXX NAMES clang++ clang++-22 clang++-20)
+    if(NOT WHITTY_PCSX2_CLANGXX)
+        message(STATUS
+            "system246_pcsx2_link_test: clang++ not found; PCSX2 link test disabled")
+    elseif(NOT EXISTS "${WHITTY_PCSX2_BUILD_ROOT}/pcsx2/libpcsx2.a")
+        message(STATUS
+            "system246_pcsx2_link_test: ${WHITTY_PCSX2_BUILD_ROOT}/pcsx2/libpcsx2.a "
+            "not found; PCSX2 link test disabled")
+    else()
+        set(_p2s "${WHITTY_PCSX2_SRC_ROOT}")
+        set(_p2b "${WHITTY_PCSX2_BUILD_ROOT}")
+
+        set(WHITTY_PCSX2_SOURCES
+            "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_host.cpp"
+            "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_link_test.cpp")
+
+        # Compile flags copied from PCSX2's own core build (minus the PCH, which
+        # we reproduce by #include "pcsx2/PrecompiledHeader.h" in the sources).
+        set(WHITTY_PCSX2_FLAGS
+            -DFMT_USE_EXCEPTIONS=0 -DFMT_USE_RTTI=0
+            -O3 -DNDEBUG -std=gnu++20 -fPIC -march=native -pipe
+            -fvisibility=hidden -pthread -fno-exceptions -g1
+            -Wno-unused-function -Wno-unused-parameter -Wno-missing-field-initializers
+            -ffp-contract=fast -fno-strict-aliasing -Wno-parentheses
+            -Wno-missing-braces -Wno-unknown-pragmas)
+
+        # Compile definitions copied verbatim from the PCSX2 core build.
+        set(WHITTY_PCSX2_DEFINES
+            -DCPUINFO_SUPPORTED_PLATFORM=1 -DENABLE_OPENGL -DENABLE_VULKAN
+            -DHAVE_DECL_BASENAME=1 -DHAVE_LIMITS_H=1 -DHAVE_STDLIB_H=1
+            -DHAVE_STRING_H=1 -DPLUTOSVG_HAS_FREETYPE
+            -DRYML_DEFAULT_CALLBACK_USES_EXCEPTIONS -DSOUNDTOUCH_FLOAT_SAMPLES
+            -DST_NO_EXCEPTION_HANDLING -DWAYLAND_API -DX11_API
+            -DXBYAK_NO_EXCEPTION -DZYCORE_STATIC_BUILD -DZYDIS_STATIC_BUILD
+            -D_M_X86=1 -D__POSIX__)
+
+        # Include dirs copied verbatim from the PCSX2 core build.
+        set(WHITTY_PCSX2_INCLUDES
+            -I${_p2s}/3rdparty/xbyak
+            -I${_p2s}/pcsx2
+            -I${_p2b}/pcsx2
+            -I${_p2b}/common/include
+            -I${_p2s}/3rdparty/glad/include
+            -I${_p2s}/3rdparty/vulkan/include
+            -I${_p2s}/3rdparty/zydis/dependencies/zycore/include
+            -I${_p2s}/3rdparty/zydis/include
+            -I${_p2s}/3rdparty/include
+            -I${_p2s}
+            -I${_p2s}/3rdparty/fast_float/include
+            -I${_p2s}/3rdparty/imgui/include
+            -I${_p2s}/3rdparty/libchdr/include
+            -I${_p2s}/3rdparty/rcheevos/include
+            -I${_p2s}/3rdparty/discord-rpc/include
+            -I${_p2s}/3rdparty/rapidjson/include
+            -I${_p2s}/3rdparty/simpleini/include
+            -I${_p2s}/3rdparty/freesurround/include
+            -I${_p2s}/3rdparty/soundtouch/soundtouch
+            -I${_p2s}/3rdparty/lzma/include
+            -I${_p2s}/3rdparty/demangler/include
+            -I${_p2s}/3rdparty/ccc/src
+            -I${_p2s}/3rdparty/fmt/include
+            -I${_p2s}/3rdparty/libzip/lib
+            -I${_p2b}/3rdparty/libzip
+            -I${_p2s}/3rdparty/cpuinfo/include
+            -I${_p2s}/3rdparty/cubeb/include
+            -isystem /usr/include/freetype2
+            -isystem /usr/include/plutosvg
+            -isystem /usr/include/plutovg)
+
+        # Prebuilt PCSX2 static libraries. Wrapped in --start-group/--end-group
+        # to resolve their circular dependencies.
+        set(WHITTY_PCSX2_STATIC_LIBS
+            ${_p2b}/pcsx2/libpcsx2.a
+            ${_p2b}/common/libcommon.a
+            ${_p2b}/3rdparty/ccc/libccc.a
+            ${_p2b}/3rdparty/cpuinfo/libcpuinfo.a
+            ${_p2b}/3rdparty/cubeb/libcubeb.a
+            ${_p2b}/3rdparty/demangler/libdemanglegnu.a
+            ${_p2b}/3rdparty/discord-rpc/libdiscord-rpc.a
+            ${_p2b}/3rdparty/fmt/libfmt.a
+            ${_p2b}/3rdparty/freesurround/libfreesurround.a
+            ${_p2b}/3rdparty/glad/libglad.a
+            ${_p2b}/3rdparty/imgui/libimgui.a
+            ${_p2b}/3rdparty/libchdr/liblibchdr.a
+            ${_p2b}/3rdparty/libzip/libzip.a
+            ${_p2b}/3rdparty/lzma/libpcsx2-lzma.a
+            ${_p2b}/3rdparty/rcheevos/librcheevos.a
+            ${_p2b}/3rdparty/simpleini/libsimpleini.a
+            ${_p2b}/3rdparty/soundtouch/libpcsx2-soundtouch.a
+            ${_p2b}/3rdparty/zydis/libzydis.a)
+
+        # System libraries PCSX2 depends on (matches the fork's gsrunner link).
+        set(WHITTY_PCSX2_SYSTEM_LIBS
+            -ldl -lbacktrace -lcurl -ldbus-1 -lfontconfig -lfreetype -lGLX
+            -ljpeg -llz4 -lOpenGL -lpcap -lpng -ludev -lwebp -lX11 -lXext -lXi
+            -lxkbcommon -lXrandr -lXrender -lz -lzstd -lpthread -lSDL3
+            -lryml -lplutosvg -lplutovg)
+
+        # -------------------------------------------------------------------
+        # Isolated PCSX2 module: libsystem246_pcsx2.so (dlopen'd at runtime).
+        #
+        # The PCSX2 arcade core bundles its own glad GL loader plus a raft of
+        # static initialisers that collide with WhittyArcade's GLEW-based
+        # OpenGL renderer when both live in one binary (this hung
+        # polygon_renderer_gpu::initialize at startup for EVERY game). So NO
+        # PCSX2 symbol is linked into WhittyArcade. Instead the code is split:
+        #
+        #   * system246_pcsx2_session.cpp is a plain GCC/C++17 dlopen client
+        #     compiled straight into WhittyArcade. It includes no PCSX2 header
+        #     -- only <dlfcn.h> and the flat C ABI in pcsx2_module.h.
+        #   * pcsx2_module.cpp + pcsx2_host.cpp (the only files that touch
+        #     PCSX2) are compiled and linked with clang++ (matching the ABI
+        #     libpcsx2.a was built with) into libsystem246_pcsx2.so, next to
+        #     the WhittyArcade binary. WhittyArcade dlopen()s it at run time and
+        #     drives Ridge Racer V purely through the four wa_pcsx2_* exports.
+        #
+        # Because WhittyArcade only sees the C ABI, it reverts cleanly to GCC
+        # and carries zero PCSX2 / glad symbols.
+        target_sources(WhittyArcade PRIVATE
+            "${CMAKE_SOURCE_DIR}/src/system246/system246_pcsx2_session.cpp"
+            "${CMAKE_SOURCE_DIR}/src/system246/system246_loading_screen.cpp")
+
+        set(WHITTY_PCSX2_MODULE_SOURCES
+            "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_module.cpp"
+            "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_host.cpp")
+
+        set(WHITTY_PCSX2_MODULE_SO
+            "${CMAKE_BINARY_DIR}/libsystem246_pcsx2.so")
+
+        # Single-shot clang++ compile+link into the shared object (same recipe
+        # as the link-test/boot harnesses, plus -shared). Every PCSX2 static
+        # lib is position-independent (POSITION_INDEPENDENT_CODE=ON in the
+        # arcade build), so they link cleanly into a .so. Our own module sources
+        # additionally need the WhittyArcade headers.
+        add_custom_command(
+            OUTPUT "${WHITTY_PCSX2_MODULE_SO}"
+            COMMAND "${WHITTY_PCSX2_CLANGXX}"
+                -shared -fPIC
+                ${WHITTY_PCSX2_FLAGS}
+                ${WHITTY_PCSX2_DEFINES}
+                ${WHITTY_PCSX2_INCLUDES}
+                -I${CMAKE_SOURCE_DIR}/include
+                -I${CMAKE_SOURCE_DIR}/src
+                -I${CMAKE_SOURCE_DIR}/src/system246
+                ${WHITTY_PCSX2_MODULE_SOURCES}
+                -o "${WHITTY_PCSX2_MODULE_SO}"
+                -Wl,--start-group ${WHITTY_PCSX2_STATIC_LIBS} -Wl,--end-group
+                ${WHITTY_PCSX2_SYSTEM_LIBS}
+            DEPENDS ${WHITTY_PCSX2_MODULE_SOURCES}
+                "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_module.h"
+                "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_host.h"
+                "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_input.h"
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+            COMMENT "Linking libsystem246_pcsx2.so (isolated PCSX2 module) with clang++"
+            VERBATIM)
+
+        # Part of the default (ALL) build; WhittyArcade dlopen()s it, so also
+        # order it before the binary is considered done.
+        add_custom_target(system246_pcsx2_module ALL
+            DEPENDS "${WHITTY_PCSX2_MODULE_SO}")
+        add_dependencies(WhittyArcade system246_pcsx2_module)
+
+        set(WHITTY_SYSTEM246_PCSX2_LINKED TRUE)
+
+        set(WHITTY_PCSX2_LINK_TEST_BIN
+            "${CMAKE_BINARY_DIR}/system246_pcsx2_link_test")
+
+        add_custom_command(
+            OUTPUT "${WHITTY_PCSX2_LINK_TEST_BIN}"
+            COMMAND "${WHITTY_PCSX2_CLANGXX}"
+                ${WHITTY_PCSX2_FLAGS}
+                ${WHITTY_PCSX2_DEFINES}
+                ${WHITTY_PCSX2_INCLUDES}
+                ${WHITTY_PCSX2_SOURCES}
+                -o "${WHITTY_PCSX2_LINK_TEST_BIN}"
+                -Wl,--start-group ${WHITTY_PCSX2_STATIC_LIBS} -Wl,--end-group
+                ${WHITTY_PCSX2_SYSTEM_LIBS}
+            DEPENDS ${WHITTY_PCSX2_SOURCES}
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+            COMMENT "Linking system246_pcsx2_link_test against prebuilt PCSX2 static libraries"
+            VERBATIM)
+
+        add_custom_target(system246_pcsx2_link_test
+            DEPENDS "${WHITTY_PCSX2_LINK_TEST_BIN}")
+
+        # -------------------------------------------------------------------
+        # RRV boot harness: same clang++/ABI recipe as the link test above,
+        # plus SDL3, that boots Ridge Racer V Arcade Battle in-process into a
+        # real Vulkan window with cubeb audio. Compiles pcsx2_boot_rrv.cpp +
+        # pcsx2_host.cpp and reuses the same flags/defines/includes/static-lib
+        # group; SDL3 libs are already in WHITTY_PCSX2_SYSTEM_LIBS (-lSDL3).
+        #
+        # Like the link test it is x86-64 only and kept OUT of the default
+        # (ALL) build. Build explicitly with:
+        #     cmake --build build --target system246_pcsx2_boot_rrv
+        # -------------------------------------------------------------------
+        set(WHITTY_PCSX2_BOOT_RRV_SOURCES
+            "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_host.cpp"
+            "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_boot_rrv.cpp")
+
+        # SDL3 compile flags (headers). The link libs come from -lSDL3 already
+        # present in WHITTY_PCSX2_SYSTEM_LIBS.
+        execute_process(
+            COMMAND pkg-config --cflags sdl3
+            OUTPUT_VARIABLE WHITTY_SDL3_CFLAGS
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE WHITTY_SDL3_PKGCONFIG_RESULT)
+        if(NOT WHITTY_SDL3_PKGCONFIG_RESULT EQUAL 0)
+            set(WHITTY_SDL3_CFLAGS "")
+        endif()
+        separate_arguments(WHITTY_SDL3_CFLAGS_LIST NATIVE_COMMAND "${WHITTY_SDL3_CFLAGS}")
+
+        set(WHITTY_PCSX2_BOOT_RRV_BIN
+            "${CMAKE_BINARY_DIR}/system246_pcsx2_boot_rrv")
+
+        add_custom_command(
+            OUTPUT "${WHITTY_PCSX2_BOOT_RRV_BIN}"
+            COMMAND "${WHITTY_PCSX2_CLANGXX}"
+                ${WHITTY_PCSX2_FLAGS}
+                ${WHITTY_PCSX2_DEFINES}
+                ${WHITTY_PCSX2_INCLUDES}
+                ${WHITTY_SDL3_CFLAGS_LIST}
+                ${WHITTY_PCSX2_BOOT_RRV_SOURCES}
+                -o "${WHITTY_PCSX2_BOOT_RRV_BIN}"
+                -Wl,--start-group ${WHITTY_PCSX2_STATIC_LIBS} -Wl,--end-group
+                ${WHITTY_PCSX2_SYSTEM_LIBS}
+            DEPENDS ${WHITTY_PCSX2_BOOT_RRV_SOURCES}
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+            COMMENT "Linking system246_pcsx2_boot_rrv (RRV in-process boot) against prebuilt PCSX2 static libraries + SDL3"
+            VERBATIM)
+
+        add_custom_target(system246_pcsx2_boot_rrv
+            DEPENDS "${WHITTY_PCSX2_BOOT_RRV_BIN}")
+    endif()
+endif()
+
+# On any target where the embedded PCSX2 core was not linked (non-x86-64, no
+# clang, or the prebuilt libpcsx2 is absent), provide a stub
+# make_system246_session so the board stays wired into the catalog/factory and
+# WhittyArcade still links.
+if(NOT WHITTY_SYSTEM246_PCSX2_LINKED)
+    target_sources(WhittyArcade PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/system246/system246_pcsx2_session_stub.cpp)
+endif()

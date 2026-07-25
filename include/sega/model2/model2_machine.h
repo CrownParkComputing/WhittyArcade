@@ -55,6 +55,7 @@ public:
     uint16_t tgp_program_counter() const;
     uint32_t tgp_data_word(uint16_t address) const;
     uint32_t tgp_uploaded_words() const;
+    uint32_t tgp_program_word(uint16_t address) const;
     std::size_t tgp_input_words() const;
     std::size_t tgp_output_words() const;
     uint32_t geometry_read_address() const;

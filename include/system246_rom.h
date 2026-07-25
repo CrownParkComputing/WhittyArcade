@@ -8,6 +8,7 @@
 enum class system246_rom_set : uint8_t {
     unknown,
     ridge_racer_v_arcade_battle,
+    motogp,
 };
 
 enum class system246_disc_container : uint8_t {
@@ -59,4 +60,22 @@ public:
     static system246_rom_load_result load(
         const std::string& path,
         const std::string& configured_chd_directory = {});
+
+    // System 246/256 games boot the PCSX2 arcade core through a small
+    // "<name>.acgame" manifest that names the ELF loader, dongle image and
+    // disc/HDD media in the same directory. A game is "ready" when that
+    // manifest and every file it references exist beside it; this lets both
+    // RRV and MotoGP be marked ready without hard-coding a single game's
+    // file names. When it returns false and missing is non-null, missing
+    // names the first absent item.
+    static bool acgame_ready(const std::string& path,
+                             std::string* missing = nullptr);
+
+    // The game's short name: the lowercased basename of its ".acgame" manifest
+    // (e.g. "tekken5"), resolving a directory selection to the manifest inside
+    // it. Empty when the selection has no manifest. This is what lets ANY
+    // collection title be identified as a System 246/256 game without a
+    // built-in enum entry -- identify_set only knows the curated sets, but the
+    // board boots any manifest, so routing keys off this instead.
+    static std::string acgame_short_name(const std::string& path);
 };

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -157,6 +158,17 @@ int main(int argc, char** argv) {
             std::printf("Captured frame %d: polygons=%u direct=%u\n",
                         frame_number, captured.decoded_polygons,
                         captured.direct_polygons);
+        }
+        if (const char* ramp_text = std::getenv("MODEL2_RAMP")) {
+            // Print one work-RAM word per frame, for lining an animation up
+            // against MAME's frame-by-frame values.
+            const uint32_t address = static_cast<uint32_t>(
+                std::strtoul(ramp_text, nullptr, 16));
+            uint32_t value = 0;
+            for (unsigned byte = 0; byte < 4; ++byte)
+                value |= static_cast<uint32_t>(
+                    machine.debug_read8(address + byte)) << (byte * 8);
+            std::printf("RAMP %d %08x\n", frame_number, value);
         }
         if (std::getenv("MODEL2_TRACE_INPUT_RAM") && frame >= 176 &&
             frame <= 248) {
@@ -428,6 +440,39 @@ int main(int argc, char** argv) {
     }
     if (const char* capture = std::getenv("MODEL2_CAPTURE")) {
         assert(write_capture(machine, capture));
+    }
+    if (const char* peek_text = std::getenv("MODEL2_PEEK")) {
+        // Print a comma-separated list of hex addresses as 32-bit words, for
+        // comparing emulator state against MAME at the same frame.
+        std::string list(peek_text);
+        std::size_t start = 0;
+        while (start < list.size()) {
+            const std::size_t comma = list.find(',', start);
+            const std::string item = list.substr(
+                start, comma == std::string::npos ? std::string::npos
+                                                  : comma - start);
+            const uint32_t address = static_cast<uint32_t>(
+                std::strtoul(item.c_str(), nullptr, 16));
+            uint32_t value = 0;
+            for (unsigned byte = 0; byte < 4; ++byte)
+                value |= static_cast<uint32_t>(
+                    machine.debug_read8(address + byte)) << (byte * 8);
+            std::printf("PEEK %08x = %08x\n", address, value);
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+    }
+    if (const char* program_path = std::getenv("MODEL2_TGP_PROGRAM_DUMP")) {
+        // The i960 uploads the geometrizer's program at boot; dumping it lets
+        // it be diffed against MAME's copy when the TGP computes wrong values.
+        if (std::FILE* output = std::fopen(program_path, "wb")) {
+            for (uint32_t address = 0; address < 0x1000; ++address) {
+                const uint32_t word = machine.tgp_program_word(
+                    static_cast<uint16_t>(address));
+                std::fwrite(&word, 1, sizeof(word), output);
+            }
+            std::fclose(output);
+        }
     }
     if (const char* buffer_path = std::getenv("MODEL2_BUFFER_DUMP")) {
         if (std::FILE* output = std::fopen(buffer_path, "wb")) {

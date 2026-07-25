@@ -212,7 +212,7 @@ public:
         const pid_t child = fork();
         if (child < 0) return false;
         if (child == 0) {
-            execv(executable.c_str(), native_arguments.data());
+            execvp(executable.c_str(), native_arguments.data());
             std::_Exit(127);
         }
         m_process = child;
@@ -559,7 +559,7 @@ int main(int argc, char* argv[]) {
             std::fprintf(stderr,
                          "%s has no supported Player 2 input path; "
                          "starting single-screen mode instead\n",
-                         identity->short_name);
+                         identity->short_name.c_str());
             launch_mode = cabinet_launch_mode::single;
             cabinet_node = 0;
         }
@@ -571,7 +571,11 @@ int main(int argc, char* argv[]) {
                                  explicit_bios_path, pair_port_base,
                                  false)) {
                 std::fprintf(stderr,
-                             "Could not start the second cabinet process\n");
+                             "Could not start the second cabinet process (execv"
+                             "p failed). WhittyArcade was launched as \"%s\". "
+                             "Make sure the executable is found via PATH, or "
+                             "use an absolute path (e.g. ./WhittyArcade).\n",
+                             argv[0] ? argv[0] : "(null)");
                 launch_mode = cabinet_launch_mode::single;
             } else {
                 cabinet_node = 1;
@@ -592,9 +596,15 @@ int main(int argc, char* argv[]) {
             launch_mode == cabinet_launch_mode::independent_pair ?
                 output_mode::dual : output_mode::single;
         if (cabinet_node) {
-            settings.display_index =
-                launch_mode == cabinet_launch_mode::linked_network ?
-                    0 : cabinet_node - 1;
+            // linked_network spreads the two cabinets across different
+            // physical displays (cabinet 1 → display 0, cabinet 2 →
+            // display 1) so a single ultrawide or two side-by-side
+            // monitors each get their own window without the user
+            // needing to drag one out from under the other. The earlier
+            // code pinned both to display 0, which made the two
+            // processes stack on top of each other on a single-screen
+            // setup.
+            settings.display_index = cabinet_node - 1;
             std::printf("Starting cabinet %d on display %d\n",
                         cabinet_node, settings.display_index + 1);
         } else {

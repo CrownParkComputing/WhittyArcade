@@ -24,6 +24,25 @@ public:
     ~arcade_input();
 
     bool initialize(std::string_view game_short_name = {});
+
+    // True for the games whose cabinet has a light gun, so a session can show
+    // the on-screen sight for exactly the games whose aim comes from the
+    // mouse. Shared with the input mapping so the two cannot disagree.
+    static bool is_lightgun_game(std::string_view game_short_name);
+
+    // Where the emulated picture is drawn, from the renderer (drawable pixels,
+    // origin top-left). The light gun maps the pointer onto this rectangle
+    // instead of assuming the picture fills a centred 4:3 area of the window,
+    // which is wrong whenever integer scaling or a non-4:3 board is in play.
+    void set_picture_rect(int x, int y, int width, int height,
+                          int drawable_width, int drawable_height) {
+        m_picture_x = x;
+        m_picture_y = y;
+        m_picture_width = width;
+        m_picture_height = height;
+        m_picture_drawable_width = drawable_width;
+        m_picture_drawable_height = drawable_height;
+    }
     void reload_mappings();
     void shutdown();
     void update();
@@ -74,6 +93,17 @@ private:
     // the I/O board, so its cursor maps to the whole 0..255 axis rather than
     // Time Crisis's narrow cyber_axis window.
     bool m_lightgun_full_range{false};
+    // Time Crisis cabinets have a foot pedal (Space, as on Time Crisis 1);
+    // the other gun games leave that action as a reload shortcut instead.
+    bool m_lightgun_pedal{false};
+    // Picture rectangle published by the renderer; zero width means "not known
+    // yet", in which case the gun falls back to assuming a centred 4:3 image.
+    int m_picture_x{0};
+    int m_picture_y{0};
+    int m_picture_width{0};
+    int m_picture_height{0};
+    int m_picture_drawable_width{0};
+    int m_picture_drawable_height{0};
     bool m_lightgun_mouse_active{false};
     bool m_event_watch_installed{false};
     bool m_initialized{false};

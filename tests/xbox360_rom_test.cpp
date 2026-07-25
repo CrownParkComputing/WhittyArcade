@@ -65,6 +65,32 @@ int main(int argc, char* argv[]) {
     assert(complete.title_id == xbox360_rom_loader::robotron_title_id);
     assert(complete.set == xbox360_rom_set::robotron_2084);
 
+    // Geometry Wars keeps its data flat beside default.xex, so its readiness
+    // check is a different list of files under the same rule: identified by
+    // title ID from the moment the XEX is there, complete only once the data is.
+    const fs::path geometry = root / "geometrywars";
+    fs::create_directories(geometry);
+    write_xex(geometry / "default.xex",
+              xbox360_rom_loader::geometry_wars_title_id);
+    assert(xbox360_rom_loader::identify_set(geometry.string()) ==
+           xbox360_rom_set::geometry_wars);
+    assert(!xbox360_rom_loader::inspect(geometry.string()));
+    touch(geometry / "GeometryWars1.dat");
+    assert(!xbox360_rom_loader::inspect(geometry.string()));
+    touch(geometry / "GW1.xwb");
+    const xbox360_rom_info geometry_complete =
+        xbox360_rom_loader::inspect(geometry.string());
+    assert(geometry_complete);
+    assert(geometry_complete.set == xbox360_rom_set::geometry_wars);
+    assert(geometry_complete.title_id ==
+           xbox360_rom_loader::geometry_wars_title_id);
+    // Robotron's data does not make Geometry Wars complete, and the two sets
+    // must not share a short name.
+    assert(std::string(xbox360_rom_loader::set_short_name(
+               xbox360_rom_set::geometry_wars)) !=
+           std::string(xbox360_rom_loader::set_short_name(
+               xbox360_rom_set::robotron_2084)));
+
     const fs::path other = root / "other";
     fs::create_directories(other);
     write_xex(other / "default.xex", 0x12345678);
