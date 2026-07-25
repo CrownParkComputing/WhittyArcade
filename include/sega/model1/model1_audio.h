@@ -69,7 +69,11 @@ private:
     struct ym3438_state;
 
     static constexpr uint32_t UART_CAPACITY = 1024;
-    static constexpr uint32_t UART_RX_CAPACITY = 16;
+    // Virtua Cop sends ~29 sound-init bytes with timestamp=0 before the audio
+    // thread starts; 16 bytes caused an immediate overrun which set the OE bit
+    // permanently, making the 68000 ISR exit early on every call and silencing
+    // the board. 64 comfortably covers any realistic startup burst.
+    static constexpr uint32_t UART_RX_CAPACITY = 64;
     static constexpr int OPENAL_BUFFER_COUNT = 4;
     static constexpr int BUFFER_FRAMES = 800;
     static constexpr int OUTPUT_RATE = 48000;
