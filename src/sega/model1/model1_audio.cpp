@@ -549,7 +549,10 @@ uint16_t model1_audio_system::read16(uint32_t address) {
 }
 
 uint8_t model1_audio_system::read_uart_data() {
-    uint8_t data = 0;
+    // Return 0xff when empty: the vcop 68000 ISR (0x120) uses
+    // "CMPI.B #0xff, D3; BEQ exit" to detect an idle line. Returning 0x00
+    // would be treated as a valid (but spurious) sound command.
+    uint8_t data = 0xff;
     if (m_uart_rx_count) {
         data = m_uart_rx[m_uart_rx_read];
         m_uart_rx_read = (m_uart_rx_read + 1) % UART_RX_CAPACITY;
@@ -565,7 +568,15 @@ uint8_t model1_audio_system::read_uart_status() {
     // sound program polls RXRDY as well as servicing its level-2 interrupt.
     uint8_t status = 0x05; // TXRDY | TXEMPTY
     if (m_uart_rx_count) status |= 0x02; // RXRDY
-    if (m_uart_overrun) status |= 0x10;  // OE
+    if (m_uart_overrun) {
+        status |= 0x10; // OE (overrun error)
+        // The i8251 OE bit is cleared once the CPU acknowledges it by reading
+        // status and then issuing an error-reset command. Clearing it here on
+        // the status read is the simplest correct approximation: the vcop 68000
+        // ISR (0x120) checks OE and exits without reading data if it is set,
+        // so a sticky-forever OE would permanently silence the sound board.
+        m_uart_overrun = false;
+    }
     return status;
 }
 
