@@ -82,7 +82,7 @@ public:
 
     void run_frame() override {
         if (!m_input || !m_runtime.running()) return;
-        m_input->set_suppressed(m_gpu_renderer->settings_visible());
+        m_input->set_suppressed(m_gpu_renderer->input_suppressed());
         m_input->update();
         const input_state& state = m_input->state();
         whitty_xbox360_input input{};
@@ -154,7 +154,9 @@ private:
 // The module path below predates the native runtime and is kept only for the
 // title it was written for.
 bool served_by_native_runtime(xbox360_rom_set set) {
-    return set == xbox360_rom_set::geometry_wars;
+    return set == xbox360_rom_set::geometry_wars ||
+           set == xbox360_rom_set::geometry_wars_2 ||
+           set == xbox360_rom_set::space_giraffe;
 }
 
 // Routing decided by the ROM, not by the factory, because which runtime a title
@@ -200,6 +202,9 @@ public:
     }
     bool take_controls_request() override {
         return m_delegate && m_delegate->take_controls_request();
+    }
+    bool take_game_picker_request() override {
+        return m_delegate && m_delegate->take_game_picker_request();
     }
     void open_operator_settings() override {
         if (m_delegate) m_delegate->open_operator_settings();

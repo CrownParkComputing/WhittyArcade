@@ -6,6 +6,7 @@
 #include "sega/model2/model2_gpu_frame.h"
 #include "operator_menu.h"
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -43,19 +44,34 @@ public:
     void run_modal(std::function<void()> action);
     arcade_host_action process_events() const;
     bool settings_visible() const { return m_settings_visible.load(); }
+
+    // True when the board must ignore controls. Boards ask this rather than
+    // testing the settings menu directly, so what counts as "not now" is
+    // decided in one place instead of ten.
+    bool input_suppressed() const { return m_settings_visible.load(); }
+
+    // -1 until this arcade-wall column's keyboard focus changes; then 1 when
+    // it should be heard and 0 when it should not.
+    int wall_audible() const {
+        return m_wall_audible.load(std::memory_order_acquire);
+    }
     bool paused() const { return m_paused.load(); }
     void refresh_output();
     // Some cabinets expose exactly one video output. Keep the user's global
     // dual-screen preference intact while constraining only that session.
     void set_single_screen_only(bool enabled);
     void set_cabinet_status(std::string status);
+    void set_board_name(std::string short_name);
 
     void set_rom_choices(std::vector<rom_choice> choices);
     void set_operator_menu(operator_menu_definition menu);
     bool take_rom_selection(std::string& path);
     bool take_operator_action(operator_menu_action& action);
     bool take_controls_request();
+    bool take_game_picker_request();
     bool take_settings_change(emulator_settings& settings);
+    // Arcade wall: whether this column currently has keyboard focus and so
+    // should be the one you hear. -1 until the first focus event arrives.
     void set_lightgun_cursor(bool enabled, uint8_t player = 0);
 
     // Where the emulated picture was last drawn (drawable pixels, origin
@@ -124,6 +140,7 @@ private:
     std::deque<task> m_tasks;
     std::optional<rgba_frame> m_pending_rgba_frame;
     bool m_rgba_task_queued{};
+    std::atomic<int> m_wall_audible{-1};
     std::optional<model2_gpu_frame> m_pending_model2_frame;
     bool m_model2_task_queued{};
     std::atomic<bool> m_stop{false};
@@ -138,6 +155,7 @@ private:
     bool m_rom_pending{};
     std::deque<operator_menu_action> m_operator_actions;
     bool m_controls_pending{};
+    bool m_game_picker_pending{};
     bool m_settings_pending{};
     emulator_settings m_changed_settings{};
 

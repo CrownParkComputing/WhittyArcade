@@ -39,6 +39,9 @@ public:
     virtual bool take_rom_selection(std::string& path) = 0;
     virtual bool take_operator_settings_request() = 0;
     virtual bool take_controls_request() = 0;
+    // The player asked to switch games from inside a running cabinet; the
+    // host answers with the full library browser.
+    virtual bool take_game_picker_request() { return false; }
     virtual void open_operator_settings() = 0;
     virtual void reload_input_mappings() = 0;
     virtual bool take_settings_change(emulator_settings& settings) = 0;

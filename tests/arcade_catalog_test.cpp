@@ -102,7 +102,9 @@ int main() {
                       arcade_board_type::system246);
     for (xbox360_rom_set set : {
              xbox360_rom_set::robotron_2084,
-             xbox360_rom_set::geometry_wars})
+             xbox360_rom_set::geometry_wars,
+             xbox360_rom_set::geometry_wars_2,
+             xbox360_rom_set::space_giraffe})
         assert_registered(xbox360_rom_loader::set_short_name(set),
                           arcade_board_type::xbox360);
     for (model1_rom_set set : {

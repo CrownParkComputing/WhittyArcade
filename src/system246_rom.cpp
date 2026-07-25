@@ -292,6 +292,21 @@ system246_rom_set system246_rom_loader::identify_set(const std::string& path) {
         system246_rom_set::unknown;
 }
 
+bool system246_rom_loader::acgame_two_player(const std::string& short_name) {
+    // Seats two players on ONE board. The gun mappings in the arcade core
+    // settle which games those are: Vampire Night wires a second trigger and
+    // start, while Time Crisis 3 and 4 wire only player one - they are twin
+    // LINKED cabinets, a board and a gun per player, so they do not belong
+    // here. Listing them offered a two-player launch that could only ever
+    // have produced two separate one-player games.
+    static constexpr const char* two_player_games[] = {
+        "soulcal2", "tekken5", // two control panels on one board
+    };
+    for (const char* game : two_player_games)
+        if (short_name == game) return true;
+    return false;
+}
+
 std::string system246_rom_loader::acgame_short_name(const std::string& path) {
     if (path.empty()) return std::string();
     return acgame_game_key(fs::path(path));

@@ -59,6 +59,14 @@ if(NOT WIN32)
     set(WHITTY_MATH_LIB m)
 endif()
 
+# IGDB application credentials for cover artwork. Configure with
+#   -DWHITTY_IGDB_CLIENT_ID=... -DWHITTY_IGDB_CLIENT_SECRET=...
+# or leave empty to ship without keys; the matching WHITTY_IGDB_CLIENT_ID and
+# WHITTY_IGDB_CLIENT_SECRET environment variables override both for one run.
+# A build with no keys simply shows no cover art.
+set(WHITTY_IGDB_CLIENT_ID "" CACHE STRING "IGDB (Twitch) client id")
+set(WHITTY_IGDB_CLIENT_SECRET "" CACHE STRING "IGDB (Twitch) client secret")
+
 # Find required libraries
 find_package(OpenGL REQUIRED)
 find_package(SDL3 REQUIRED)
@@ -72,6 +80,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(MINIZIP REQUIRED IMPORTED_TARGET minizip)
 pkg_check_modules(SDL3_TTF REQUIRED IMPORTED_TARGET sdl3-ttf)
 pkg_check_modules(MPG123 REQUIRED IMPORTED_TARGET libmpg123)
+pkg_check_modules(CURL IMPORTED_TARGET libcurl)
 
 # FindGLEW can be backed by either CMake's module or a distribution-provided
 # config package. Prefer its imported target because openSUSE's config does
@@ -277,6 +286,14 @@ target_compile_options(arcade_audio_output PRIVATE
 # Source files
 set(SOURCES
     src/main.cpp
+    src/play_stats.cpp
+    src/banner_library.cpp
+    src/system16_data.cpp
+    src/bezel_artwork.cpp
+    src/igdb_artwork.cpp
+    src/igdb_cover_library.cpp
+    src/bezel_library.cpp
+    src/stb_image_impl.cpp
     src/arcade_session.cpp
     src/namco/system22/system22_session.cpp
     src/sega/model1/model1_session.cpp
@@ -360,14 +377,64 @@ else()
     list(APPEND SOURCES src/platform_file_dialog_unix.cpp)
 endif()
 
+# Vulkan shaders. Each GLSL stage is compiled to SPIR-V and emitted as a C
+# header holding a uint32_t array, so the binary carries its own shaders and
+# there is no runtime file lookup or GLSL compiler dependency. Vulkan::glslangValidator
+# ships with the Vulkan SDK; glslc (shaderc) is accepted as an alternative.
+# glslangValidator's --vn emits a named uint32_t array, which is what the
+# sources #include. shaderc's glslc has no equivalent, so it is not offered as
+# a fallback: a build that silently produced headerless SPIR-V would fail at
+# the first #include instead of here.
+if(TARGET Vulkan::glslangValidator)
+    set(WHITTY_GLSL_COMPILER $<TARGET_FILE:Vulkan::glslangValidator>)
+else()
+    find_program(WHITTY_GLSLANG_EXECUTABLE glslangValidator)
+    if(NOT WHITTY_GLSLANG_EXECUTABLE)
+        message(FATAL_ERROR
+            "glslangValidator not found. Install glslang to build the Vulkan "
+            "shaders.")
+    endif()
+    set(WHITTY_GLSL_COMPILER ${WHITTY_GLSLANG_EXECUTABLE})
+endif()
+
+set(WHITTY_SHADER_HEADER_DIR ${CMAKE_BINARY_DIR}/generated/shaders)
+file(MAKE_DIRECTORY ${WHITTY_SHADER_HEADER_DIR})
+set(WHITTY_SHADER_HEADERS "")
+foreach(shader
+        arcade_post.vert arcade_post.frag
+        arcade_overlay.vert arcade_overlay.frag
+        arcade_solid.frag
+        system22_polygon.vert system22_polygon.frag
+        fullscreen_quad.vert system22_text.frag
+        model2_polygon.vert model2_polygon.frag model2_overlay.frag)
+    string(REPLACE "." "_" shader_symbol ${shader})
+    set(shader_source ${CMAKE_SOURCE_DIR}/shaders/${shader})
+    set(shader_header ${WHITTY_SHADER_HEADER_DIR}/${shader_symbol}.h)
+    set(shader_command ${WHITTY_GLSL_COMPILER}
+        --target-env vulkan1.0 --vn ${shader_symbol}_spirv
+        -o ${shader_header} ${shader_source})
+    add_custom_command(
+        OUTPUT ${shader_header}
+        COMMAND ${shader_command}
+        DEPENDS ${shader_source}
+        COMMENT "Compiling ${shader} to SPIR-V"
+        VERBATIM)
+    list(APPEND WHITTY_SHADER_HEADERS ${shader_header})
+endforeach()
+add_custom_target(whitty_shaders DEPENDS ${WHITTY_SHADER_HEADERS})
+
 # Build executable
 if(WIN32)
     add_executable(WhittyArcade WIN32 ${SOURCES})
 else()
     add_executable(WhittyArcade ${SOURCES})
 endif()
+add_dependencies(WhittyArcade whitty_shaders)
+target_include_directories(WhittyArcade PRIVATE ${WHITTY_SHADER_HEADER_DIR})
 target_include_directories(WhittyArcade PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party/stb
+    ${CMAKE_SOURCE_DIR}/third_party/json
     ${CMAKE_SOURCE_DIR}/third_party/moira/Moira)
 
 # Link libraries
@@ -402,6 +469,20 @@ target_link_libraries(WhittyArcade
     ${WHITTY_MATH_LIB}
     ${CMAKE_DL_LIBS}
 )
+# Cabinet bezels are fetched over HTTP when libcurl is available; without it
+# the bezel library reports itself unconfigured and no bezel ever appears.
+if(TARGET PkgConfig::CURL)
+    target_link_libraries(WhittyArcade PRIVATE PkgConfig::CURL)
+    target_compile_definitions(WhittyArcade PRIVATE WHITTY_HAVE_CURL)
+endif()
+
+# Cover artwork needs libcurl too, and the credentials configured above.
+if(TARGET PkgConfig::CURL)
+    target_compile_definitions(WhittyArcade PRIVATE
+        WHITTY_IGDB_CLIENT_ID="${WHITTY_IGDB_CLIENT_ID}"
+        WHITTY_IGDB_CLIENT_SECRET="${WHITTY_IGDB_CLIENT_SECRET}")
+endif()
+
 if(WIN32)
     target_link_libraries(WhittyArcade PRIVATE ole32 shell32 uuid ws2_32)
 endif()
@@ -462,6 +543,73 @@ add_executable(arcade_settings_test
 target_include_directories(arcade_settings_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(arcade_settings_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME arcade_settings_test COMMAND arcade_settings_test)
+
+# Renders the Vulkan presentation shaders into an offscreen image and checks
+# the pixels. Needs a Vulkan device; it skips cleanly when there is none.
+add_executable(vulkan_post_pipeline_test tests/vulkan_post_pipeline_test.cpp)
+add_dependencies(vulkan_post_pipeline_test whitty_shaders)
+target_include_directories(vulkan_post_pipeline_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${WHITTY_SHADER_HEADER_DIR})
+target_link_libraries(vulkan_post_pipeline_test PRIVATE Vulkan::Vulkan)
+target_compile_options(vulkan_post_pipeline_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME vulkan_post_pipeline_test COMMAND vulkan_post_pipeline_test)
+
+# Drives the real presenter through a System 22 frame under the Vulkan
+# validation layers. Opens a window, so it is not wired into ctest; run it
+# directly with WHITTY_PRESENTER_HARNESS=1.
+add_executable(vulkan_presenter_harness
+    tests/vulkan_presenter_harness.cpp
+    src/arcade_presenter.cpp
+    src/arcade_settings.cpp
+    src/namco/system22/system22_rom.cpp
+)
+add_dependencies(vulkan_presenter_harness whitty_shaders)
+target_include_directories(vulkan_presenter_harness PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src
+    ${WHITTY_SHADER_HEADER_DIR})
+target_link_libraries(vulkan_presenter_harness PRIVATE SDL3::SDL3
+    Vulkan::Vulkan PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(vulkan_presenter_harness PRIVATE -Wall -Wextra)
+
+add_executable(igdb_artwork_test
+    tests/igdb_artwork_test.cpp
+    src/igdb_artwork.cpp
+    src/igdb_cover_library.cpp
+)
+target_include_directories(igdb_artwork_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/third_party/json)
+target_compile_options(igdb_artwork_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME igdb_artwork_test COMMAND igdb_artwork_test)
+
+add_executable(wall_workspace_test
+    tests/wall_workspace_test.cpp
+)
+target_include_directories(wall_workspace_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(wall_workspace_test PRIVATE SDL3::SDL3)
+target_compile_options(wall_workspace_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME wall_workspace_test COMMAND wall_workspace_test)
+
+add_executable(menu_stick_test
+    tests/menu_stick_test.cpp
+)
+target_include_directories(menu_stick_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(menu_stick_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME menu_stick_test COMMAND menu_stick_test)
+
+add_executable(wall_layout_test
+    tests/wall_layout_test.cpp
+)
+target_include_directories(wall_layout_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(wall_layout_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME wall_layout_test COMMAND wall_layout_test)
+
+add_executable(bezel_artwork_test
+    tests/bezel_artwork_test.cpp
+    src/bezel_artwork.cpp
+)
+target_include_directories(bezel_artwork_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(bezel_artwork_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME bezel_artwork_test COMMAND bezel_artwork_test)
 
 add_executable(arcade_lifecycle_test tests/arcade_lifecycle_test.cpp)
 target_include_directories(arcade_lifecycle_test PRIVATE

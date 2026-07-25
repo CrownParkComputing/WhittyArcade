@@ -1,16 +1,22 @@
 // WhittyArcade application shell. Board implementations live in
 // arcade_session.cpp and are selected through the canonical catalog.
 
+#include "arcade_audio_output.h"
 #include "arcade_catalog.h"
 #include "arcade_frontend.h"
 #include "arcade_input.h"
 #include "arcade_session.h"
 #include "arcade_video_worker.h"
+#include "twin_window_layout.h"
+#include "wall_log.h"
+
+#include <SDL3/SDL.h>
 #include "input_mapper.h"
 #include "launcher_menu.h"
 #include "multiplayer_lobby.h"
 #include "namco/system22/system22_c139_transport.h"
 #include "namco/system22/system22_cpu.h"
+#include "play_stats.h"
 #include "rom_library.h"
 
 #if defined(_WIN32)
@@ -44,12 +50,19 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// Three columns is the practical ceiling: each still gets a third of the
+// display wide enough to watch, and each is a whole emulated board.
+constexpr int max_wall_columns = 3;
+
 struct runtime_options {
     int cabinet_node{};
+    int wall_slot{};
+    int wall_count{};
     uint16_t pair_port_base{35112};
     bool independent_pair{};
     bool twin_screen{};
     bool network_pair{};
+    bool twin_one_screen{};
     std::vector<std::string> positional;
 };
 
@@ -79,20 +92,161 @@ runtime_options parse_runtime_options(int argc, char* argv[]) {
             const int value = std::atoi(argv[++index]);
             if (value > 1024 && value < 65535)
                 options.pair_port_base = static_cast<uint16_t>(value);
+        } else if (argument == "--wall-slot" && index + 1 < argc) {
+            options.wall_slot = std::atoi(argv[++index]);
+        } else if (argument == "--wall-count" && index + 1 < argc) {
+            options.wall_count = std::atoi(argv[++index]);
         } else if (argument == "--independent-cabinet") {
             options.independent_pair = true;
         } else if (argument == "--twin-screen") {
             options.twin_screen = true;
         } else if (argument == "--network-cabinet") {
             options.network_pair = true;
+        } else if (argument == "--twin-one-screen") {
+            options.twin_one_screen = true;
         } else {
             options.positional.emplace_back(argument);
         }
     }
     if (options.cabinet_node != 1 && options.cabinet_node != 2)
         options.cabinet_node = 0;
+    // A wall is 2 or 3 columns; anything else means no wall, and a column
+    // outside that range would be placed off the side of the display.
+    if (options.wall_count < 2 || options.wall_count > max_wall_columns) {
+        options.wall_count = 0;
+        options.wall_slot = 0;
+    }
+    options.wall_slot =
+        std::clamp(options.wall_slot, 0, std::max(options.wall_count - 1, 0));
     return options;
 }
+
+// Process handling shared by the linked-cabinet companion and the arcade
+// wall columns. Both spawn the same executable with different arguments and
+// both need the same graceful shutdown, which the wall previously skipped.
+#if defined(_WIN32)
+using child_handle = intptr_t;
+constexpr child_handle no_child = -1;
+#else
+using child_handle = pid_t;
+constexpr child_handle no_child = -1;
+#endif
+
+child_handle spawn_child(const std::string& executable,
+                         std::vector<std::string>& arguments) {
+    std::vector<char*> native;
+    native.reserve(arguments.size() + 1);
+    for (std::string& argument : arguments)
+        native.push_back(argument.data());
+    native.push_back(nullptr);
+#if defined(_WIN32)
+    return _spawnv(_P_NOWAIT, executable.c_str(), native.data());
+#else
+    const pid_t child = fork();
+    if (child == 0) {
+        execvp(executable.c_str(), native.data());
+        std::_Exit(127);
+    }
+    return child;
+#endif
+}
+
+// Asks the child to exit, then insists. Returns once it is gone.
+void terminate_child(child_handle child) {
+    if (child == no_child) return;
+#if defined(_WIN32)
+    HANDLE handle = reinterpret_cast<HANDLE>(child);
+    TerminateProcess(handle, 0);
+    WaitForSingleObject(handle, 2000);
+    CloseHandle(handle);
+#else
+    int status = 0;
+    if (waitpid(child, &status, WNOHANG) == child) return;
+    kill(child, SIGTERM);
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        if (waitpid(child, &status, WNOHANG) == child) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    kill(child, SIGKILL);
+    waitpid(child, &status, 0);
+#endif
+}
+
+// Spawns the other columns of an arcade wall, one process per game, each
+// placed over its own third of the display.
+//
+// A process apiece rather than panes of one window, because a column is a
+// whole board: its own texture sheets, palettes, vertex buffers and audio
+// device. Three of those cannot share one renderer - they would overwrite
+// each other's every frame - and the isolation a process gives is exactly
+// what makes three Model 2 games side by side possible at all.
+class wall_companions {
+public:
+    ~wall_companions() { stop(); }
+
+    bool start(const std::string& executable,
+               const std::vector<std::string>& rom_paths) {
+        stop();
+        const std::size_t columns =
+            std::min<std::size_t>(rom_paths.size(), max_wall_columns);
+        // A wall covers the display, so give it a workspace of its own where
+        // one is free rather than burying whatever the user had open. Chosen
+        // once, here, and inherited by every column: each choosing for itself
+        // would race, since the first window to land makes that workspace no
+        // longer spare.
+        // A new wall starts with no cabinet claimed, so it opens in equal
+        // columns rather than inheriting whichever one was played last time.
+        whitty_wall_log::begin(0, static_cast<int>(columns));
+        whitty_wall_log::note("wall of %zu columns, this process is column 0",
+                              columns);
+        whitty_window::forget_wall_focus();
+        // Before any column exists, so the first one is never tiled even
+        // briefly.
+        whitty_window::register_wall_window_rules();
+        m_workspace = whitty_window::find_spare_workspace();
+        if (m_workspace > 0)
+            set_environment("WHITTY_WALL_WORKSPACE",
+                            std::to_string(m_workspace));
+        for (std::size_t index = 1; index < columns; ++index) {
+            std::vector<std::string> arguments{
+                executable,
+                "--wall-slot", std::to_string(index),
+                "--wall-count", std::to_string(columns),
+                rom_paths[index],
+            };
+            const child_handle child = spawn_child(executable, arguments);
+            if (child == no_child || child < 0) {
+                std::fprintf(stderr,
+                             "Could not start arcade wall column %zu (%s)\n",
+                             index, rom_paths[index].c_str());
+                whitty_wall_log::note("column %zu FAILED TO SPAWN (%s)",
+                                      index, rom_paths[index].c_str());
+                continue;
+            }
+            whitty_wall_log::note("spawned column %zu pid %d (%s)", index,
+                                  static_cast<int>(child),
+                                  rom_paths[index].c_str());
+            m_children.push_back(child);
+        }
+        return !m_children.empty();
+    }
+
+    void stop() {
+        for (child_handle child : m_children) terminate_child(child);
+        m_children.clear();
+        whitty_window::forget_wall_focus();
+        if (m_workspace > 0) unset_environment("WHITTY_WALL_WORKSPACE");
+        m_workspace = 0;
+    }
+
+    // Brings the user to the wall once every column has been sent there, so
+    // the desktop does not flick between workspaces as each one starts.
+    void show() const { whitty_window::show_workspace(m_workspace); }
+
+private:
+    std::vector<child_handle> m_children;
+    int m_workspace{0};
+};
 
 void configure_cabinet_environment(int node, uint16_t port_base,
                                    bool linked_model2,
@@ -188,7 +342,8 @@ public:
 
     bool start(const std::string& executable, const std::string& rom_path,
                const std::string& bios_path, bool explicit_bios_path,
-               uint16_t port_base, bool independent_pair) {
+               uint16_t port_base, bool independent_pair,
+               bool one_screen = false) {
         stop();
         std::vector<std::string> arguments{
             executable,
@@ -197,60 +352,24 @@ public:
         };
         if (independent_pair)
             arguments.emplace_back("--independent-cabinet");
+        // The second cabinet loads settings.ini for itself, so the shared-
+        // display choice has to travel on the command line.
+        if (one_screen) arguments.emplace_back("--twin-one-screen");
         arguments.push_back(rom_path);
         if (explicit_bios_path) arguments.push_back(bios_path);
-        std::vector<char*> native_arguments;
-        native_arguments.reserve(arguments.size() + 1);
-        for (std::string& argument : arguments)
-            native_arguments.push_back(argument.data());
-        native_arguments.push_back(nullptr);
-#if defined(_WIN32)
-        m_process = _spawnv(_P_NOWAIT, executable.c_str(),
-                            native_arguments.data());
-        return m_process != -1;
-#else
-        const pid_t child = fork();
-        if (child < 0) return false;
-        if (child == 0) {
-            execvp(executable.c_str(), native_arguments.data());
-            std::_Exit(127);
-        }
-        m_process = child;
-        return true;
-#endif
+        m_process = spawn_child(executable, arguments);
+        return m_process != no_child && m_process >= 0;
     }
 
     void stop() {
-        if (m_process == -1) return;
-#if defined(_WIN32)
-        HANDLE handle = reinterpret_cast<HANDLE>(m_process);
-        TerminateProcess(handle, 0);
-        WaitForSingleObject(handle, 2000);
-        CloseHandle(handle);
-#else
-        const pid_t child = static_cast<pid_t>(m_process);
-        int status = 0;
-        const pid_t ended = waitpid(child, &status, WNOHANG);
-        if (ended == 0) {
-            kill(child, SIGTERM);
-            for (int attempt = 0; attempt < 20; ++attempt) {
-                if (waitpid(child, &status, WNOHANG) == child) {
-                    m_process = -1;
-                    return;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            }
-            kill(child, SIGKILL);
-            waitpid(child, &status, 0);
-        }
-#endif
-        m_process = -1;
+        terminate_child(m_process);
+        m_process = no_child;
     }
 
-    bool running() const { return m_process != -1; }
+    bool running() const { return m_process != no_child; }
 
 private:
-    std::intptr_t m_process{-1};
+    child_handle m_process{no_child};
 };
 
 int run_video_lifecycle_test() {
@@ -478,6 +597,39 @@ int main(int argc, char* argv[]) {
                     cabinet_launch_mode::linked_pair)) :
             cabinet_launch_mode::single);
     int cabinet_node = runtime.cabinet_node;
+    bool one_screen_pair = runtime.twin_one_screen;
+    wall_companions wall;
+    int wall_audible_applied = -1;
+    settings.wall_slot = runtime.wall_slot;
+    settings.wall_count = runtime.wall_count;
+    whitty_wall_log::begin(runtime.wall_slot, runtime.wall_count);
+    if (runtime.wall_count > 1)
+        whitty_wall_log::note("spawned column, rom=%s pid=%d ppid=%d",
+                              runtime.positional.empty()
+                                  ? "(none)"
+                                  : runtime.positional.front().c_str(),
+                              static_cast<int>(getpid()),
+                              static_cast<int>(getppid()));
+#if defined(__linux__)
+    // SDL turns SIGINT/SIGTERM into SDL_EVENT_QUIT, which is how a wall
+    // column that is signalled looks exactly like one the user closed. Taking
+    // the signals first records who sent it, then does what SDL would have.
+    if (runtime.wall_count > 1) {
+        SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+        struct sigaction action {};
+        action.sa_flags = SA_SIGINFO;
+        action.sa_sigaction = [](int number, siginfo_t* info, void*) {
+            whitty_wall_log::note("SIGNAL %d from pid %d uid %d", number,
+                                  info ? static_cast<int>(info->si_pid) : -1,
+                                  info ? static_cast<int>(info->si_uid) : -1);
+            std::_Exit(0);
+        };
+        sigemptyset(&action.sa_mask);
+        sigaction(SIGTERM, &action, nullptr);
+        sigaction(SIGINT, &action, nullptr);
+        sigaction(SIGHUP, &action, nullptr);
+    }
+#endif
     uint16_t pair_port_base = runtime.pair_port_base;
     bool restart = true;
     bool startup_menu = runtime.positional.empty();
@@ -500,21 +652,30 @@ int main(int argc, char* argv[]) {
                 rom_path = std::move(selection.path);
                 launch_mode = selection.launch_mode;
                 cabinet_node = selection.cabinet_node;
-                if (selection.fullscreen_override >= 0)
-                    settings.fullscreen =
-                        selection.fullscreen_override != 0;
-                // A linked-cabinet launch (either via the menu's "Two
-                // Windows" path or via --network-cabinet) must open two
-                // windows side-by-side, never a single fullscreen
-                // surface. Force windowed here so a stale
-                // fullscreen=1 in settings.ini cannot override the
-                // user's intent.
-                if (launch_mode == cabinet_launch_mode::linked_pair ||
-                    launch_mode == cabinet_launch_mode::linked_network) {
-                    settings.fullscreen = false;
-                }
                 settings.twin_separate_monitors =
                     selection.twin_separate_monitors;
+                one_screen_pair = selection.twin_one_screen;
+                // An arcade wall runs a different game per column. This
+                // process takes column 0 and spawns one plain single-cabinet
+                // launch per remaining column; nothing is shared between
+                // them, so they need no link, port or node.
+                // An arcade wall runs a different game per column. This
+                // process takes column 0 and spawns one plain single-cabinet
+                // launch per remaining column; nothing is shared between
+                // them, so they need no link, port or node.
+                if (selection.wall_games.size() > 1) {
+                    settings.wall_count = static_cast<int>(
+                        std::min<std::size_t>(selection.wall_games.size(),
+                                              max_wall_columns));
+                    settings.wall_slot = 0;
+                    rom_path = selection.wall_games[0];
+                    wall.start(argv[0], selection.wall_games);
+                    // Every column has been told where to go; bring the user
+                    // there once rather than following each one as it starts.
+                    wall.show();
+                    if (!explicit_bios_path)
+                        bios_path = fs::path(rom_path).parent_path().string();
+                }
                 if (launch_mode == cabinet_launch_mode::linked_network)
                     pair_port_base = 35112;
                 if (!explicit_bios_path)
@@ -525,6 +686,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        whitty_wall_log::note("identifying %s", rom_path.c_str());
         const std::optional<arcade_game_identity> identity =
             identify_arcade_game(rom_path);
         if (!identity) {
@@ -569,7 +731,7 @@ int main(int argc, char* argv[]) {
             pair_port_base = choose_pair_port_base();
             if (!companion.start(argv[0], rom_path, bios_path,
                                  explicit_bios_path, pair_port_base,
-                                 false)) {
+                                 false, one_screen_pair)) {
                 std::fprintf(stderr,
                              "Could not start the second cabinet process (execv"
                              "p failed). WhittyArcade was launched as \"%s\". "
@@ -577,6 +739,7 @@ int main(int argc, char* argv[]) {
                              "use an absolute path (e.g. ./WhittyArcade).\n",
                              argv[0] ? argv[0] : "(null)");
                 launch_mode = cabinet_launch_mode::single;
+                one_screen_pair = false;
             } else {
                 cabinet_node = 1;
             }
@@ -595,6 +758,35 @@ int main(int argc, char* argv[]) {
         settings.output =
             launch_mode == cabinet_launch_mode::independent_pair ?
                 output_mode::dual : output_mode::single;
+        // Fullscreen is decided by the launch, not by settings.ini: the only
+        // session that needs the whole screen is a twin/two-player one
+        // sharing a single desktop, where the surface is split into two
+        // side-by-side panes and a window's worth of space would halve each
+        // player's view. Everything else starts windowed, including a
+        // system-linked pair - those are two separate processes each showing
+        // one player's own cabinet, so each counts as a single-screen
+        // launch. Forcing the value here also stops a fullscreen=1 left
+        // behind by the in-game toggle from carrying into the next launch.
+        // The only launch that needs the whole screen is a twin/two-player
+        // one sharing a single desktop, where the surface is split into two
+        // side-by-side panes. A wall column is deliberately not fullscreen:
+        // it is one of several windows tiled across the display, and a
+        // fullscreen window would cover the columns beside it.
+        settings.fullscreen =
+            launch_mode == cabinet_launch_mode::independent_pair &&
+            settings.wall_count <= 1;
+        // Escape hatch for bring-up: a windowed presenter window starts
+        // hidden and is only shown after its first successful present, so a
+        // presentation fault and a window that never appears look the same.
+        // Forcing fullscreen maps the window up front and tells the two
+        // apart.
+        if (const char* force = std::getenv("WHITTY_FORCE_FULLSCREEN"))
+            if (*force == '1' && settings.wall_count <= 1)
+                settings.fullscreen = true;
+        // Two linked cabinets sharing one display, half the desktop each.
+        settings.twin_one_screen = one_screen_pair &&
+            (launch_mode == cabinet_launch_mode::linked_pair ||
+             launch_mode == cabinet_launch_mode::linked_network);
         if (cabinet_node) {
             // linked_network spreads the two cabinets across different
             // physical displays (cabinet 1 → display 0, cabinet 2 →
@@ -604,9 +796,18 @@ int main(int argc, char* argv[]) {
             // code pinned both to display 0, which made the two
             // processes stack on top of each other on a single-screen
             // setup.
-            settings.display_index = cabinet_node - 1;
-            std::printf("Starting cabinet %d on display %d\n",
-                        cabinet_node, settings.display_index + 1);
+            // One Screen instead keeps both cabinets on display 0 and lets
+            // the half-desktop placement separate them.
+            settings.display_index =
+                settings.twin_one_screen ? 0 : cabinet_node - 1;
+            if (settings.twin_one_screen) {
+                std::printf("Starting cabinet %d on the %s half of display 1\n",
+                            cabinet_node,
+                            cabinet_node == 1 ? "left" : "right");
+            } else {
+                std::printf("Starting cabinet %d on display %d\n",
+                            cabinet_node, settings.display_index + 1);
+            }
         } else {
             settings.display_index = -1;
         }
@@ -624,7 +825,13 @@ int main(int argc, char* argv[]) {
         }
         std::unique_ptr<emulator_session> emu = create_emulator_session(
             identity->board, shared_video, cabinet_state);
-        if (!emu->initialize(rom_path, bios_path, session_settings)) return 1;
+        whitty_wall_log::note("initialising board for %s",
+                              identity->short_name.c_str());
+        if (!emu->initialize(rom_path, bios_path, session_settings)) {
+            whitty_wall_log::note("initialise FAILED");
+            return 1;
+        }
+        whitty_wall_log::note("board running");
         if (launch_mode == cabinet_launch_mode::independent_pair) {
             shared_video->set_cabinet_status(
                 "TWIN SCREEN  |  PLAYER 1 + PLAYER 2");
@@ -640,7 +847,14 @@ int main(int argc, char* argv[]) {
                                 discover_rom_choices(rom_path);
         emu->set_rom_choices(installed_games);
         const std::string current_game_short_name(identity->short_name);
+        // Names the board so its cabinet bezel can be fetched in the
+        // background. Decoration only: the launch never waits on it.
+        shared_video->set_board_name(current_game_short_name);
+        // Feeds the launcher's Most Played view. After initialize succeeds,
+        // so an unbootable set is never counted as a play.
+        record_play(current_game_short_name);
 
+        long long wall_frames = 0;
         auto deadline = std::chrono::steady_clock::now();
         arcade_host_action host_action =
             arcade_host_action::continue_running;
@@ -713,10 +927,51 @@ int main(int argc, char* argv[]) {
                 deadline = std::chrono::steady_clock::now();
             }
 
+            // Arcade wall: only the focused column is heard. Its volume
+            // tracks focus rather than being saved, so leaving the wall
+            // restores whatever the user actually configured.
+            if (settings.wall_count > 1) {
+                const int audible = shared_video->wall_audible();
+                if (audible >= 0 && audible != wall_audible_applied) {
+                    wall_audible_applied = audible;
+                    arcade_audio_output::set_output_muted(audible == 0);
+                }
+            }
+
             if (emu->take_settings_change(settings) &&
                 cabinet_node != 2 && !save_settings(settings)) {
                 std::fprintf(stderr, "Could not save settings to %s\n",
                              settings_path().c_str());
+            }
+
+            // In-game game switch: the full library browser over the
+            // paused cabinet. A choice reloads this process's board in
+            // place - a wall column swaps its game while the other columns
+            // keep running.
+            if (emu->take_game_picker_request()) {
+                const bool was_paused = emu->paused();
+                emu->set_paused(true);
+                std::string switched;
+                shared_video->run_modal([&installed_games, &switched] {
+                    switched = show_in_game_game_browser(installed_games);
+                });
+                if (!switched.empty()) {
+                    std::printf("Switching ROM board to: %s\n",
+                                switched.c_str());
+                    rom_path = std::move(switched);
+                    if (!explicit_bios_path)
+                        bios_path =
+                            fs::path(rom_path).parent_path().string();
+                    restart = true;
+                    if (companion.running()) {
+                        companion.stop();
+                        cabinet_node = 0;
+                    }
+                    break;
+                }
+                emu->set_paused(was_paused);
+                emu->refresh_output();
+                deadline = std::chrono::steady_clock::now();
             }
 
             std::string selected_rom;
@@ -734,6 +989,8 @@ int main(int argc, char* argv[]) {
                 break;
             }
 
+            if (++wall_frames <= 3 || wall_frames % 600 == 0)
+                whitty_wall_log::note("frame %lld", wall_frames);
             const bool paused = emu->paused();
             emu->set_paused(paused);
             if (paused)
@@ -765,6 +1022,8 @@ int main(int argc, char* argv[]) {
             std::this_thread::sleep_until(deadline);
         }
 
+        whitty_wall_log::note("event loop ended, action=%d",
+                              static_cast<int>(host_action));
         if (host_action == arcade_host_action::return_to_menu) {
             if (cabinet_node == 2 &&
                 launch_mode != cabinet_launch_mode::linked_network)
@@ -775,6 +1034,10 @@ int main(int argc, char* argv[]) {
             emu.reset();
             shared_video->shutdown();
             companion.stop();
+            wall.stop();
+            arcade_audio_output::set_output_muted(false);
+            settings.wall_count = 0;
+            settings.wall_slot = 0;
             cabinet_node = 0;
             launch_mode = cabinet_launch_mode::single;
             configure_cabinet_environment(0, pair_port_base, false);

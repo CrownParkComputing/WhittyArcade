@@ -445,6 +445,40 @@ std::string high_score_root_path() {
     return score_root().string();
 }
 
+bool has_high_score_decoder(const std::string& short_name) {
+    return find_spec(short_name) != nullptr;
+}
+
+bool high_score_view(const std::string& short_name, high_score_table& table,
+                     std::string& message) {
+    const score_spec* spec = find_spec(short_name);
+    if (!spec) {
+        message = "No verified high-score decoder is available for this game "
+                  "yet.";
+        return false;
+    }
+    fs::path source;
+    std::vector<std::uint8_t> bytes;
+    if (!locate_score_file(short_name, source, bytes)) {
+        message = std::string("No saved score table yet. Play ") +
+                  spec->game_name +
+                  " once and the board's own table appears here; existing "
+                  "MAME .hi files are picked up automatically.";
+        return false;
+    }
+    std::string error;
+    if (!decode_high_score_table(short_name, bytes, table, &error)) {
+        message = "The saved score file could not be decoded safely.\n" +
+                  error;
+        return false;
+    }
+    return true;
+}
+
+std::string format_high_score(std::uint64_t score) {
+    return format_score(score);
+}
+
 std::string high_score_report(const std::string& short_name) {
     const score_spec* spec = find_spec(short_name);
     if (!spec)

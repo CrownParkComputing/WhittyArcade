@@ -43,6 +43,15 @@ struct emulator_settings {
     // Runtime-only Twin Screen placement. When true, the primary and mirror
     // windows are explicitly centred on physical displays 0 and 1.
     bool twin_separate_monitors{false};
+    // Runtime-only linked-cabinet placement. When true the two cabinet
+    // processes share one desktop, each taking its own half, so a twin link
+    // reads as a single side-by-side cabinet on one screen.
+    bool twin_one_screen{false};
+    // Runtime-only arcade wall placement: this process owns column wall_slot
+    // of wall_count equal columns across the primary display, each running a
+    // different game. wall_count of 0 means the wall is not in use.
+    int wall_slot{};
+    int wall_count{};
 };
 
 const char* renderer_backend_name(renderer_backend backend);

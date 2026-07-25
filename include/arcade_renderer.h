@@ -3,6 +3,8 @@
 #pragma once
 
 #include "namco/system22/system22_types.h"
+#include "arcade_presenter.h"
+#include "bezel_library.h"
 #include "arcade_settings.h"
 #include "sega/model2/model2_gpu_frame.h"
 #include "operator_menu.h"
@@ -96,6 +98,12 @@ private:
     // composite this after scaling the native arcade framebuffer, otherwise
     // a 20 px label on a 224-line game becomes enormous in the host window.
     std::vector<uint8_t> m_fps_pixels;
+    // Host copies of the composited panels for the Vulkan overlay pipeline,
+    // plus a single transparent texel used to clear a slot that should no
+    // longer be shown.
+    std::vector<uint8_t> m_settings_pixels;
+    std::array<std::vector<uint8_t>, 2> m_player_label_pixels;
+    std::array<uint8_t, 4> m_blank_overlay{};
     TTF_Font* m_settings_font{nullptr};
     int m_fps_texture_width{0};
     int m_fps_texture_height{0};
@@ -145,8 +153,30 @@ private:
     // Thread synchronization
     std::atomic<int> m_pending_polygons{0};
     bool m_headless{false};
+    // True while the Vulkan native path owns the visible frame, so a redraw
+    // must come from its resident image rather than a stale OpenGL texture.
+    bool m_native_frame_live{false};
+    // Arcade wall: whether this column currently holds keyboard focus, and
+    // whether that has changed since the host last asked.
+    bool m_wall_column_active{true};
+    bool m_wall_audio_changed{false};
+    bool m_native_decline_reported{false};
+    // Cabinet bezel for the running board. Fetched in the
+    // background; absent until it arrives, and absent forever
+    // for a board The Bezel Project never published.
+    // GL-window wall placement, used after a device-loss failover.
+    bool m_gl_wall_placed{};
+    int m_gl_wall_countdown{};
+    int m_gl_wall_focus{-2};
+    int m_gl_wall_x{}, m_gl_wall_width{}, m_gl_wall_height{};
+    bezel::library m_bezels;
+    std::string m_bezel_board;
+    std::vector<uint8_t> m_bezel_pixels;
+    // Arcade wall: whether this column currently holds keyboard focus, and a
+    // one-shot flag telling the host loop to apply the resulting volume.
     bool m_initialized{false};
     bool m_controls_requested{false};
+    bool m_game_picker_requested{false};
     bool m_settings_visible{false};
     bool m_settings_changed{false};
     bool m_paused{false};
@@ -229,11 +259,16 @@ public:
     void reset_session_ui();
     void set_single_screen_only(bool enabled);
     void set_cabinet_status(std::string status);
+    // Names the running board so its cabinet bezel can be
+    // fetched. Safe to call on every launch; a name already
+    // looked up costs nothing.
+    void set_board_name(std::string short_name);
     void set_rom_choices(std::vector<rom_choice> choices);
     void set_operator_menu(operator_menu_definition menu);
     bool take_rom_selection(std::string& path);
     bool take_operator_action(operator_menu_action& action);
     bool take_controls_request();
+    bool take_game_picker_request();
     bool take_settings_change(emulator_settings& settings);
     void set_lightgun_cursor(bool enabled, uint8_t player = 0);
 
@@ -264,6 +299,34 @@ public:
     bool settings_visible() const { return m_settings_visible; }
     bool paused() const { return m_paused; }
     void refresh_output();
+    bool tick_status_overlay();
+    void poll_bezel();
+    void recover_from_device_loss();
+    void maintain_gl_wall_placement();
+    // Whether the OpenGL textures still have to be kept warm.
+    // False once the native path owns the frame, which lets the
+    // per-frame uploads skip their OpenGL half. Only data the
+    // board resubmits every frame may use this: a decline then
+    // repopulates within one frame, whereas one-shot ROM data
+    // would have no second chance.
+    bool opengl_textures_needed() const {
+        return !m_native_frame_live;
+    }
+    // Consumes a pending arcade-wall focus change, reporting whether this
+    // column should currently be audible. Wall columns are separate windows,
+    // so SDL's focus events are all the coordination they need.
+    bool take_wall_audio_change(bool& audible) {
+        if (!m_wall_audio_changed) return false;
+        m_wall_audio_changed = false;
+        audible = m_wall_column_active;
+        return true;
+    }
+    bool present_native_scene(bool rasterised, const char* board,
+                              int width, int height);
+    board_overlays collect_board_overlays();
+    system22_uniform_block build_system22_uniforms(
+        const view_matrix& view) const;
+    system22_text_uniform_block build_system22_text_uniforms() const;
     void apply_display_settings(const emulator_settings& settings);
 
     // Add polygons to render queue (CPU side)

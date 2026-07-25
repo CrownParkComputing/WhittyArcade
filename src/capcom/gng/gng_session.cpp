@@ -58,7 +58,7 @@ public:
     }
 
     void run_frame() override {
-        m_input->set_suppressed(m_gpu_renderer->settings_visible());
+        m_input->set_suppressed(m_gpu_renderer->input_suppressed());
         m_input->update();
         apply_inputs(m_input->state());
         m_machine->run_frame();

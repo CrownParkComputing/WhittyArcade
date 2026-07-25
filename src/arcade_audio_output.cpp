@@ -1,6 +1,7 @@
 #include "arcade_audio_output.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -17,8 +18,14 @@ constexpr double silence_gate_rms = 64.0;
 constexpr double minimum_normalization_gain = 0.25;
 constexpr double maximum_normalization_gain = 8.0;
 
+// Process-wide output mute. The arcade wall silences every column except the
+// focused one, and every board's samples pass through here on their way out,
+// so one flag does it without each board needing to know the wall exists.
+std::atomic<bool> output_muted_flag{false};
+
 int64_t scaled_sample(int64_t sample, int master_percent,
                       int board_gain_percent) {
+    if (output_muted_flag.load(std::memory_order_relaxed)) return 0;
     const int64_t master = std::clamp(master_percent, 0, 200);
     const int64_t board = std::clamp(board_gain_percent, 0, 6400);
     // Audio samples are small enough that this cannot approach int64 limits,
@@ -62,6 +69,14 @@ int16_t limit_sample(int64_t scaled, bool* limited) {
     return static_cast<int16_t>(negative ? -result : result);
 }
 } // namespace
+
+void set_output_muted(bool muted) {
+    output_muted_flag.store(muted, std::memory_order_relaxed);
+}
+
+bool output_muted() {
+    return output_muted_flag.load(std::memory_order_relaxed);
+}
 
 int16_t condition_sample(int64_t sample, int master_percent,
                          int board_gain_percent, bool* limited) {

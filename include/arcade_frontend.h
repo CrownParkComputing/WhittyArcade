@@ -29,11 +29,21 @@ struct rom_selection_result {
     std::string path;
     cabinet_launch_mode launch_mode{cabinet_launch_mode::single};
     int cabinet_node{};
-    // -1 follows the saved display setting, 0 forces separate windows and
-    // 1 forces fullscreen panes for this launch.
-    int fullscreen_override{-1};
+    // Fullscreen follows from launch_mode - see the display policy in
+    // main.cpp - so the selector only reports the twin placement choice.
     bool twin_separate_monitors{false};
+    // Linked pair sharing one display, half the desktop per cabinet.
+    bool twin_one_screen{false};
+    // Arcade wall: one ROM per column, all running at once across the
+    // primary display. Empty unless the wall was chosen; entry 0 is this
+    // process's own game.
+    std::vector<std::string> wall_games;
 };
+
+// The library browser as a modal over a paused, running cabinet: same grid,
+// views and covers as the launcher. Returns the chosen ROM path, or empty
+// when the player backs out.
+std::string show_in_game_game_browser(const std::vector<rom_choice>& choices);
 
 rom_selection_result show_rom_selector(const std::string& current_path,
                                        multiplayer_lobby* lobby = nullptr);

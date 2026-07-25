@@ -28,6 +28,17 @@ bool decode_high_score_table(const std::string& short_name,
 std::string high_score_root_path();
 std::string high_score_report(const std::string& short_name);
 
+// Structured variant of high_score_report for the scoreboard view: fills the
+// table and returns true when a verified decode exists, otherwise leaves an
+// explanation (no file yet, undecodable) in message. format_high_score gives
+// the same thousands-grouped rendering the text report uses.
+bool high_score_view(const std::string& short_name, high_score_table& table,
+                     std::string& message);
+std::string format_high_score(std::uint64_t score);
+
+// Returns true when a verified score-table decoder exists for the given game.
+bool has_high_score_decoder(const std::string& short_name);
+
 // A small board-facing helper implementing MAME's hiscore.dat lifecycle:
 // wait until the game's default table is initialized, restore a compatible
 // .hi file once, then persist changed score bytes. The callbacks access the

@@ -40,3 +40,7 @@
 *~
 .DS_Store
 Thumbs.db
+
+# Scratch patches from local experiments
+test_patch.diff
+test_mirror.diff

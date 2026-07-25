@@ -63,7 +63,7 @@ public:
     }
 
     void run_frame() override {
-        m_input->set_suppressed(m_gpu_renderer->settings_visible());
+        m_input->set_suppressed(m_gpu_renderer->input_suppressed());
         m_input->update();
         input_state input = m_input->state();
 
@@ -216,7 +216,7 @@ public:
     }
 
     void run_frame() override {
-        m_input->set_suppressed(m_gpu_renderer->settings_visible());
+        m_input->set_suppressed(m_gpu_renderer->input_suppressed());
         m_input->update();
         uint8_t dips = m_cabinet->system1_dip_switches;
         if (m_input->state().test) dips &= ~uint8_t{0x01};

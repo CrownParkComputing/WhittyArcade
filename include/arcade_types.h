@@ -38,6 +38,10 @@ struct rom_choice {
     std::string path;
     std::string label;
     arcade_board_type board{arcade_board_type::system22};
+    // Who published the machine. Carried alongside the board because the
+    // launcher browses by both, and the two do not always agree - Moon Cresta
+    // is Nichibutsu on Namco's Galaxian hardware.
+    std::string publisher;
 };
 
 struct input_state {
