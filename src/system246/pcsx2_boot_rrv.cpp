@@ -222,8 +222,10 @@ static bool CreateWindowAndRegister()
 		return false;
 	}
 
+	// Fullscreen like every other board. WINDOW_WIDTH/HEIGHT only name the
+	// size the window would fall back to if fullscreen were toggled off.
 	s_window = SDL_CreateWindow("WhittyArcade - Ridge Racer V Arcade Battle", WINDOW_WIDTH, WINDOW_HEIGHT,
-		SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+		SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN);
 	if (!s_window)
 	{
 		Console.ErrorFmt("SDL_CreateWindow failed: {}", SDL_GetError());
