@@ -3918,6 +3918,14 @@ bool alternate_presenter::render_model2_scene(const model2_scene& scene) {
             return false;
         std::memcpy(m_impl->vertex_mapped, scene.vertices, vertex_bytes);
     }
+    // How much geometry the board actually handed over. "Rasterised" only
+    // says the pass ran; a pass with nothing in it succeeds and produces a
+    // black screen, which is indistinguishable from the outside.
+    static int geometry_note = 0;
+    static std::size_t frames_seen = 0;
+    if (whitty_wall_log::first(geometry_note, 3) || ++frames_seen % 600 == 0)
+        whitty_wall_log::note("model2 geometry: %zu vertices (%zu triangles)",
+                              scene.vertex_count, scene.vertex_count / 3);
     m_impl->refresh_model2_descriptors();
     m_impl->model2_vertex_count = scene.vertex_count;
     m_impl->model2_crtc_offset[0] = scene.crtc_offset[0];
