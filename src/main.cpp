@@ -829,6 +829,13 @@ int main(int argc, char* argv[]) {
                 one_screen_pair = false;
             } else {
                 cabinet_node = 1;
+                // Only now is this process cabinet 1 - at startup it was an
+                // ordinary launch with no node - so this is the first moment
+                // it can open the right log. Without this only the spawned
+                // cabinet left a file, and half a pair explains nothing.
+                whitty_wall_log::begin_cabinet(cabinet_node);
+                whitty_wall_log::note("spawned cabinet 2, port base %u",
+                                      pair_port_base);
             }
         }
         // Every launch that began as two-player says so, whether the two
