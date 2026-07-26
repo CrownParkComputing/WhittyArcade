@@ -434,6 +434,14 @@ int run_session_factory_test() {
         cabinet->system22_dip_switches = static_cast<uint16_t>(0xff00 | round);
         for (const arcade_board_descriptor& board : arcade_boards()) {
             {
+#if defined(WHITTY_SYSTEM246_STUBBED)
+                // This build has no PCSX2 core - no prebuilt libraries, or a
+                // target it has no backend for - so System 246 is present in
+                // the catalog but cannot open a session. Skipping it keeps
+                // every other board strictly checked; the alternative is a
+                // test that fails on any build without a proprietary core.
+                if (board.type == arcade_board_type::system246) continue;
+#endif
                 std::unique_ptr<emulator_session> session =
                     create_emulator_session(board.type, video, cabinet);
                 if (!session || session->board_type() != board.type) return 1;
@@ -465,7 +473,12 @@ int run_session_factory_test() {
     if (!rejected_missing_video) return 5;
     std::printf("Session factory: %zu construct/destroy boundaries passed\n",
                 sessions_created);
-    return sessions_created == arcade_board_count * rounds ? 0 : 6;
+#if defined(WHITTY_SYSTEM246_STUBBED)
+    constexpr std::size_t buildable_boards = arcade_board_count - 1;
+#else
+    constexpr std::size_t buildable_boards = arcade_board_count;
+#endif
+    return sessions_created == buildable_boards * rounds ? 0 : 6;
 }
 
 // Standalone end-to-end test for the System 22 C139 cabinet-to-cabinet

@@ -7,6 +7,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -14,6 +15,20 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+
+namespace {
+
+// setenv is POSIX and MinGW has no such thing; Windows spells it _putenv_s.
+// The test only ever sets a variable and expects it to stick, which both do.
+void set_test_environment(const char* name, const std::string& value) {
+#if defined(_WIN32)
+    _putenv_s(name, value.c_str());
+#else
+    ::setenv(name, value.c_str(), 1);
+#endif
+}
+
+} // namespace
 
 namespace {
 // entry_bytes matters for the device firmware archives: the loader checks a
@@ -91,15 +106,14 @@ void make_package(const fs::path& path, std::uint32_t title_id,
 int main() {
     // Keep discovery isolated from the machine's real PCSX2 arcade tree so the
     // System 246 .acgame scan does not add extra games to this fixture.
-    ::setenv("WHITTY_SYSTEM246_ACGAME_ROOT", "/nonexistent-system246-acgame-root",
-             1);
+    set_test_environment("WHITTY_SYSTEM246_ACGAME_ROOT", "/nonexistent-system246-acgame-root");
     // And from the machine's real extracted Xbox 360 titles, for the same
     // reason: the native-port scan would otherwise add whatever is installed.
-    ::setenv("WHITTY_XBOX360_GAME_ROOT", "/nonexistent-xbox360-game-root", 1);
+    set_test_environment("WHITTY_XBOX360_GAME_ROOT", "/nonexistent-xbox360-game-root");
     // And from the machine's downloaded Xbox 360 packages, which is where the
     // package scan looks by default.
-    ::setenv("WHITTY_XBOX360_PACKAGE_ROOT",
-             "/nonexistent-xbox360-package-root", 1);
+    set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT",
+             "/nonexistent-xbox360-package-root");
     const fs::path root = fs::temp_directory_path() /
         ("whittyarcade-rom-library-test-" +
          std::to_string(test_process_id()));
@@ -156,11 +170,10 @@ int main() {
     {
         const auto discover_package = [&](const fs::path& packages,
                                           const fs::path& package) {
-            ::setenv("WHITTY_XBOX360_PACKAGE_ROOT", packages.string().c_str(),
-                     1);
+            set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT", packages.string().c_str());
             const auto found = discover_library_roms("");
-            ::setenv("WHITTY_XBOX360_PACKAGE_ROOT",
-                     "/nonexistent-xbox360-package-root", 1);
+            set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT",
+                     "/nonexistent-xbox360-package-root");
             const std::string wanted =
                 fs::absolute(package).lexically_normal().string();
             for (const rom_choice& choice : found)
@@ -220,14 +233,14 @@ int main() {
 
         const auto giraffes = [](const fs::path& game_root,
                                  const fs::path& package_root) {
-            ::setenv("WHITTY_XBOX360_GAME_ROOT", game_root.string().c_str(), 1);
-            ::setenv("WHITTY_XBOX360_PACKAGE_ROOT",
-                     package_root.string().c_str(), 1);
+            set_test_environment("WHITTY_XBOX360_GAME_ROOT", game_root.string().c_str());
+            set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT",
+                     package_root.string().c_str());
             const auto found = discover_library_roms("");
-            ::setenv("WHITTY_XBOX360_GAME_ROOT",
-                     "/nonexistent-xbox360-game-root", 1);
-            ::setenv("WHITTY_XBOX360_PACKAGE_ROOT",
-                     "/nonexistent-xbox360-package-root", 1);
+            set_test_environment("WHITTY_XBOX360_GAME_ROOT",
+                     "/nonexistent-xbox360-game-root");
+            set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT",
+                     "/nonexistent-xbox360-package-root");
             std::vector<rom_choice> listed;
             for (const rom_choice& choice : found)
                 if (choice.label.find("Space Giraffe") != std::string::npos)

@@ -1598,4 +1598,9 @@ endif()
 if(NOT WHITTY_SYSTEM246_PCSX2_LINKED)
     target_sources(WhittyArcade PRIVATE
         ${CMAKE_SOURCE_DIR}/src/system246/system246_pcsx2_session_stub.cpp)
+    # The factory test asks every board to build a session. Without the core
+    # this one cannot, and the test has to know the difference between a board
+    # this build left out and a board that is broken.
+    target_compile_definitions(WhittyArcade PRIVATE
+        WHITTY_SYSTEM246_STUBBED=1)
 endif()
