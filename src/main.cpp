@@ -935,7 +935,17 @@ int main(int argc, char* argv[]) {
             if (persistent != 0)
                 arcade_input_netplay_publish_state(0, persistent);
         }
-        if (launch_mode == cabinet_launch_mode::independent_pair) {
+        if (cabinet_node && native_hardware_link) {
+            // A linked cabinet is black for the first few seconds while its
+            // board boots and the two look for each other, and a black window
+            // that says nothing is indistinguishable from a hung one. Say
+            // which cabinet this is and what it is doing; the comm board
+            // prints on stderr if the four-second search finds nobody.
+            shared_video->set_cabinet_status(
+                "CABINET " + std::to_string(cabinet_node) + " OF 2  |  " +
+                "STARTING " + identity->short_name +
+                " - LOOKING FOR THE OTHER CABINET...");
+        } else if (launch_mode == cabinet_launch_mode::independent_pair) {
             shared_video->set_cabinet_status(
                 "TWIN SCREEN  |  PLAYER 1 + PLAYER 2");
         } else if (cabinet_node &&
@@ -961,6 +971,11 @@ int main(int argc, char* argv[]) {
         // Speed sampling for a wall column: counted over a window, because a
         // single slow frame is a scheduling hiccup and only a sustained
         // shortfall means the wall is wider than the machine.
+        // Cleared once the board has been running long enough to be past
+        // the comm board's four-second discovery window - after which the
+        // status is either wrong or has been replaced by something truer.
+        bool startup_status_shown = cabinet_node && native_hardware_link;
+        const auto session_began = std::chrono::steady_clock::now();
         int wall_window_frames = 0;
         bool wall_reported_slow = false;
         auto wall_rate_since = std::chrono::steady_clock::now();
@@ -1198,6 +1213,14 @@ int main(int argc, char* argv[]) {
             const auto now = std::chrono::steady_clock::now();
             if (now - deadline > frame_ticks) deadline = now;
             std::this_thread::sleep_until(deadline);
+
+            if (startup_status_shown &&
+                std::chrono::steady_clock::now() - session_began >
+                    std::chrono::seconds(6)) {
+                startup_status_shown = false;
+                shared_video->set_cabinet_status(
+                    "CABINET " + std::to_string(cabinet_node) + " OF 2");
+            }
 
             // A wall column watches its own speed. The capacity rule budgets
             // a machine's threads before the wall starts, but what a board
