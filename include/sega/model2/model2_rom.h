@@ -10,6 +10,10 @@ enum class model2_rom_set : uint8_t {
     sega_rally_revision_c,
     virtua_cop_2,
     virtua_cop,
+    daytona,
+    virtua_fighter_2,
+    manx_tt,
+    motor_raid,
 };
 
 // Declarative per-game hardware configuration. The Model 2 board hardware
@@ -24,16 +28,31 @@ struct model2_game_profile {
 
     // How the cabinet I/O and controls are wired at 0x01c00000. Wheel/pedal
     // cabinets and 315-5296 light-gun cabinets both read the 315-5296 chip;
-    // the original Model 2 gun cabinet reads a model1io2 board over dual-port
-    // RAM instead.
-    enum class io_kind { crx_wheel, crx_gun, model1io2_dpram }
-        io{io_kind::crx_wheel};
+    // the original Model 2 cabinets read an I/O board over dual-port RAM
+    // instead - Virtua Cop the model1io2 (TMPZ84C015), Daytona the earlier
+    // model1io (315-5338A) driving board shared with Model 1 racers.
+    enum class io_kind {
+        crx_wheel,
+        crx_gun,
+        // 315-5296 with two digital fighter pads (Virtua Fighter 2):
+        // punch/kick/guard and an 8-way stick per player on IN1/IN2.
+        crx_fighter,
+        // 315-5296 motorbike cabinet (Manx TT): throttle/brake/bank on
+        // the ADC, shift up/down buttons on IN1.
+        crx_bike,
+        model1io2_dpram,
+        model1io_dpram,
+    } io{io_kind::crx_wheel};
 
     // Show the on-screen light-gun sight in place of the desktop pointer.
     bool lightgun{false};
 
     // Per-game NVRAM subdirectory so saves never collide between games.
     const char* nvram_leaf{"srallyc"};
+
+    // Original Model 2 (Daytona, Virtua Cop) maps 0x00220000-0x0023ffff as a
+    // window onto the program ROM at offset 0x20000; Model 2A has RAM there.
+    bool original_model2{false};
 };
 
 struct model2_roms {
@@ -69,6 +88,10 @@ struct model2_roms {
     // this program) shared with the i960 over dual-port RAM; the Model 2A sets
     // read the 315-5296 chip directly and leave this empty.
     std::vector<uint8_t> io_cpu;
+
+    // Factory 93C46 image shipped with the set (Manx TT's Twin-mode
+    // configuration). Used when no saved EEPROM exists.
+    std::vector<uint8_t> default_eeprom;
 
     // The set that produced this image. Required regions differ per game;
     // complete() uses it to assert sizes without making each board

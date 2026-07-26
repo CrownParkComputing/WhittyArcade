@@ -33,7 +33,7 @@ inline std::FILE*& sink() {
 // parent's terminal mixed with the parent's own, if it is seen at all. It
 // gets a file of its own, named for the cabinet rather than the column.
 inline void begin_cabinet(int node) {
-    if (sink() || (node != 1 && node != 2)) return;
+    if (sink() || node < 1 || node > 8) return;
     const char* home = std::getenv("HOME");
     std::string root = home && *home ? home : "/tmp";
     root += "/.local/share/WhittyArcade/cabinet-" + std::to_string(node) +

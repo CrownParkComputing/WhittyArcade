@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -77,7 +79,16 @@ int main(int argc, char** argv) {
     assert(reset_pc != 0);
     assert(reset_pc != 0xffffffffU);
 
+    // MODEL2_THROTTLE=1 paces the run at 60 fps wall clock. Two linked
+    // boot-test processes otherwise free-run unsynchronised, which starves
+    // the comm ring in ways the real 60 fps application never does.
+    const bool throttle = std::getenv("MODEL2_THROTTLE") != nullptr;
+    const auto throttle_epoch = std::chrono::steady_clock::now();
+
     for (int frame = 0; frame < frames && !machine.cpu_faulted(); ++frame) {
+        if (throttle)
+            std::this_thread::sleep_until(
+                throttle_epoch + frame * std::chrono::microseconds(16667));
         if (std::getenv("MODEL2_OPEN_GAME_ASSIGNMENTS")) {
             input_state input;
             input.test = true;
@@ -90,9 +101,56 @@ int main(int argc, char** argv) {
                 input.test |= frame >= press && frame < press + 4;
             }
             machine.set_inputs(input);
-        } else if (std::getenv("MODEL2_HOLD_TEST")) {
+        } else if (const char* script = std::getenv("MODEL2_SCRIPT")) {
+            // Deterministic menu driving: "start-end:name" items separated
+            // by commas, e.g. "500-9999:test,700-704:view4,900-904:start".
+            // Frames are inclusive. Names map to input_state fields.
             input_state input;
-            input.test = true;
+            std::string list(script);
+            std::size_t cursor = 0;
+            while (cursor < list.size()) {
+                const std::size_t comma = list.find(',', cursor);
+                const std::string item = list.substr(
+                    cursor, comma == std::string::npos ? std::string::npos
+                                                       : comma - cursor);
+                cursor = comma == std::string::npos ? list.size() : comma + 1;
+                const std::size_t dash = item.find('-');
+                const std::size_t colon = item.find(':');
+                if (dash == std::string::npos ||
+                    colon == std::string::npos || colon < dash)
+                    continue;
+                const int begin = std::atoi(item.substr(0, dash).c_str());
+                const int end = std::atoi(
+                    item.substr(dash + 1, colon - dash - 1).c_str());
+                if (frame < begin || frame > end) continue;
+                const std::string name = item.substr(colon + 1);
+                if (name == "test") input.test = true;
+                else if (name == "service") input.service = true;
+                else if (name == "start") input.start = true;
+                else if (name == "coin") input.coin1 = true;
+                else if (name == "p1up") input.left_stick_y = 0x20;
+                else if (name == "p1down") input.left_stick_y = 0xe0;
+                else if (name == "p1left") input.left_stick_x = 0x20;
+                else if (name == "p1right") input.left_stick_x = 0xe0;
+                else if (name == "b1") input.buttons[0] = 1;
+                else if (name == "b2") input.buttons[1] = 1;
+                else if (name == "b3") input.buttons[2] = 1;
+                else if (name == "view") input.view = true;
+                else if (name == "view2") input.view2 = true;
+                else if (name == "view3") input.view3 = true;
+                else if (name == "view4") input.view4 = true;
+                else if (name == "shiftup") input.shift_up = true;
+                else if (name == "shiftdown") input.shift_down = true;
+                else if (name == "gas") input.gas = 0x610;
+                else if (name == "brake") input.brake = 0x610;
+            }
+            machine.set_inputs(input);
+        } else if (const char* hold_test =
+                       std::getenv("MODEL2_HOLD_TEST")) {
+            // Optional numeric value delays the press: Daytona ignores a
+            // TEST switch held from power-on until its network check ends.
+            input_state input;
+            input.test = frame >= std::atoi(hold_test);
             machine.set_inputs(input);
         } else if (std::getenv("MODEL2_AUTO_RACE")) {
             input_state input;
@@ -113,6 +171,13 @@ int main(int argc, char** argv) {
             machine.set_inputs(input);
         }
         const int frame_number = frame + 1;
+        if (std::getenv("MODEL2_COMM_STATE_TRACE") &&
+            frame_number % 30 == 0 && frame_number <= 2400) {
+            std::printf("F%04d ", frame_number);
+            for (uint32_t k = 0; k < 0x18; ++k)
+                std::printf("%02x ", machine.debug_read8(0x01a00000 + k));
+            std::printf("fg=%02x\n", machine.debug_read8(0x01a04002));
+        }
         const bool capture_this_frame = capture_dir_text &&
             frame_number >= capture_start &&
             ((frame_number - capture_start) % capture_interval) == 0;

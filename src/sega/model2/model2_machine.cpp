@@ -245,6 +245,9 @@ bool model2_machine::initialize(const std::string& rom_path) {
                 model2_bus::tgp_fifo_capacity)
                 m_impl->cpu.i960_yield();
             update_interrupt_lines();
+        },
+        [this](uint32_t address, uint16_t value) {
+            m_impl->bus.write16(address, value);
         });
     m_impl->bus.set_program_counter_probe(
         [this]() { return m_impl->cpu.previous_program_counter(); });
@@ -399,13 +402,16 @@ void model2_machine::run_frame(bool render_frame) {
     if (render_frame) render_video_frame();
     if ((m_frame_number % 60) == 0) {
         std::printf("Model 2 core frame=%llu cpu=%.2fms tgp=%.2fms "
-                    "geometry=%.2fms render=%08x video=%08x\n",
+                    "geometry=%.2fms render=%08x video=%08x "
+                    "pc=%08x tgp_pc=%04x\n",
                     static_cast<unsigned long long>(m_frame_number),
                     m_impl->i960_work_ms, m_impl->tgp_work_ms,
                     std::chrono::duration<double, std::milli>(
                         geometry_end - cpu_end).count(),
                     m_impl->bus.render_control(),
-                    m_impl->bus.video_control());
+                    m_impl->bus.video_control(),
+                    m_impl->cpu.program_counter(),
+                    m_impl->tgp.program_counter());
         std::array<uint32_t, 16> window_counts{};
         for (const model2_geometry_polygon& polygon :
              m_impl->geometry.polygons()) {

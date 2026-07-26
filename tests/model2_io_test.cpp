@@ -242,7 +242,9 @@ int main() {
     peer2.write8(0x01a04000, 1);
     peer1.write8(0x01a02000, 0x11);
     peer2.write8(0x01a02000, 0x22);
-    for (unsigned tick = 0; tick < 4; ++tick) {
+    // The link stays pending through the board's four-second discovery
+    // period (0x00e8 ticks) before the ring goes alive.
+    for (unsigned tick = 0; tick < 0x00e8 + 4; ++tick) {
         peer1.vblank();
         peer2.vblank();
     }
@@ -260,6 +262,63 @@ int main() {
     peer1.write8(0x01a04000, 0);
     peer2.write8(0x01a04000, 0);
 
+    // A ring of three: the receive buffer overlaps the transmit buffer one
+    // 0x1c0 slot in, so every hop prepends the sender's slot - node 1 must
+    // end up reading [node3][node2][its own old slot]. This is the shift
+    // register Daytona's network check measures; losing a hop breaks it.
+    {
+        std::array<model2_bus, 3> ring;
+        for (int node = 1; node <= 3; ++node) {
+            if (!test_set_environment("MODEL2_COMM_NODE",
+                                      std::to_string(node).c_str()))
+                return 1;
+            if (!test_set_environment("MODEL2_COMM_COUNT", "3")) return 1;
+            if (!test_set_environment(
+                    "MODEL2_COMM_LOCAL_PORT",
+                    std::to_string(35130 + node).c_str()))
+                return 1;
+            if (!test_set_environment(
+                    "MODEL2_COMM_PEER_PORT",
+                    std::to_string(35131 + node % 3).c_str()))
+                return 1;
+            ring[static_cast<std::size_t>(node - 1)].attach(roms);
+            ring[static_cast<std::size_t>(node - 1)].write8(0x01a04000, 1);
+        }
+        ring[0].write8(0x01a02000, 0xa1);
+        ring[1].write8(0x01a02000, 0xb2);
+        ring[2].write8(0x01a02000, 0xc3);
+        for (unsigned tick = 0; tick < 0x00e8 + 8; ++tick)
+            for (model2_bus& node : ring) node.vblank();
+        // EPR-16726 numbers the ring downwards from the master: the node
+        // the master transmits to is id 3, the node transmitting into the
+        // master is id 2 (observed against MAME's m2comm).
+        static constexpr std::array<uint8_t, 3> ring_ids{1, 3, 2};
+        for (int node = 0; node < 3; ++node) {
+            assert(ring[static_cast<std::size_t>(node)].read8(0x01a00000) ==
+                   0x01);
+            assert(ring[static_cast<std::size_t>(node)].read8(0x01a00002) ==
+                   ring_ids[static_cast<std::size_t>(node)]);
+            assert(ring[static_cast<std::size_t>(node)].read8(0x01a00003) ==
+                   0x03);
+        }
+        // One slot per hop: predecessor first, then its predecessor, then
+        // the node's own data returned after a full revolution.
+        assert(ring[0].read8(0x01a021c0) == 0xc3);
+        assert(ring[0].read8(0x01a02380) == 0xb2);
+        assert(ring[0].read8(0x01a02540) == 0xa1);
+        assert(ring[1].read8(0x01a021c0) == 0xa1);
+        assert(ring[1].read8(0x01a02380) == 0xc3);
+        assert(ring[1].read8(0x01a02540) == 0xb2);
+        assert(ring[2].read8(0x01a021c0) == 0xb2);
+        assert(ring[2].read8(0x01a02380) == 0xa1);
+        assert(ring[2].read8(0x01a02540) == 0xc3);
+        for (model2_bus& node : ring) node.write8(0x01a04000, 0);
+        if (!test_unset_environment("MODEL2_COMM_NODE")) return 1;
+        if (!test_unset_environment("MODEL2_COMM_COUNT")) return 1;
+        if (!test_unset_environment("MODEL2_COMM_LOCAL_PORT")) return 1;
+        if (!test_unset_environment("MODEL2_COMM_PEER_PORT")) return 1;
+    }
+
     // Network-cabinet mode uses the same packet protocol on two physical
     // computers. LAN broadcast removes the need to type the peer's address;
     // each role listens on its own fixed port and ignores its own node ID.
@@ -275,7 +334,7 @@ int main() {
         if (!test_set_environment("MODEL2_COMM_LOCAL_PORT", "35124")) return 1;
         if (!test_set_environment("MODEL2_COMM_PEER_PORT", "35123")) return 1;
         network2.attach(roms);
-        for (unsigned tick = 0; tick < 4; ++tick) {
+        for (unsigned tick = 0; tick < 0x00e8 + 4; ++tick) {
             network1.vblank();
             network2.vblank();
         }
@@ -289,9 +348,16 @@ int main() {
 
     // The main CPU's 8251 UART must generate a fresh interrupt after every
     // transmitted byte. Sega Rally queues one MIDI byte per TXRDY edge.
+    // Until the game programs the 8251 (mode word, then a command with
+    // TxEN), a reset-state transmitter must NOT interrupt: Virtua Fighter 2
+    // enables interrupt source 10 before configuring the UART, and the
+    // premature vector landed in its unexpected-interrupt stub.
     unsigned midi_bytes = 0;
     bus.set_sound_uart_callback([&midi_bytes](uint8_t) { ++midi_bytes; });
     bus.write8(0x00e80005, 0x04); // enable interrupt source 10
+    assert((bus.read8(0x00e80001) & 0x04) == 0); // TxEN not set yet
+    bus.write8(0x01c80002, 0x4e); // 8251 mode: 8 data bits, x16 clock
+    bus.write8(0x01c80002, 0x37); // 8251 command: TxEN | RxE
     assert((bus.read8(0x00e80001) & 0x04) != 0);
     bus.write8(0x01c80000, 0x90);
     assert(midi_bytes == 0); // byte is still on the serial wire

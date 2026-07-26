@@ -253,6 +253,13 @@ private:
             m_machine->set_sound_uart_callback([this](uint8_t data) {
                 if (m_pcm_audio) m_pcm_audio->enqueue_uart(data, 0);
             });
+            // The return direction: the sound 68000's serial responses feed
+            // the i960's 8251 receiver. Daytona waits for the board's boot
+            // handshake before it transmits a single sound command, so
+            // without this wire the game is permanently silent.
+            m_pcm_audio->set_uart_out_callback([this](uint8_t data) {
+                if (m_machine) m_machine->sound_midi_receive(data);
+            });
             m_pcm_audio->start();
         } else {
             std::fprintf(stderr,

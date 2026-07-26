@@ -64,19 +64,20 @@ int main() {
 
     // Native arcade System Link is deliberately opt-in. Only titles whose
     // cabinet communications path is currently enabled (Ridge Racer 2, Rave
-    // Racer and Sega Rally) advertise it; ordinary alternating/simultaneous
-    // games use the separate network 2P path and must never appear in the
-    // System Link list.
+    // Racer, Sega Rally and Daytona USA) advertise it; ordinary
+    // alternating/simultaneous games use the separate network 2P path and
+    // must never appear in the System Link list.
     std::size_t system_link_games = 0;
     for (const rom_set_manifest& game : supported_rom_sets()) {
         if (!supports_native_system_link(game)) continue;
         ++system_link_games;
         const std::string name(game.short_name);
         assert(name == "ridgera2" || name == "raverace" ||
-               name == "srallyc");
+               name == "srallyc" || name == "daytona" ||
+               name == "manxttc" || name == "motoraid");
         assert(!supports_network_two_player(game));
     }
-    assert(system_link_games == 3);
+    assert(system_link_games == 6);
     assert(supports_network_two_player(
         *find_supported_rom_set("galaga")));
     assert(!supports_native_system_link(

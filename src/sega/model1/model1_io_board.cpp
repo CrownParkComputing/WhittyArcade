@@ -575,6 +575,39 @@ struct model1_io_board::implementation {
         if (state.p2_buttons[1]) gun_offscreen |= 0x02;
     }
 
+    // Daytona reads this board through the Model 2 dual-port RAM. Digital
+    // lanes follow MAME's daytona port map: IN0 carries coins, test/service,
+    // START and the VR1-3 view buttons; IN1 carries VR4 and the 4-speed
+    // H-shifter as an ACTIVE-HIGH 3-bit code on bits 4-6 (the same
+    // {0,2,1,6,5} encoding the Sega Rally 315-5296 path uses). Analog
+    // channels 0-2 are steering, accelerator and brake in the 0x20-0xe0
+    // window the game calibrates against, steering centred at 0x80.
+    void set_daytona_inputs(const input_state& state, uint8_t gear_code) {
+        digital_inputs.fill(0xff);
+        analog_inputs.fill(0x7f);
+        uint8_t& in0 = digital_inputs[0];
+        uint8_t& in1 = digital_inputs[1];
+        if (state.coin1) in0 &= ~uint8_t{0x01};
+        if (state.coin2) in0 &= ~uint8_t{0x02};
+        if (state.test) in0 &= ~uint8_t{0x04};
+        if (state.service) in0 &= ~uint8_t{0x08};
+        if (state.start) in0 &= ~uint8_t{0x10};
+        if (state.view) in0 &= ~uint8_t{0x20};  // VR1 (Red)
+        if (state.view2) in0 &= ~uint8_t{0x40}; // VR2 (Blue)
+        if (state.view3) in0 &= ~uint8_t{0x80}; // VR3 (Yellow)
+        if (state.view4) in1 &= ~uint8_t{0x01}; // VR4 (Green)
+        in1 = static_cast<uint8_t>((in1 & ~uint8_t{0x70}) |
+                                   ((gear_code & 7) << 4));
+        const int steering = std::clamp(
+            static_cast<int>(state.steering) - 0x280, 0, 0xd80 - 0x280);
+        analog_inputs[0] = static_cast<uint8_t>(0x20 +
+            steering * (0xe0 - 0x20) / (0xd80 - 0x280));
+        analog_inputs[1] = static_cast<uint8_t>(0x20 +
+            std::clamp<int>(state.gas, 0, 0x610) * (0xe0 - 0x20) / 0x610);
+        analog_inputs[2] = static_cast<uint8_t>(0x20 +
+            std::clamp<int>(state.brake, 0, 0x610) * (0xe0 - 0x20) / 0x610);
+    }
+
     void set_inputs(model1_rom_set game, const input_state& state) {
         digital_inputs.fill(0xff);
         analog_inputs.fill(0x7f);
@@ -681,6 +714,10 @@ void model1_io_board::set_inputs(model1_rom_set game,
 }
 void model1_io_board::set_gun_inputs(const input_state& state) {
     m_impl->set_gun_inputs(state);
+}
+void model1_io_board::set_daytona_inputs(const input_state& state,
+                                         uint8_t gear_code) {
+    m_impl->set_daytona_inputs(state, gear_code);
 }
 void model1_io_board::set_dip_switches(
         const std::array<uint8_t, 3>& switches) {

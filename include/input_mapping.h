@@ -42,6 +42,7 @@ enum class input_action : uint8_t {
     p2_down,
     p2_action1,
     p2_action2,
+    p2_action3,
     count,
 };
 

@@ -483,6 +483,12 @@ double i960_cpu_device::round_to_int(double val)
 // interrupt dispatch
 void i960_cpu_device::take_interrupt(int vector, int lvl)
 {
+	if (getenv("I960_IRQ_TRACE")) {
+		static int traced = 0;
+		if (traced < 256)
+			fprintf(stderr, "I960 IRQ vector=%d lvl=%d ip=%08x icr=%08x n=%d\n",
+					vector, lvl, m_IP, m_ICR, ++traced);
+	}
 	int int_tab =  m_program.read_dword(m_PRCB+20);    // interrupt table
 	int int_SP  =  m_program.read_dword(m_PRCB+24);    // interrupt stack
 	int SP;
@@ -2271,11 +2277,12 @@ void i960_cpu_device::set_program_callbacks(read_callback read,
 											 write_callback write,
 											 flags_callback flags,
 											 read32_callback read32,
-											 write32_callback write32)
+											 write32_callback write32,
+											 write16_callback write16)
 {
 	space(AS_PROGRAM).set_callbacks(std::move(read), std::move(write),
 									 std::move(flags), std::move(read32),
-									 std::move(write32));
+									 std::move(write32), std::move(write16));
 }
 
 std::string i960_cpu_device::disassemble(uint32_t address,

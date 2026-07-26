@@ -599,8 +599,13 @@ void model1_audio_system::write8(uint32_t raw_address, uint8_t value) {
         return;
     }
     if (address >= 0xc20000 && address < 0xc20004) {
-        if ((address & 1) && (address & 2) == 0 && m_dsb)
-            m_dsb->receive_uart(value);
+        if ((address & 1) && (address & 2) == 0) {
+            // The board's 8251 data port: one TX line feeds both the DSB
+            // and the serial link back to the main CPU. Daytona's i960
+            // waits on those responses before sending any sound command.
+            if (m_dsb) m_dsb->receive_uart(value);
+            if (m_uart_out_callback) m_uart_out_callback(value);
+        }
         // Control writes configure the 8251. TX ready/empty are modelled by
         // read_uart_status(); serial framing is not observable by firmware.
         return;

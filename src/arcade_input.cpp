@@ -132,6 +132,7 @@ void route_player_two_keyboard_to_cabinet(
     copy(input_action::p1_down, input_action::p2_down);
     copy(input_action::p1_action1, input_action::p2_action1);
     copy(input_action::p1_action2, input_action::p2_action2);
+    copy(input_action::p1_action3, input_action::p2_action3);
     copy(input_action::steer_left, input_action::p2_left);
     copy(input_action::steer_right, input_action::p2_right);
     copy(input_action::gas, input_action::p2_up);
@@ -1141,6 +1142,8 @@ void arcade_input::update() {
     m_state.p2_buttons[0] = action_value(input_action::p2_action1, keys) >=
                             cabinet_press_threshold;
     m_state.p2_buttons[1] = action_value(input_action::p2_action2, keys) >=
+                            cabinet_press_threshold;
+    m_state.p2_buttons[2] = action_value(input_action::p2_action3, keys) >=
                             cabinet_press_threshold;
 
     if (m_time_crisis_mouse) {

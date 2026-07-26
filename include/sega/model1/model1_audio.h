@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <thread>
 #include <mutex>
 #include <memory>
@@ -31,6 +32,13 @@ public:
     void start();
     void stop();
     bool enqueue_uart(uint8_t data, uint64_t v60_timestamp);
+    // Bytes the sound 68000 transmits back up the serial link. Daytona's
+    // i960 waits for the board's boot/status responses before it sends any
+    // sound command at all, so a session that drops this direction is
+    // silent. Invoked from the audio thread.
+    void set_uart_out_callback(std::function<void(uint8_t)> callback) {
+        m_uart_out_callback = std::move(callback);
+    }
     // Advance the audio by one video frame. With block=true (Model 1) the
     // caller's CPU thread is throttled to the audio buffer, which is how the
     // Model 1 V60 keeps real time. With block=false (Model 2 / Virtua Cop) the
@@ -112,6 +120,7 @@ private:
     multipcm* m_pcm_1{};
     multipcm* m_pcm_2{};
     std::unique_ptr<model1_dsb> m_dsb;
+    std::function<void(uint8_t)> m_uart_out_callback;
     std::unique_ptr<ym3438_state> m_ym;
 
     std::array<uint8_t, UART_CAPACITY> m_uart_transport{};
