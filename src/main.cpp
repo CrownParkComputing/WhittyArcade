@@ -682,6 +682,8 @@ int main(int argc, char* argv[]) {
     // A cabinet of a linked pair keeps its own file for the same reason a
     // wall column does - nobody can read the second one's stderr.
     whitty_wall_log::begin_cabinet(runtime.cabinet_node);
+    // Whatever this launch turns out to be, it writes somewhere.
+    whitty_wall_log::begin_session();
     if (runtime.wall_count > 1)
         whitty_wall_log::note("spawned column, rom=%s pid=%d ppid=%d",
                               runtime.positional.empty()
