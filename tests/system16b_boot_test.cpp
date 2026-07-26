@@ -22,6 +22,9 @@
 #include "namco/galaxian/galaxian_machine.h"
 #include "m68000_cpu.h"
 
+#include "z80.h"
+
+#include <algorithm>
 #include <cstdio>
 #include <cassert>
 #include <cstdlib>
@@ -75,10 +78,16 @@ bool g_hit_ram_exec = false;
 
 void run_main(system16b::board& board, bus_adapter&, m68000_cpu& cpu,
               int cycles) {
-    (void)board;
     while (cycles > 0 && !g_hit_ram_exec) {
         const int chunk = cycles > 8 ? 8 : cycles;
         const uint32_t pc = cpu.program_counter();
+        // Exception catcher: a `bra.s *` at the PC is where these games'
+        // vectors point on illegal/zero-divide faults. Stop so the ring
+        // still holds the faulting path. (PC value alone is not enough:
+        // Shinobi's reset vector legitimately enters at 0x400.)
+        if (pc >= 0x400u && pc <= 0x406u &&
+            board.byte_read(pc) == 0x60 && board.byte_read(pc + 1) == 0xfe)
+            break;
         g_pc_ring[g_pc_ring_pos & 63] = pc;
         ++g_pc_ring_pos;
         if (pc == 0xFFFFEF00u) g_hit_ram_exec = true;  // faulting RAM trampoline
@@ -157,6 +166,38 @@ int main(int argc, char** argv) {
     std::memcpy(board->sprite_gfx().data(),    rl.roms.sprite_gfx.data(),
                 rl.roms.sprite_gfx.size());
 
+    // The sound Z80 is part of the boot path for some games: Aurail's
+    // 68000 holds its attract until the Z80 answers each music command
+    // through the 315-5195 return port, so a Z80-less run parks on the
+    // title screen for ever. Stage the sound ROMs and tick the Z80 the
+    // same way system16b_machine_t does.
+    const bool sound_present = std::any_of(
+        rl.roms.sound_prog.begin(), rl.roms.sound_prog.end(),
+        [](uint8_t b) { return b != 0xff; });
+    if (sound_present) {
+        std::memcpy(board->sound_prog_rom_.data(), rl.roms.sound_prog.data(),
+                    rl.roms.sound_prog.size());
+        std::memcpy(board->sound_data_rom_.data(), rl.roms.sound_data.data(),
+                    rl.roms.sound_data.size());
+        board->have_sound_rom_ = true;
+    }
+    z80_t z80{};
+    uint64_t z80_pins = z80_init(&z80);
+    // The Z80 sound drivers pace their sequencers on the YM2151's timer
+    // flags, so the status port must come from a real synth or the driver
+    // (and any 68000 logic waiting on its answers) idles for ever.
+    system16b_sound_synth synth;
+    synth.reset();
+    static uint64_t status_calls = 0;
+    static uint8_t last_status = 0;
+    board->ym_status_cb_ = [&synth]() -> uint8_t {
+        ++status_calls;
+        last_status = synth.read_status();
+        return last_status;
+    };
+    uint64_t ym_clock_fraction = 0;
+
+    board->set_game(rl.set);
     board->reset_extras();
     // Boot with palette/text/tile RAM zero so the renderer emits clean
     // black until the 68000 has populated the video RAM during its
@@ -182,6 +223,95 @@ int main(int argc, char** argv) {
     unsigned unchanged_pc_frames = 0;
     for (int f = 0; f < n_frames; ++f) {
         run_main(*board, bus, cpu, kCyclesPerFrame);
+        {
+            static bool crash_reported = false;
+            const uint32_t pc_now = cpu.program_counter();
+            if (!crash_reported && pc_now >= 0x400 && pc_now <= 0x406 &&
+                board->byte_read(pc_now) == 0x60 &&
+                board->byte_read(pc_now + 1) == 0xfe) {
+                crash_reported = true;
+                const uint32_t sp = cpu.address_register(7);
+                std::printf("CRASH: main 68000 in exception catcher "
+                            "pc=%06x at frame %d sp=%08x frame: "
+                            "sr=%04x pc=%04x%04x next=%04x\n",
+                            pc_now, f, sp,
+                            board->cpu_read_16(sp),
+                            board->cpu_read_16(sp + 2),
+                            board->cpu_read_16(sp + 4),
+                            board->cpu_read_16(sp + 6));
+                std::printf("CRASH regs: d0=%08x d1=%08x d2=%08x "
+                            "d3=%08x a0=%08x a1=%08x\n",
+                            cpu.data_register(0), cpu.data_register(1),
+                            cpu.data_register(2), cpu.data_register(3),
+                            cpu.address_register(0),
+                            cpu.address_register(1));
+                std::printf("CRASH ring:");
+                for (unsigned i = 0; i < 64; ++i)
+                    std::printf(" %06x",
+                                g_pc_ring[(g_pc_ring_pos + i) & 63]);
+                std::printf("\n");
+            }
+        }
+        if (std::getenv("SHINOBI_DUMP_FLAGS") && (f + 1) % 200 == 0) {
+            std::printf("F%04d pc=%06x ", f + 1, cpu.program_counter());
+            for (uint32_t a = 0xffe70c; a <= 0xffe74f; ++a)
+                std::printf("%02x ", board->byte_read(a));
+            std::printf("\n");
+        }
+        if (board->have_sound_rom_) {
+            if (std::getenv("SHINOBI_TRACE_Z80") && (f % 30) == 0)
+                std::fprintf(stderr, "z80 f=%d pc=%04x sp=%04x iff1=%d "
+                             "im=%d irq_pending=%d status_calls=%llu "
+                             "status=%02x\n",
+                             f, z80.pc, z80.sp, z80.iff1, z80.im,
+                             board->sound_irq_pending_ ? 1 : 0,
+                             static_cast<unsigned long long>(status_calls),
+                             last_status);
+            for (int c = 0; c < system16b::kSoundCyclesPerFrame; ++c) {
+                if (board->sound_irq_pending_) z80_pins |= Z80_INT;
+                z80_pins = z80_tick(&z80, z80_pins);
+                const uint16_t a = Z80_GET_ADDR(z80_pins);
+                if (z80_pins & Z80_MREQ) {
+                    if (z80_pins & Z80_RD) {
+                        Z80_SET_DATA(z80_pins, board->co_cpu_read(a));
+                    } else if (z80_pins & Z80_WR) {
+                        board->co_cpu_write(a, Z80_GET_DATA(z80_pins));
+                    }
+                } else if (z80_pins & Z80_IORQ) {
+                    const unsigned port = a & 0xFFu;
+                    if (z80_pins & Z80_RD) {
+                        Z80_SET_DATA(z80_pins,
+                                     board->co_cpu_port_read(port));
+                    } else if (z80_pins & Z80_WR) {
+                        const uint8_t data = Z80_GET_DATA(z80_pins);
+                        board->co_cpu_port_write(port, data);
+                        if (port == 0x00u || port == 0x01u ||
+                            port == 0x80u)
+                            synth.write_control(port, data);
+                        static uint8_t ym_addr = 0;
+                        if ((port & 0xC0u) == 0x00u) {
+                            if ((port & 1u) == 0) {
+                                ym_addr = data;
+                            } else if (std::getenv("SHINOBI_TRACE_YM") &&
+                                       ym_addr >= 0x10 && ym_addr <= 0x14) {
+                                std::fprintf(stderr,
+                                             "ym reg %02x = %02x (f=%d)\n",
+                                             ym_addr, data, f);
+                            }
+                        }
+                    }
+                }
+                // 4 MHz YM clock against the 5 MHz Z80, as the machine
+                // runtime paces it.
+                ym_clock_fraction += 4'000'000u;
+                if (ym_clock_fraction >= 5'000'000u * 512u) {
+                    synth.advance_timer_clocks(static_cast<uint32_t>(
+                        ym_clock_fraction / 5'000'000u));
+                    ym_clock_fraction %= 5'000'000u;
+                }
+            }
+            z80_pins &= ~static_cast<uint64_t>(Z80_INT);
+        }
         // Render before vblank so the frame uses the register values the
         // game scanned out with, not the next-frame values the vblank
         // handler copies in (see shinobi_machine.cpp).
@@ -228,6 +358,12 @@ int main(int argc, char** argv) {
         if (!boot_counter_advanced && unchanged_pc_frames == 60) {
             std::printf("shinobi: boot stalled at PC=0x%06x after %d frames\n",
                         pc, f);
+            std::printf("shinobi: recent PCs:");
+            for (int i = 0; i < 64; ++i)
+                std::printf(" %06x",
+                            g_pc_ring[(g_pc_ring_pos + i) & 63]);
+            std::printf("\n");
+            if (std::getenv("SHINOBI_NO_STALL_BREAK")) continue;
             break;
         }
     }
@@ -254,6 +390,10 @@ int main(int argc, char** argv) {
               static_cast<std::streamsize>(board->frame_buffer().size() * 4));
     out.close();
     {
+        std::printf("shinobi: mapper regs:");
+        for (unsigned r = 0; r < 0x20; ++r)
+            std::printf(" %02x", board->mapper_regs_[r]);
+        std::printf("\n");
         std::printf("shinobi: text regs:");
         for (int i = 0xe80; i < 0xea0; i += 2)
             std::printf(" %04x", board->cpu_read_16(0x410000 + i));

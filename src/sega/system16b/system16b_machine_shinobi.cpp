@@ -30,7 +30,7 @@ inline uint16_t ram_word_be(const uint8_t* ram, unsigned off) {
 }
 
 inline int tile_pixel(const board& b, int code, int x, int y) {
-    if (code < 0 || code >= 0x4000) return 0;
+    if (code < 0 || code >= 0x8000) return 0;
     const unsigned byte_index = static_cast<unsigned>(code) * 8u + static_cast<unsigned>(y);
     const int sh = 7 - x;
     const auto& t0 = b.tile_plane0();
@@ -84,7 +84,10 @@ uint8_t board::mapper_read(uint32_t address) noexcept {
     switch (reg) {
     case 0x00:
     case 0x01: return mapper_regs_[reg];
-    case 0x02: return 0x0f;  // main CPU executing
+    case 0x02:
+        // MAME 315_5195.cpp: reads back 0x00 ("68000 halted") once the
+        // game has written 3 into the low bits, else 0x0f (executing).
+        return (mapper_regs_[0x02] & 3) == 3 ? 0x00 : 0x0f;
     case 0x03: return sound_mailbox_;
     default:   return 0xff;
     }
@@ -128,7 +131,11 @@ void board::mapper_write(uint32_t address, uint8_t data) noexcept {
 uint8_t board::byte_read(uint32_t address) noexcept {
     address &= 0xFFFFFFu;
     if (address < 0x040000u) {
-        return program_[address & (kRomBytes - 1)];
+        return program_[address];
+    }
+    if (rom_bank1_base_ && address >= rom_bank1_base_ &&
+        address < rom_bank1_base_ + 0x40000u) {
+        return program_[0x40000u + (address - rom_bank1_base_)];
     }
     if (address >= 0x3F0000u && address < 0x400000u) return 0xFF;
     if (address >= 0x400000u && address < 0x410000u) {
@@ -183,6 +190,9 @@ uint8_t board::byte_read(uint32_t address) noexcept {
 void board::byte_write(uint32_t address, uint8_t data) noexcept {
     address &= 0xFFFFFFu;
     if (address < 0x040000u) return;
+    if (rom_bank1_base_ && address >= rom_bank1_base_ &&
+        address < rom_bank1_base_ + 0x40000u)
+        return;
     if (address >= 0x400000u && address < 0x410000u) {
         tile_ram_[(address - 0x400000u) & (kTileRamBytes - 1)] = data;
         return;
@@ -196,8 +206,28 @@ void board::byte_write(uint32_t address, uint8_t data) noexcept {
         return;
     }
     if (address >= 0x840000u && address < 0x841000u) {
+        if (std::getenv("SHINOBI_TRACE_PALETTE")) {
+            static int reported = 0;
+            if (reported < 4)
+                std::fprintf(stderr, "palette write #%d %06x=%02x\n",
+                             ++reported, address, data);
+        }
         palette_ram_[(address - 0x840000u) & (kPaletteBytes - 1)] = data;
         return;
+    }
+    if (address >= 0xFF0000u) {
+        static const char* watch = std::getenv("SHINOBI_WATCH_RAM");
+        if (watch) {
+            static uint32_t base = std::strtoul(watch, nullptr, 16);
+            if (address >= base && address < base + 0x20 &&
+                work_ram_[(address - 0xFF0000u) & (kWorkRamBytes - 1)] !=
+                    data) {
+                static int reported = 0;
+                if (reported < 64)
+                    std::fprintf(stderr, "ram write #%d %06x=%02x\n",
+                                 ++reported, address, data);
+            }
+        }
     }
     if (address >= 0x3F0000u && address < 0x400000u) return;
     if (address >= 0xC40000u && address < 0xC44000u) {
@@ -208,6 +238,23 @@ void board::byte_write(uint32_t address, uint8_t data) noexcept {
         return;
     }
     if (address >= 0xC60000u && address < 0xC60002u) return;
+    if (address >= 0xFC0000u && address < 0xFD0000u) {
+        // ROM board 171-5704 tile bank register: mapper region #2, which
+        // Aurail programs at 0xFC0000 (register 0x15 = 0xFC). Word offset
+        // bit 0 picks the tilemap slot, the low three data bits pick
+        // which 4096-tile page it shows; only the odd byte of the word
+        // carries data (MAME rom_5704_bank_w, ACCESSING_BITS_0_7).
+        if (tile_banking_ && (address & 1u)) {
+            tile_banks_[(address >> 1) & 1u] = data & 7u;
+            if (std::getenv("SHINOBI_TRACE_BANK")) {
+                static int reported = 0;
+                if (reported < 64)
+                    std::fprintf(stderr, "tile bank #%d %06x = %02x\n",
+                                 ++reported, address, data);
+            }
+        }
+        return;
+    }
     if (address >= 0xFE0000u && address < 0xFE0040u) {
         mapper_write(address, data);
         return;
@@ -233,6 +280,7 @@ void board::reset_extras() {
     sound_latch_ = 0;
     sound_irq_pending_ = false;
     sound_bankoffs_ = 0;
+    tile_banks_ = {0, 1};
     high_scores_.reset();
 }
 
@@ -359,12 +407,20 @@ void board::co_cpu_port_write(unsigned port, uint8_t data) {
     if (std::getenv("SHINOBI_TRACE_SOUND"))
         std::fprintf(stderr, "shinobi z80 port write %02x = %02x\n",
                      port, data);
-    switch (port & 0xFFu) {
+    switch (port & 0xC0u) {
     case 0x40u:
         // uPD7759 control: bits 3/0-2 select the Z80 bank window offset
         // (ROM board 171-5521). Sample playback itself is not emulated.
         sound_bankoffs_ = ((data & 0x08u) >> 3) * 0x20000u +
                           (data & 0x07u) * 0x4000u;
+        break;
+    case 0xC0u:
+        // Sound -> main return byte (315-5195 pwrite/m_from_sound). The
+        // 68000 reads it back as mapper register 3. Aurail sequences its
+        // whole attract on these: it holds the title screen until the Z80
+        // answers the music command, so without this wire the attract
+        // never leaves the title.
+        sound_mailbox_ = data;
         break;
     default:
         break;
@@ -420,7 +476,12 @@ void board::render_frame(uint32_t* rgba) {
                 const uint16_t w = ram_word_be(tilram.data(),
                     page * 0x1000u + static_cast<unsigned>(tindex) * 2u);
                 const int color = (w >> 6) & 0x7f;
-                const int code  = w & 0x1fff;
+                // Tile bits 0-11 index within a 4096-tile page; bit 12
+                // picks the bank slot. The default banks {0, 1} reproduce
+                // the unbanked 13-bit index for boards without a 5704.
+                const int raw   = w & 0x1fff;
+                const int code  = tile_banks_[(raw >> 12) & 1] * 0x1000 +
+                                  (raw & 0xfff);
                 const int pen   = tile_pixel(*this, code, vx & 7, vy & 7);
                 if (!opaque && pen == 0) continue;
                 int r, g, blue;
@@ -486,7 +547,16 @@ void board::render_frame(uint32_t* rgba) {
             const int   vzoom = (sdata[5] >> 5) & 0x1f;
             const int   hzoom = sdata[5] & 0x1f;
             if (hide || top >= bottom) continue;
-            const unsigned bank_word_base = 0x10000u * static_cast<unsigned>(bank % 4);
+            // ROM boards wire the sprite bank lines through a per-board
+            // LUT (MAME segas16b.cpp banklists); an unmapped bank has no
+            // ROM behind it and draws nothing.
+            unsigned mapped_bank = static_cast<unsigned>(bank);
+            if (sprite_banklist_) {
+                mapped_bank = sprite_banklist_[bank & 0xf];
+                if (mapped_bank == 255u) continue;
+            }
+            const unsigned bank_word_base =
+                0x10000u * (mapped_bank % sprite_bank_mod_);
             const int sx0 = xpos - kOriginX;
             unsigned yacc = 0;
             for (int y = top; y < bottom; ++y) {

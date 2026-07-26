@@ -174,6 +174,14 @@ system16b_rom_set system16b_rom_loader::identify_set(const std::string& path) {
     if (!fs::exists(path, ec)) return system16b_rom_set::unknown;
 
     std::vector<uint8_t> tmp;
+    // Alien Syndrome (set 4, unprotected): identified by its 68000 pair.
+    if (read_entry(path, "epr-11083.a4", tmp) &&
+        read_entry(path, "epr-11080.a1", tmp))
+        return system16b_rom_set::alien_syndrome;
+    // Aurail (set 3, US, unprotected): identified by its 68000 pair.
+    if (read_entry(path, "epr-13577.a7", tmp) &&
+        read_entry(path, "epr-13576.a5", tmp))
+        return system16b_rom_set::aurail;
     // A directory must contain either shinobi_main.bin (the staged
     // 256 KiB program image) OR the MAME file names. A ZIP must contain
     // at least one of shinobi_main.bin or mpr-11363.a14.
@@ -187,6 +195,8 @@ system16b_rom_set system16b_rom_loader::identify_set(const std::string& path) {
 const char* system16b_rom_loader::set_short_name(system16b_rom_set set) {
     switch (set) {
     case system16b_rom_set::shinobi_us: return "shinobi4";
+    case system16b_rom_set::alien_syndrome: return "aliensyn";
+    case system16b_rom_set::aurail: return "aurail";
     case system16b_rom_set::unknown: return "";
     }
     return "";
@@ -195,10 +205,206 @@ const char* system16b_rom_loader::set_short_name(system16b_rom_set set) {
 const char* system16b_rom_loader::set_display_name(system16b_rom_set set) {
     switch (set) {
     case system16b_rom_set::shinobi_us: return "Shinobi (Sega System 16B, US)";
+    case system16b_rom_set::alien_syndrome:
+        return "Alien Syndrome (Sega System 16B, unprotected)";
+    case system16b_rom_set::aurail:
+        return "Aurail (Sega System 16B, US, unprotected)";
     case system16b_rom_set::unknown:    return "Unknown Shinobi-style set";
     }
     return "Unknown Shinobi-style set";
 }
+
+namespace {
+
+// Alien Syndrome (MAME `aliensyn`, set 4, ROM board 171-5358, unprotected).
+// Same board shape as Shinobi: 68000 byte pairs, three planar tile ROMs
+// (half-size, padded), four word-interleaved sprite pairs and the Z80 +
+// banked uPD7759 sample layout - three 32 KiB sample ROMs that sit at
+// 0x10000 gaps in the bank window, exactly where MAME's soundcpu region
+// places them (window base = region + 0x10000).
+system16b_rom_load_result load_alien_syndrome(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::alien_syndrome;
+
+    struct pair_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<pair_spec, 3> program_pairs{{
+        {"epr-11083.a4", "epr-11080.a1", 0x00000},
+        {"epr-11084.a5", "epr-11081.a2", 0x10000},
+        {"epr-11085.a6", "epr-11082.a3", 0x20000},
+    }};
+    r.roms.program.fill(0xff);
+    for (const pair_spec& pair : program_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x8000 || odd.size() != 0x8000) {
+            r.error = std::string("missing program pair ") + pair.even +
+                      " + " + pair.odd;
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x8000; ++i) {
+            r.roms.program[pair.base + i * 2]     = even[i];
+            r.roms.program[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Tiles: three 64 KiB planes (half the buffer; the rest stays clear so
+    // out-of-range tile codes render as pen 0).
+    const auto read_tile = [&](const char* name, auto& plane) {
+        std::vector<uint8_t> tmp;
+        if (!read_game_entry(path, name, tmp) || tmp.size() != 0x10000)
+            return false;
+        plane.fill(0);
+        std::memcpy(plane.data(), tmp.data(), tmp.size());
+        return true;
+    };
+    if (!read_tile("epr-10702.b9",  r.roms.tile_plane0) ||
+        !read_tile("epr-10703.b10", r.roms.tile_plane1) ||
+        !read_tile("epr-10704.b11", r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (epr-10702/03/04)";
+        return r;
+    }
+
+    // Sprites: four word-interleaved pairs of 64 KiB ROMs, even file on
+    // even bytes.
+    struct sprite_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<sprite_spec, 4> sprite_pairs{{
+        {"epr-10713.b5", "epr-10709.b1", 0x00000},
+        {"epr-10714.b6", "epr-10710.b2", 0x20000},
+        {"epr-10715.b7", "epr-10711.b3", 0x40000},
+        {"epr-10716.b8", "epr-10712.b4", 0x60000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x10000 || odd.size() != 0x10000)
+            continue;  // like Shinobi: missing sprites render silently
+        for (std::size_t i = 0; i < 0x10000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Z80 program + the three scattered sample ROMs.
+    {
+        std::vector<uint8_t> tmp;
+        if (read_game_entry(path, "epr-10723.a7", tmp) &&
+            tmp.size() == r.roms.sound_prog.size())
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(), tmp.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+        static constexpr std::array<std::pair<const char*, std::size_t>, 3>
+            samples{{{"epr-10724.a8", 0x00000},
+                     {"epr-10725.a9", 0x10000},
+                     {"epr-10726.a10", 0x20000}}};
+        for (const auto& [name, base] : samples) {
+            if (read_game_entry(path, name, tmp) && tmp.size() == 0x8000)
+                std::memcpy(r.roms.sound_data.data() + base, tmp.data(),
+                            tmp.size());
+        }
+    }
+    return r;
+}
+
+// Aurail (MAME `aurail`, set 3 US, ROM board 171-5704, unprotected).
+// Twice Shinobi's program (four byte-interleaved 128 KiB ROMs), two chips
+// per tile plane, sixteen word-interleaved sprite ROMs filling all eight
+// 128 KiB banks, and a single 128 KiB uPD7759 sample ROM.
+system16b_rom_load_result load_aurail(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::aurail;
+
+    struct pair_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<pair_spec, 2> program_pairs{{
+        {"epr-13577.a7", "epr-13576.a5", 0x00000},
+        {"epr-13447.a8", "epr-13445.a6", 0x40000},
+    }};
+    r.roms.program.fill(0xff);
+    for (const pair_spec& pair : program_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x20000 || odd.size() != 0x20000) {
+            r.error = std::string("missing program pair ") + pair.even +
+                      " + " + pair.odd;
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.program[pair.base + i * 2]     = even[i];
+            r.roms.program[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Tiles: each plane is two 128 KiB chips end to end, giving the eight
+    // 4096-tile pages the 5704 bank register selects from.
+    struct tile_spec { const char* low; const char* high; };
+    static constexpr std::array<tile_spec, 3> tile_chips{{
+        {"mpr-13450.a14", "mpr-13465.b14"},
+        {"mpr-13451.a15", "mpr-13466.b15"},
+        {"mpr-13452.a16", "mpr-13467.b16"},
+    }};
+    const auto read_plane = [&](const tile_spec& spec, auto& plane) {
+        std::vector<uint8_t> low, high;
+        if (!read_game_entry(path, spec.low, low) ||
+            !read_game_entry(path, spec.high, high) ||
+            low.size() != 0x20000 || high.size() != 0x20000)
+            return false;
+        plane.fill(0);
+        std::memcpy(plane.data(), low.data(), low.size());
+        std::memcpy(plane.data() + 0x20000, high.data(), high.size());
+        return true;
+    };
+    if (!read_plane(tile_chips[0], r.roms.tile_plane0) ||
+        !read_plane(tile_chips[1], r.roms.tile_plane1) ||
+        !read_plane(tile_chips[2], r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (mpr-13450/51/52/65/66/67)";
+        return r;
+    }
+
+    // Sprites: eight word-interleaved pairs, even file on even bytes.
+    struct sprite_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<sprite_spec, 8> sprite_pairs{{
+        {"mpr-13457.b5",  "mpr-13453.b1", 0x000000},
+        {"mpr-13458.b6",  "mpr-13454.b2", 0x040000},
+        {"mpr-13459.b7",  "mpr-13455.b3", 0x080000},
+        {"mpr-13460.b8",  "mpr-13456.b4", 0x0c0000},
+        {"mpr-13461.b10", "mpr-13440.a1", 0x100000},
+        {"mpr-13462.b11", "mpr-13441.a2", 0x140000},
+        {"mpr-13463.b12", "mpr-13442.a3", 0x180000},
+        {"mpr-13464.b13", "mpr-13443.a4", 0x1c0000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x20000 || odd.size() != 0x20000)
+            continue;  // like Shinobi: missing sprites render silently
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Z80 program + the banked sample ROM (window base = MAME region
+    // + 0x10000, so the single chip sits at offset 0 here).
+    {
+        std::vector<uint8_t> tmp;
+        if (read_game_entry(path, "epr-13448.a10", tmp) &&
+            tmp.size() == r.roms.sound_prog.size())
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(), tmp.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+        if (read_game_entry(path, "mpr-13449.a11", tmp) &&
+            tmp.size() == 0x20000)
+            std::memcpy(r.roms.sound_data.data(), tmp.data(), tmp.size());
+    }
+    return r;
+}
+
+}  // namespace
 
 system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
     system16b_rom_load_result r{};
@@ -207,22 +413,29 @@ system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
         r.error = "No Shinobi program image or graphics ROMs found in: " + path;
         return r;
     }
+    if (r.set == system16b_rom_set::alien_syndrome)
+        return load_alien_syndrome(path);
+    if (r.set == system16b_rom_set::aurail)
+        return load_aurail(path);
 
-    // 1) Program image (256 KiB). Prefer the consolidated flat image;
-    //    otherwise assemble it from the MAME `shinobi4` pair, which is
-    //    word-interleaved: epr-11360.a7 -> even bytes, epr-11359.a5 -> odd.
+    // 1) Program image (256 KiB - Shinobi's own size, half the shared
+    //    buffer). Prefer the consolidated flat image; otherwise assemble
+    //    it from the MAME `shinobi4` pair, which is word-interleaved:
+    //    epr-11360.a7 -> even bytes, epr-11359.a5 -> odd.
+    constexpr std::size_t kShinobiProgramBytes = 0x40000;
+    r.roms.program.fill(0xff);
     if (!read_into(path, "shinobi_main.bin",
-                   r.roms.program.data(), r.roms.program.size(),
+                   r.roms.program.data(), kShinobiProgramBytes,
                    nullptr)) {
         std::vector<uint8_t> even, odd;
         if (!read_game_entry(path, "epr-11360.a7", even) ||
             !read_game_entry(path, "epr-11359.a5", odd) ||
-            even.size() + odd.size() != kProgramRomBytes) {
+            even.size() + odd.size() != kShinobiProgramBytes) {
             r.error = "missing program image: need shinobi_main.bin or the "
                       "epr-11360.a7 + epr-11359.a5 pair";
             return r;
         }
-        const std::size_t half = kProgramRomBytes / 2;
+        const std::size_t half = kShinobiProgramBytes / 2;
         for (std::size_t i = 0; i < half; ++i) {
             r.roms.program[i * 2]     = even[i];
             r.roms.program[i * 2 + 1] = odd[i];
@@ -301,7 +514,12 @@ system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
     // unless we grow MC-8123 opcode decryption.
     // Sound PCM/data: mpr-11362.a11 (128 KiB bank window, padded).
     bool prog_ok = read_padded("epr-11361.a10", r.roms.sound_prog.data(), r.roms.sound_prog.size());
-    bool data_ok = read_padded("mpr-11362.a11", r.roms.sound_data.data(), r.roms.sound_data.size());
+    // The bank buffer is now double the ROM: mirror the 128 KiB image into
+    // the upper half so bank offsets past 0x20000 read the same bytes the
+    // old modulo-by-0x20000 addressing produced.
+    bool data_ok = read_padded("mpr-11362.a11", r.roms.sound_data.data(), 0x20000);
+    std::memcpy(r.roms.sound_data.data() + 0x20000, r.roms.sound_data.data(),
+                0x20000);
     (void)prog_ok;
     (void)data_ok;
 
