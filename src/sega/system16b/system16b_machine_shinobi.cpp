@@ -257,9 +257,16 @@ uint8_t board::byte_read(uint32_t address) noexcept {
         uint32_t offset;
         if (mapper_region(address, region, offset)) {
             switch (region) {
-            case 0: return program_[offset & 0x3ffffu];
-            case 1: return program_[0x40000u + (offset & 0x3ffffu)];
-            case 2: return 0xFF; // 5704 tile bank register, write-only
+            case 0:
+            case 1:
+            case 2: {
+                const uint32_t rom_base = mapper_rom_base_[region];
+                if (rom_base == kMapperTileBank)
+                    return 0xFF; // 5704 tile bank register, write-only
+                return program_[(rom_base +
+                                 (offset & mapper_rom_mask_)) &
+                                (kRomBytes - 1)];
+            }
             case 3: return work_ram_[offset & (kWorkRamBytes - 1)];
             case 4: return sprite_ram_[offset & (kSpriteRamBytes - 1)];
             case 5: return (offset & 0x10000u)
@@ -334,6 +341,8 @@ void board::byte_write(uint32_t address, uint8_t data) noexcept {
             case 0:
             case 1: return; // ROM
             case 2:
+                if (mapper_rom_base_[2] != kMapperTileBank)
+                    return; // a third ROM window on the 5358
                 // 5704 tile bank register: word offset bit 0 picks the
                 // tilemap slot, the low three data bits pick which
                 // 4096-tile page it shows; only the odd byte carries

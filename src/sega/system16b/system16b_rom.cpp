@@ -194,6 +194,14 @@ system16b_rom_set system16b_rom_loader::identify_set(const std::string& path) {
     if (read_entry(path, "epr-11907.a7", tmp) &&
         read_entry(path, "317-0078.c2", tmp))
         return system16b_rom_set::altered_beast;
+    // Dynamite Dux (set 1, World, i8751 317-0095).
+    if (read_entry(path, "epr-12189.a7", tmp) &&
+        read_entry(path, "317-0095.c2", tmp))
+        return system16b_rom_set::dynamite_dux;
+    // Tough Turf (set 1, US, i8751 317-0099).
+    if (read_entry(path, "epr-12266.a4", tmp) &&
+        read_entry(path, "317-0099.c2", tmp))
+        return system16b_rom_set::tough_turf;
     // A directory must contain either shinobi_main.bin (the staged
     // 256 KiB program image) OR the MAME file names. A ZIP must contain
     // at least one of shinobi_main.bin or mpr-11363.a14.
@@ -212,6 +220,8 @@ const char* system16b_rom_loader::set_short_name(system16b_rom_set set) {
     case system16b_rom_set::riot_city: return "riotcity";
     case system16b_rom_set::golden_axe: return "goldnaxe2";
     case system16b_rom_set::altered_beast: return "altbeast";
+    case system16b_rom_set::dynamite_dux: return "ddux1";
+    case system16b_rom_set::tough_turf: return "tturfu";
     case system16b_rom_set::unknown: return "";
     }
     return "";
@@ -230,6 +240,10 @@ const char* system16b_rom_loader::set_display_name(system16b_rom_set set) {
         return "Golden Axe (Sega System 16B, set 2, i8751)";
     case system16b_rom_set::altered_beast:
         return "Altered Beast (Sega System 16B, set 8, i8751)";
+    case system16b_rom_set::dynamite_dux:
+        return "Dynamite Dux (Sega System 16B, set 1, i8751)";
+    case system16b_rom_set::tough_turf:
+        return "Tough Turf (Sega System 16B, set 1 US, i8751)";
     case system16b_rom_set::unknown:    return "Unknown Shinobi-style set";
     }
     return "Unknown Shinobi-style set";
@@ -709,6 +723,192 @@ system16b_rom_load_result load_altered_beast(const std::string& path) {
     }
     return r;
 }
+
+// Dynamite Dux (MAME `ddux1`, set 1 World, ROM board 171-5704, i8751
+// 317-0095). Two program pairs, half-size tile chips, two sprite pairs
+// and a Z80 program with no sample ROM at all.
+system16b_rom_load_result load_dynamite_dux(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::dynamite_dux;
+
+    struct pair_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<pair_spec, 2> program_pairs{{
+        {"epr-12189.a7", "epr-12188.a5", 0x00000},
+        {"epr-11915.a8", "epr-11913.a6", 0x40000},
+    }};
+    r.roms.program.fill(0xff);
+    for (const pair_spec& pair : program_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x20000 || odd.size() != 0x20000) {
+            r.error = std::string("missing program pair ") + pair.even +
+                      " + " + pair.odd;
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.program[pair.base + i * 2]     = even[i];
+            r.roms.program[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    const auto read_plane = [&](const char* name, auto& plane) {
+        std::vector<uint8_t> tmp;
+        if (!read_game_entry(path, name, tmp) || tmp.size() != 0x10000)
+            return false;
+        plane.fill(0);
+        std::memcpy(plane.data(), tmp.data(), tmp.size());
+        return true;
+    };
+    if (!read_plane("mpr-11917.a14", r.roms.tile_plane0) ||
+        !read_plane("mpr-11918.a15", r.roms.tile_plane1) ||
+        !read_plane("mpr-11919.a16", r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (mpr-11917/18/19)";
+        return r;
+    }
+
+    struct sprite_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<sprite_spec, 2> sprite_pairs{{
+        {"mpr-11922.b5", "mpr-11920.b1", 0x00000},
+        {"mpr-11923.b6", "mpr-11921.b2", 0x40000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x20000 || odd.size() != 0x20000)
+            continue;
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    {
+        std::vector<uint8_t> tmp;
+        if (read_game_entry(path, "epr-11916.a10", tmp) &&
+            tmp.size() == r.roms.sound_prog.size())
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(), tmp.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+        if (read_game_entry(path, "317-0095.c2", tmp) &&
+            tmp.size() == 0x1000)
+            r.roms.mcu = tmp;
+        else
+            r.error = "missing i8751 MCU program 317-0095.c2";
+    }
+    return r;
+}
+
+// Tough Turf (MAME `tturfu`, set 1 US, ROM board 171-5358, i8751
+// 317-0099). Quarter-size program pairs, half-size tiles and sprites,
+// four uPD7759 sample chips. The merged archive keeps the shared
+// graphics under the parent's 5704 socket names (opr-*), so each chip
+// is looked up under both.
+system16b_rom_load_result load_tough_turf(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::tough_turf;
+
+    const auto read_any = [&](std::initializer_list<const char*> names,
+                              std::vector<uint8_t>& bytes) {
+        for (const char* name : names)
+            if (read_game_entry(path, name, bytes)) return true;
+        return false;
+    };
+
+    struct pair_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<pair_spec, 2> program_pairs{{
+        {"epr-12266.a4", "epr-12264.a1", 0x00000},
+        {"epr-12267.a5", "epr-12265.a2", 0x20000},
+    }};
+    r.roms.program.fill(0xff);
+    for (const pair_spec& pair : program_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x10000 || odd.size() != 0x10000) {
+            r.error = std::string("missing program pair ") + pair.even +
+                      " + " + pair.odd;
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x10000; ++i) {
+            r.roms.program[pair.base + i * 2]     = even[i];
+            r.roms.program[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    const auto read_plane = [&](std::initializer_list<const char*> names,
+                                auto& plane) {
+        std::vector<uint8_t> tmp;
+        if (!read_any(names, tmp) || tmp.size() != 0x10000) return false;
+        plane.fill(0);
+        std::memcpy(plane.data(), tmp.data(), tmp.size());
+        return true;
+    };
+    if (!read_plane({"epr-12268.b9", "opr-12268.a14"},
+                    r.roms.tile_plane0) ||
+        !read_plane({"epr-12269.b10", "opr-12269.a15"},
+                    r.roms.tile_plane1) ||
+        !read_plane({"epr-12270.b11", "opr-12270.a16"},
+                    r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (12268/69/70)";
+        return r;
+    }
+
+    struct sprite_spec {
+        const char* even_a; const char* even_b;
+        const char* odd_a;  const char* odd_b;
+        std::size_t base;
+    };
+    static constexpr std::array<sprite_spec, 4> sprite_pairs{{
+        {"epr-12280.b5", "opr-12280.b8",
+         "epr-12276.b1", "opr-12276.b4", 0x00000},
+        {"epr-12281.b6", "opr-12281.b7",
+         "epr-12277.b2", "opr-12277.b3", 0x20000},
+        {"epr-12282.b7", "opr-12282.b6",
+         "epr-12278.b3", "opr-12278.b2", 0x40000},
+        {"epr-12283.b8", "opr-12283.b5",
+         "epr-12279.b4", "opr-12279.b1", 0x60000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_any({pair.even_a, pair.even_b}, even) ||
+            !read_any({pair.odd_a, pair.odd_b}, odd) ||
+            even.size() != 0x10000 || odd.size() != 0x10000)
+            continue;
+        for (std::size_t i = 0; i < 0x10000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    {
+        std::vector<uint8_t> tmp;
+        if (read_game_entry(path, "epr-12271.a7", tmp) &&
+            tmp.size() == r.roms.sound_prog.size())
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(), tmp.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+        static constexpr std::array<std::pair<const char*, std::size_t>, 4>
+            samples{{{"epr-12272.a8", 0x00000},
+                     {"epr-12273.a9", 0x10000},
+                     {"epr-12274.a10", 0x20000},
+                     {"epr-12275.a11", 0x30000}}};
+        for (const auto& [name, base] : samples) {
+            if (read_game_entry(path, name, tmp) && tmp.size() == 0x8000)
+                std::memcpy(r.roms.sound_data.data() + base, tmp.data(),
+                            tmp.size());
+        }
+        if (read_game_entry(path, "317-0099.c2", tmp) &&
+            tmp.size() == 0x1000)
+            r.roms.mcu = tmp;
+        else
+            r.error = "missing i8751 MCU program 317-0099.c2";
+    }
+    return r;
+}
 }  // namespace
 
 system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
@@ -728,6 +928,10 @@ system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
         return load_golden_axe(path);
     if (r.set == system16b_rom_set::altered_beast)
         return load_altered_beast(path);
+    if (r.set == system16b_rom_set::dynamite_dux)
+        return load_dynamite_dux(path);
+    if (r.set == system16b_rom_set::tough_turf)
+        return load_tough_turf(path);
 
     // 1) Program image (256 KiB - Shinobi's own size, half the shared
     //    buffer). Prefer the consolidated flat image; otherwise assemble
