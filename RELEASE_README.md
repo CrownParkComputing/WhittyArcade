@@ -4,7 +4,7 @@ This archive contains the x86-64 WhittyArcade executable. It does not contain
 source code, game ROMs, firmware, keys, or other copyrighted game data.
 
 Documentation and current downloads:
-https://crownparkcomputing.github.io/WhittyArcade-Releases/
+https://github.com/CrownParkComputing/WhittyArcade/releases/latest
 
 ## Install dependencies
 
