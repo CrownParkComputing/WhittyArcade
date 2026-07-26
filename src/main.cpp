@@ -896,23 +896,23 @@ int main(int argc, char* argv[]) {
         settings.output =
             launch_mode == cabinet_launch_mode::independent_pair ?
                 output_mode::dual : output_mode::single;
-        // Fullscreen is decided by the launch, not by settings.ini: the only
-        // session that needs the whole screen is a twin/two-player one
-        // sharing a single desktop, where the surface is split into two
-        // side-by-side panes and a window's worth of space would halve each
-        // player's view. Everything else starts windowed, including a
-        // system-linked pair - those are two separate processes each showing
-        // one player's own cabinet, so each counts as a single-screen
-        // launch. Forcing the value here also stops a fullscreen=1 left
-        // behind by the in-game toggle from carrying into the next launch.
-        // The only launch that needs the whole screen is a twin/two-player
-        // one sharing a single desktop, where the surface is split into two
-        // side-by-side panes. A wall column is deliberately not fullscreen:
-        // it is one of several windows tiled across the display, and a
-        // fullscreen window would cover the columns beside it.
+        // Fullscreen is decided by the launch, not by settings.ini: a game
+        // always takes the whole screen. The two exceptions are launches
+        // where several windows must share one display - a wall column
+        // (one of several tiled across the display) and linked cabinets
+        // that were asked to share a single screen, where each window owns
+        // half the desktop (a pair) or the compositor tiles them (a bigger
+        // ring). A linked cabinet with its own display goes fullscreen on
+        // it like any single game. Forcing the value here also stops a
+        // fullscreen=0 left behind by the in-game toggle from carrying
+        // into the next launch.
+        const bool cabinets_share_display =
+            cabinet_node != 0 &&
+            (launch_mode == cabinet_launch_mode::linked_pair ||
+             launch_mode == cabinet_launch_mode::linked_network) &&
+            (one_screen_pair || cabinet_count > 2);
         settings.fullscreen =
-            launch_mode == cabinet_launch_mode::independent_pair &&
-            settings.wall_count <= 1;
+            settings.wall_count <= 1 && !cabinets_share_display;
         // Escape hatch for bring-up: a windowed presenter window starts
         // hidden and is only shown after its first successful present, so a
         // presentation fault and a window that never appears look the same.
