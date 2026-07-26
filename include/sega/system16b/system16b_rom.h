@@ -50,6 +50,7 @@ enum class system16b_rom_set : uint8_t {
     aurail,
     riot_city,
     golden_axe,
+    altered_beast,
 };
 
 struct system16b_roms {
