@@ -1065,6 +1065,9 @@ std::string show_in_game_game_browser(const std::vector<rom_choice>& choices) {
 rom_selection_result show_rom_selector(const std::string& current_path,
                                        multiplayer_lobby* lobby) {
     launcher_menu menu;
+    // The boot screen goes up before anything slow happens, so switching the
+    // cabinet on shows the cabinet rather than an empty desktop.
+    menu.show_splash("Starting up", 0.05f);
     // Cover artwork, collected in the background and kept for the life
     // of the selector so moving between lists does not refetch.
     igdb::cover_library covers;
@@ -1077,7 +1080,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         exit_result.action = rom_selection_action::exit_requested;
         return exit_result;
     }
+    menu.show_splash("Reading the game library", 0.35f);
     std::vector<rom_choice> choices = discover_rom_choices(current_path);
+    menu.show_splash("Gathering cabinet artwork", 0.8f);
     const auto linked_result = [&](std::string_view short_name, int node) {
         for (const rom_choice& choice : choices) {
             const auto identity = identify_arcade_game(choice.path);
@@ -1124,6 +1129,13 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     for (;;) {
         if (lobby) lobby->set_installed_games(choices);
         const bool lobby_connected_at_draw = lobby && lobby->connected();
+        // The grid re-enters this loop whenever the connection changes, so
+        // setting it here is enough to keep it honest.
+        menu.set_status(
+            lobby_connected_at_draw ?
+                "2 machines connected - network play ready" :
+                "Waiting for another machine - no network play yet",
+            lobby_connected_at_draw);
         const std::function<bool()> interrupt = lobby ?
             std::function<bool()>([lobby, lobby_connected_at_draw] {
                 return lobby->launch_pending() ||

@@ -16,7 +16,12 @@
 #include <utility>
 
 namespace {
-constexpr int logical_width = 800;
+// The drawing space is described in these units and scaled to the window, so
+// 720 is "one screen tall" rather than a pixel count. The width is not fixed:
+// a fixed one letterboxes an ultrawide display into a strip down the middle
+// with everything drawn twice the size it should be. It is set from the
+// display's own shape when the window opens.
+int logical_width = 800;
 constexpr int logical_height = 720;
 constexpr int compact_window_width = 560;
 constexpr int compact_window_height = 510;
@@ -138,6 +143,12 @@ struct launcher_menu::implementation {
     SDL_Renderer* renderer{};
     TTF_Font* font{};
     TTF_Font* title_font{};
+    TTF_Font* hint_font{};
+    // Shown in the corner of the browsing screens: whether another machine
+    // is out there. A player deciding what to play should not have to open a
+    // game to find out that two-player across machines is unavailable.
+    std::string status_text;
+    bool status_good{};
     bool sdl_initialized{};
     bool ttf_initialized{};
     std::vector<SDL_Gamepad*> controllers;
@@ -162,9 +173,25 @@ struct launcher_menu::implementation {
             ttf_initialized = true;
         }
 
+        // A cabinet front end takes the whole screen. Windowed is still
+        // available for working on it, where a fullscreen menu that steals
+        // focus every launch is a nuisance.
+        const bool windowed_menu =
+            compact_utility_window ||
+            (std::getenv("WHITTY_MENU_WINDOWED") &&
+             *std::getenv("WHITTY_MENU_WINDOWED") == '1');
+        if (!compact_utility_window) {
+            const SDL_DisplayMode* desktop =
+                SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+            if (desktop && desktop->w > 0 && desktop->h > 0) {
+                logical_width = std::clamp(
+                    logical_height * desktop->w / desktop->h, 800, 2400);
+            }
+        }
         const SDL_WindowFlags window_flags =
             SDL_WINDOW_RESIZABLE |
             SDL_WINDOW_HIGH_PIXEL_DENSITY |
+            (windowed_menu ? 0 : SDL_WINDOW_FULLSCREEN) |
             (compact_utility_window ?
                  (SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_UTILITY) : 0);
         window = SDL_CreateWindow(
@@ -204,6 +231,9 @@ struct launcher_menu::implementation {
             if (font) {
                 // The banner pages draw their board or publisher name large.
                 title_font = TTF_OpenFont(path.string().c_str(), 44);
+                // Control hints are a glance, not a sentence: small, and
+                // paired with the button they name.
+                hint_font = TTF_OpenFont(path.string().c_str(), 15);
                 break;
             }
         }
@@ -222,6 +252,7 @@ struct launcher_menu::implementation {
     ~implementation() {
         for (SDL_Gamepad* controller : controllers)
             SDL_CloseGamepad(controller);
+        if (hint_font) TTF_CloseFont(hint_font);
         if (title_font) TTF_CloseFont(title_font);
         if (font) TTF_CloseFont(font);
         if (renderer) SDL_DestroyRenderer(renderer);
@@ -315,6 +346,106 @@ struct launcher_menu::implementation {
         return row >= 0 && row < total ? row : -1;
     }
 
+
+    // ---- On-screen controls ----------------------------------------------
+    //
+    // A row of prose along the bottom naming every key is the first thing to
+    // read and the last thing anyone needs. These draw the button instead:
+    // the pad's own coloured faces and a d-pad, each with one word.
+
+    void fill_disc(int centre_x, int centre_y, int radius, SDL_Color colour) {
+        SDL_SetRenderDrawColor(renderer, colour.r, colour.g, colour.b,
+                               colour.a);
+        for (int dy = -radius; dy <= radius; ++dy) {
+            const int half = static_cast<int>(
+                std::sqrt(static_cast<double>(radius * radius - dy * dy)));
+            const SDL_FRect span = frect(centre_x - half, centre_y + dy,
+                                         half * 2 + 1, 1);
+            SDL_RenderFillRect(renderer, &span);
+        }
+    }
+
+    // One hint: either a face button carrying a letter, or the d-pad.
+    struct hint {
+        std::string letter;   // empty for the d-pad
+        std::string label;
+    };
+
+    // Xbox-pad colours, because that is what is plugged in and the colour is
+    // recognised before the letter is read.
+    static SDL_Color face_colour(const std::string& letter) {
+        if (letter == "A") return SDL_Color{104, 187, 89, 255};
+        if (letter == "B") return SDL_Color{214, 84, 78, 255};
+        if (letter == "X") return SDL_Color{74, 150, 226, 255};
+        if (letter == "Y") return SDL_Color{226, 182, 66, 255};
+        return SDL_Color{110, 128, 142, 255};
+    }
+
+    void draw_dpad(int x, int y, int size) {
+        SDL_SetRenderDrawColor(renderer, 150, 168, 182, 255);
+        const float arm = size / 3.0f;
+        const SDL_FRect vertical = frect(x + arm, y, arm, size);
+        const SDL_FRect horizontal = frect(x, y + arm, size, arm);
+        SDL_RenderFillRect(renderer, &vertical);
+        SDL_RenderFillRect(renderer, &horizontal);
+    }
+
+    // Draws the hints along the bottom, centred. Returns nothing: hints are
+    // decoration, and a screen too narrow for them simply gets fewer.
+    void draw_hints(const std::vector<hint>& hints, int y) {
+        TTF_Font* small = hint_font ? hint_font : font;
+        if (!small) return;
+        constexpr int icon = 20;
+        constexpr int inner_gap = 7;
+        constexpr int between = 22;
+
+        std::vector<rendered_text> labels;
+        int total = 0;
+        for (const hint& item : hints) {
+            labels.push_back(make_text(renderer, small, item.label, muted));
+            total += icon + inner_gap + labels.back().width + between;
+        }
+        int x = std::max(horizontal_margin, (logical_width - total) / 2);
+        for (std::size_t index = 0; index < hints.size(); ++index) {
+            const hint& item = hints[index];
+            if (item.letter.empty()) {
+                draw_dpad(x, y, icon);
+            } else {
+                fill_disc(x + icon / 2, y + icon / 2, icon / 2,
+                          face_colour(item.letter));
+                rendered_text mark = make_text(renderer, small, item.letter,
+                                               SDL_Color{12, 18, 26, 255});
+                draw_text(renderer, mark, x + icon / 2 - mark.width / 2,
+                          y + icon / 2 - mark.height / 2);
+                destroy_text(mark);
+            }
+            draw_text(renderer, labels[index], x + icon + inner_gap,
+                      y + (icon - labels[index].height) / 2);
+            x += icon + inner_gap + labels[index].width + between;
+            destroy_text(labels[index]);
+        }
+    }
+
+    // The network state, top right, on every browsing screen.
+    void draw_status_chip() {
+        if (status_text.empty()) return;
+        TTF_Font* small = hint_font ? hint_font : font;
+        if (!small) return;
+        rendered_text text = make_text(
+            renderer, small, status_text,
+            status_good ? SDL_Color{150, 226, 170, 255}
+                        : SDL_Color{168, 184, 198, 255});
+        const int width = text.width + 34;
+        const int x = logical_width - horizontal_margin - width;
+        SDL_SetRenderDrawColor(renderer, 18, 28, 38, 235);
+        const SDL_FRect plate = frect(x, 18, width, 28);
+        SDL_RenderFillRect(renderer, &plate);
+        fill_disc(x + 15, 32, 5,
+                  status_good ? SDL_Color{104, 214, 132, 255}
+                              : SDL_Color{120, 136, 150, 255});
+        draw_text(renderer, text, x + 26, 32 - text.height / 2);
+        destroy_text(text);
+    }
 
     // ---- Cover-art grid ------------------------------------------------
     //
@@ -707,18 +838,16 @@ struct launcher_menu::implementation {
             }
         }
 
-        const std::string action = wanted > 0 ?
-            "ENTER / A: HOLD (" + std::to_string(chosen.size()) + " of " +
-                std::to_string(wanted) + ")" :
-            std::string("ENTER / A: START   TAB / Y: VIEW") +
-                (paging ? "   PGUP/PGDN / LB/RB: PAGE" : "") +
-                (info ? "   I / X: BOARD INFO" : "");
-        rendered_text controls = make_text(
-            renderer, font,
-            "ARROWS / D-PAD: MOVE   " + action + "   ESC / B: " + back_label,
-            muted);
-        draw_text(renderer, controls, horizontal_margin, list_bottom + 20);
-        destroy_text(controls);
+        std::vector<hint> hints{{"", "Move"}};
+        hints.push_back({"A", wanted > 0 ?
+            "Hold (" + std::to_string(chosen.size()) + " of " +
+                std::to_string(wanted) + ")" : std::string("Play")});
+        if (wanted <= 0) hints.push_back({"Y", "View"});
+        if (info) hints.push_back({"X", "Board Info"});
+        if (paging) hints.push_back({"", "Page"});
+        hints.push_back({"B", back_label});
+        draw_hints(hints, list_bottom + 18);
+        draw_status_chip();
         SDL_RenderPresent(renderer);
     }
 
@@ -726,8 +855,9 @@ struct launcher_menu::implementation {
                     const std::string& description,
                     const std::vector<std::string>& rows, int selected,
                     int first, int visible, int list_top,
-                    const std::string& footer =
-                        "UP/DOWN: SELECT    ENTER/A: OPEN    ESC/B: BACK") {
+                    // Empty means the ordinary three, drawn as buttons.
+                    // Screens with something unusual to say still pass prose.
+                    const std::string& footer = {}) {
         SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
         SDL_RenderClear(renderer);
         SDL_SetRenderDrawColor(renderer, 56, 198, 255, 255);
@@ -777,13 +907,72 @@ struct launcher_menu::implementation {
                       list_bottom + 4);
             destroy_text(more);
         }
-        rendered_text controls = make_text(
-            renderer, font, footer, muted);
-        draw_text(renderer, controls, horizontal_margin, 680);
-        destroy_text(controls);
+        if (footer.empty()) {
+            draw_hints({{"", "Move"}, {"A", "Open"}, {"B", "Back"}}, 676);
+        } else {
+            rendered_text controls = make_text(
+                renderer, hint_font ? hint_font : font, footer, muted);
+            draw_text(renderer, controls, horizontal_margin, 680);
+            destroy_text(controls);
+        }
+        draw_status_chip();
         destroy_text(detail);
         destroy_text(heading);
         SDL_RenderPresent(renderer);
+    }
+
+    // The boot screen: the name, what is being loaded, and a bar. Drawn and
+    // presented immediately - it exists to fill the wait, so it must not wait
+    // on anything itself.
+    void splash(const std::string& step, float progress) {
+        SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
+        SDL_RenderClear(renderer);
+        // A slab of colour behind the name, so the boot screen reads as a
+        // cabinet warming up rather than a progress dialog.
+        SDL_SetRenderDrawColor(renderer, 14, 26, 38, 255);
+        const SDL_FRect band = frect(0, logical_height / 2 - 150,
+                                     logical_width, 210);
+        SDL_RenderFillRect(renderer, &band);
+        SDL_SetRenderDrawColor(renderer, 56, 198, 255, 255);
+        const SDL_FRect rule = frect(0, logical_height / 2 - 150,
+                                     logical_width, 4);
+        SDL_RenderFillRect(renderer, &rule);
+
+        rendered_text name = make_text(
+            renderer, title_font ? title_font : font, "WHITTY ARCADE", accent);
+        draw_text(renderer, name, (logical_width - name.width) / 2,
+                  logical_height / 2 - 118);
+        destroy_text(name);
+        rendered_text tag = make_text(
+            renderer, font, "INSERT COIN", muted);
+        draw_text(renderer, tag, (logical_width - tag.width) / 2,
+                  logical_height / 2 - 58);
+        destroy_text(tag);
+
+        const int bar_width = std::min(560, logical_width - 120);
+        const int bar_x = (logical_width - bar_width) / 2;
+        const int bar_y = logical_height / 2 + 96;
+        SDL_SetRenderDrawColor(renderer, 26, 40, 54, 255);
+        const SDL_FRect trough = frect(bar_x, bar_y, bar_width, 14);
+        SDL_RenderFillRect(renderer, &trough);
+        SDL_SetRenderDrawColor(renderer, 56, 198, 255, 255);
+        const SDL_FRect fill = frect(
+            bar_x, bar_y,
+            bar_width * std::clamp(progress, 0.0f, 1.0f), 14);
+        SDL_RenderFillRect(renderer, &fill);
+
+        if (!step.empty()) {
+            rendered_text what = make_text(
+                renderer, hint_font ? hint_font : font, step, muted);
+            draw_text(renderer, what, (logical_width - what.width) / 2,
+                      bar_y + 28);
+            destroy_text(what);
+        }
+        SDL_RenderPresent(renderer);
+        // Keeps the window alive with the compositor while a long load runs;
+        // without it the boot screen is shown but reported as unresponsive.
+        SDL_Event event{};
+        while (SDL_PollEvent(&event)) {}
     }
 
     int select(const std::string& title, const std::string& description,
@@ -1645,6 +1834,18 @@ int launcher_menu::select_interruptible(
     SDL_RaiseWindow(m_impl->window);
     return m_impl->select(title, description, items, back_label,
                           initial_selection, interrupt);
+}
+
+void launcher_menu::show_splash(const std::string& step, float progress) {
+    if (!m_impl || !m_impl->ready()) return;
+    SDL_SetWindowTitle(m_impl->window, "WhittyArcade");
+    m_impl->splash(step, progress);
+}
+
+void launcher_menu::set_status(const std::string& text, bool good) {
+    if (!m_impl) return;
+    m_impl->status_text = text;
+    m_impl->status_good = good;
 }
 
 void launcher_menu::show_text(const std::string& title,
