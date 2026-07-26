@@ -54,6 +54,7 @@ jobs:
             mingw-w64-ucrt-x86_64-mpg123
             mingw-w64-ucrt-x86_64-vulkan-loader
             mingw-w64-ucrt-x86_64-vulkan-headers
+            mingw-w64-ucrt-x86_64-glslang
 
       - name: Configure release build
         run: cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release
