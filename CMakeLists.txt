@@ -602,6 +602,13 @@ target_include_directories(menu_stick_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(menu_stick_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME menu_stick_test COMMAND menu_stick_test)
 
+add_executable(wall_capacity_test
+    tests/wall_capacity_test.cpp
+)
+target_include_directories(wall_capacity_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(wall_capacity_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME wall_capacity_test COMMAND wall_capacity_test)
+
 add_executable(wall_layout_test
     tests/wall_layout_test.cpp
 )

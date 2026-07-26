@@ -4,6 +4,7 @@
 #include "arcade_settings.h"
 #include "high_scores.h"
 #include "banner_library.h"
+#include "wall_capacity.h"
 #include "system16_data.h"
 #include "play_stats.h"
 #include "igdb_artwork.h"
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <thread>
 #include <cstdio>
 #include <filesystem>
 #include "stb_image.h"
@@ -1459,17 +1461,43 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     "wall.", "Back");
                 continue;
             }
-            const std::array<std::string, 2> counts{"2 games", "3 games"};
+            // How many cabinets this machine can actually drive: each
+            // column is a whole board in its own process, so the number
+            // offered comes from the processor and the display rather than
+            // being fixed. Anything beyond that is still listed, greyed out,
+            // so the ceiling is visible rather than mysterious.
+            int wall_display_width = 0;
+            if (const SDL_DisplayMode* desktop =
+                    SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay()))
+                wall_display_width = desktop->w;
+            if (wall_display_width <= 0) wall_display_width = 1920;
+            const int capacity = wall_column_capacity(
+                std::thread::hardware_concurrency(), wall_display_width);
+            std::vector<std::string> counts;
+            std::vector<int> beyond_capacity;
+            for (int columns = wall_min_columns; columns <= wall_max_columns;
+                 ++columns) {
+                std::string entry = std::to_string(columns) + " games";
+                if (columns > capacity) {
+                    entry += "   (more than this machine can run)";
+                    beyond_capacity.push_back(
+                        columns - wall_min_columns);
+                }
+                counts.push_back(entry);
+            }
             const int chosen = menu.select(
                 "Arcade Wall",
                 "Runs several games at once, side by side across one "
                 "fullscreen display. They all keep running their attract "
-                "modes; the highlighted column is the one you play, and Tab "
-                "moves the highlight along.",
-                std::vector<std::string>(counts.begin(), counts.end()),
-                "Back");
+                "modes; the highlighted column is the one you play. This "
+                "machine can drive " + std::to_string(capacity) +
+                    " cabinets at once - the columns share the display "
+                    "between them, so each one gets narrower as you add "
+                    "another.",
+                counts, "Back", 0, beyond_capacity);
             if (chosen < 0) continue;
-            const std::size_t wanted = static_cast<std::size_t>(chosen) + 2;
+            const std::size_t wanted =
+                static_cast<std::size_t>(chosen + wall_min_columns);
             // Columns are picked one at a time through the same browser as
             // everywhere else - views, filters and covers included. Backing
             // out of a column re-picks the previous one, and the same game

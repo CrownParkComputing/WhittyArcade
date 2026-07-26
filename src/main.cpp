@@ -13,6 +13,7 @@
 #include <SDL3/SDL.h>
 #include "input_mapper.h"
 #include "launcher_menu.h"
+#include "wall_capacity.h"
 #include "multiplayer_lobby.h"
 #include "namco/system22/system22_c139_transport.h"
 #include "namco/system22/system22_cpu.h"
@@ -53,7 +54,25 @@ namespace {
 
 // Three columns is the practical ceiling: each still gets a third of the
 // display wide enough to watch, and each is a whole emulated board.
-constexpr int max_wall_columns = 3;
+// How many columns this machine can drive, worked out from the processor and
+// the display rather than fixed - see wall_capacity.h. Asked once: the answer
+// cannot change while a wall is up, and every column must agree on it.
+int max_wall_columns() {
+    static const int columns = [] {
+        int width = 0;
+        if (SDL_WasInit(SDL_INIT_VIDEO)) {
+            if (const SDL_DisplayMode* mode =
+                    SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay()))
+                width = mode->w;
+        }
+        // Before the display is known, assume an ordinary one: a wall is only
+        // ever built after the front end has opened, which needs video.
+        if (width <= 0) width = 1920;
+        return wall_column_capacity(std::thread::hardware_concurrency(),
+                                    width);
+    }();
+    return columns;
+}
 
 struct runtime_options {
     int cabinet_node{};
@@ -114,9 +133,12 @@ runtime_options parse_runtime_options(int argc, char* argv[]) {
     }
     if (options.cabinet_node != 1 && options.cabinet_node != 2)
         options.cabinet_node = 0;
-    // A wall is 2 or 3 columns; anything else means no wall, and a column
-    // outside that range would be placed off the side of the display.
-    if (options.wall_count < 2 || options.wall_count > max_wall_columns) {
+    // Anything outside a real wall means no wall. A column process trusts the
+    // count its parent chose - the parent measured the machine, and a child
+    // second-guessing it would place itself somewhere the parent is not
+    // expecting - so only the absolute ceiling is enforced here.
+    if (options.wall_count < wall_min_columns ||
+        options.wall_count > wall_max_columns) {
         options.wall_count = 0;
         options.wall_slot = 0;
     }
@@ -192,7 +214,9 @@ public:
                const std::vector<std::string>& rom_paths) {
         stop();
         const std::size_t columns =
-            std::min<std::size_t>(rom_paths.size(), max_wall_columns);
+            std::min<std::size_t>(rom_paths.size(),
+                                  static_cast<std::size_t>(
+                                      max_wall_columns()));
         // A wall covers the display, so give it a workspace of its own where
         // one is free rather than burying whatever the user had open. Chosen
         // once, here, and inherited by every column: each choosing for itself
@@ -680,8 +704,9 @@ int main(int argc, char* argv[]) {
                 // them, so they need no link, port or node.
                 if (selection.wall_games.size() > 1) {
                     settings.wall_count = static_cast<int>(
-                        std::min<std::size_t>(selection.wall_games.size(),
-                                              max_wall_columns));
+                        std::min<std::size_t>(
+                            selection.wall_games.size(),
+                            static_cast<std::size_t>(max_wall_columns())));
                     settings.wall_slot = 0;
                     rom_path = selection.wall_games[0];
                     wall.start(argv[0], selection.wall_games);
@@ -889,6 +914,12 @@ int main(int argc, char* argv[]) {
         record_play(current_game_short_name);
 
         long long wall_frames = 0;
+        // Speed sampling for a wall column: counted over a window, because a
+        // single slow frame is a scheduling hiccup and only a sustained
+        // shortfall means the wall is wider than the machine.
+        int wall_window_frames = 0;
+        bool wall_reported_slow = false;
+        auto wall_rate_since = std::chrono::steady_clock::now();
         std::string last_netplay_status;
         bool netplay_muted = false;
         auto deadline = std::chrono::steady_clock::now();
@@ -1123,6 +1154,39 @@ int main(int argc, char* argv[]) {
             const auto now = std::chrono::steady_clock::now();
             if (now - deadline > frame_ticks) deadline = now;
             std::this_thread::sleep_until(deadline);
+
+            // A wall column watches its own speed. The capacity rule budgets
+            // a machine's threads before the wall starts, but what a board
+            // actually costs depends on the board - three System 22 racers
+            // are not three Galaxians - so the column that cannot keep up
+            // says so instead of quietly running slow, and says it where a
+            // wall of several cabinets can be read back afterwards.
+            if (settings.wall_count > 1) {
+                ++wall_window_frames;
+                const auto since = now - wall_rate_since;
+                if (since >= std::chrono::seconds(4)) {
+                    const double seconds =
+                        std::chrono::duration<double>(since).count();
+                    const double measured =
+                        wall_window_frames / seconds;
+                    const double target = 1.0 / paced_seconds;
+                    whitty_wall_log::note("%.1f fps (target %.1f)%s",
+                                          measured, target,
+                                          wall_column_is_struggling(
+                                              measured, target) ?
+                                              "  SLOW" : "");
+                    if (wall_column_is_struggling(measured, target) &&
+                        !wall_reported_slow) {
+                        wall_reported_slow = true;
+                        shared_video->set_cabinet_status(
+                            "TOO MANY CABINETS FOR THIS MACHINE  |  " +
+                            std::to_string(static_cast<int>(measured + 0.5)) +
+                            " FPS");
+                    }
+                    wall_window_frames = 0;
+                    wall_rate_since = now;
+                }
+            }
         }
 
         whitty_wall_log::note("event loop ended, action=%d",
