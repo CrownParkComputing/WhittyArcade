@@ -5,6 +5,7 @@
 #include "arcade_presenter.h"
 #include "arcade_sdl_guard.h"
 #include "network_video_link.h"
+#include "title_capture.h"
 #include "sega/model2/model2_draw_list.h"
 #include "platform_paths.h"
 #include "bezel_library.h"
@@ -1822,6 +1823,16 @@ void polygon_renderer_gpu::set_board_name(std::string short_name) {
     m_bezels.request(m_bezel_board);
 }
 
+void polygon_renderer_gpu::arm_title_capture(
+        const std::string& short_name) {
+    if (short_name.empty() || title_capture_exists(short_name)) return;
+    m_title_capture_name = short_name;
+    // Thirty seconds of presented frames: past the self-tests and network
+    // checks, into the title or attract, on every board here.
+    m_title_capture_countdown = 1800;
+    whitty_wall_log::note("title capture armed for %s", short_name.c_str());
+}
+
 void polygon_renderer_gpu::set_cabinet_status(std::string status) {
     if (m_cabinet_status == status) return;
     m_cabinet_status = std::move(status);
@@ -3447,6 +3458,17 @@ void polygon_renderer_gpu::present_rgba_frame(const uint8_t* pixels,
                               pixels ? 1 : 0, width, height, m_headless ? 1 : 0,
                               m_ctx ? 1 : 0, m_alternate_presenter ? 1 : 0);
     if (!pixels || width <= 0 || height <= 0 || m_headless || !m_ctx) return;
+    if (m_title_capture_countdown > 0 && !m_title_capture_name.empty() &&
+        --m_title_capture_countdown == 0) {
+        // The board's own frame, before bezels or overlays: the launcher
+        // icon is the game as it draws itself.
+        if (title_capture_write(m_title_capture_name, pixels, width,
+                                height, /*top_down=*/true))
+            whitty_wall_log::note("title captured for %s",
+                                  m_title_capture_name.c_str());
+        m_title_capture_name.clear();
+        m_title_capture_countdown = -1;
+    }
     // The panel bitmaps are still authored through SDL_ttf into OpenGL
     // textures, so the context has to be current before they are collected -
     // even on the native path, which only wants their host-side pixels.

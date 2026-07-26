@@ -8,6 +8,7 @@
 #include "system16_data.h"
 #include "play_stats.h"
 #include "igdb_artwork.h"
+#include "title_capture.h"
 #include "input_mapper.h"
 #include "launcher_menu.h"
 #include "multiplayer_lobby.h"
@@ -860,16 +861,11 @@ int browse_library_grid(
                     continue;
                 }
                 local_art[entry] = load_local_art(
-                    system16::game_art_path(identity->short_name));
+                    title_capture_path(identity->short_name));
             }
-            // IGDB is asked only for the games local art did not cover.
-            std::vector<std::string> needed;
-            for (std::size_t slot = 0; slot < game_indices.size(); ++slot) {
-                const auto local = local_art.find(game_indices[slot]);
-                if (local == local_art.end() || !local->second.valid())
-                    needed.push_back(labels[slot]);
-            }
-            covers.request(needed);
+            // No downloaded artwork: a game whose icon has not been
+            // captured yet shows its name on the plain plate until it has
+            // been played once.
             // The page's identity artwork: a board's PCB photo from its
             // Wikipedia article, a publisher's logo from Wikimedia Commons.
             std::string page_title = menu_title;
@@ -973,12 +969,6 @@ int browse_library_grid(
                         art.height = local->second.height;
                         return art;
                     }
-                    const auto found = cover_pixels.find(
-                        labels[static_cast<std::size_t>(index)]);
-                    if (found == cover_pixels.end()) return art;
-                    art.pixels = found->second.pixels.data();
-                    art.width = found->second.width;
-                    art.height = found->second.height;
                     return art;
                 },
                 [&] {

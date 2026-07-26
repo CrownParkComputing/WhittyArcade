@@ -1019,6 +1019,11 @@ int main(int argc, char* argv[]) {
         // Names the board so its cabinet bezel can be fetched in the
         // background. Decoration only: the launch never waits on it.
         shared_video->set_board_name(current_game_short_name);
+        // The launcher's icon for this game is a frame the session itself
+        // presents, captured once, half a minute in. Cabinet 1 owns it -
+        // a spawned partner cabinet would capture the same game twice.
+        if (cabinet_node <= 1)
+            shared_video->arm_title_capture(current_game_short_name);
         // Feeds the launcher's Most Played view. After initialize succeeds,
         // so an unbootable set is never counted as a play.
         record_play(current_game_short_name);

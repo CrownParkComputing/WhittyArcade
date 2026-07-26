@@ -61,6 +61,7 @@ public:
     // dual-screen preference intact while constraining only that session.
     void set_single_screen_only(bool enabled);
     void set_cabinet_status(std::string status);
+    void arm_title_capture(std::string short_name);
     void set_board_name(std::string short_name);
 
     void set_rom_choices(std::vector<rom_choice> choices);
