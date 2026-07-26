@@ -41,6 +41,7 @@ jobs:
             minizip \
             vulkan-headers \
             vulkan-icd-loader \
+            glslang \
             mpg123 \
             glm
 
