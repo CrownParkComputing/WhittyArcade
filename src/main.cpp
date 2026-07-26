@@ -313,6 +313,7 @@ void configure_cabinet_environment(int node, int count, uint16_t port_base,
     count = std::clamp(count, 2, 8);
     if (node < 1 || node > count) {
         unset_environment("WHITTY_CABINET_NODE");
+        unset_environment("WHITTY_CABINET_COUNT");
         unset_environment("MODEL2_COMM_NODE");
         unset_environment("MODEL2_COMM_COUNT");
         unset_environment("MODEL2_COMM_LOCAL_PORT");
@@ -335,6 +336,7 @@ void configure_cabinet_environment(int node, int count, uint16_t port_base,
     const uint16_t peer_port =
         static_cast<uint16_t>(port_base + (node == 1 ? 1 : 0));
     set_environment("WHITTY_CABINET_NODE", std::to_string(node));
+    set_environment("WHITTY_CABINET_COUNT", std::to_string(count));
     if (linked_model2) {
         // The comm board is a ring of up to 8 cabinets: node N listens on
         // base+N-1 and transmits to its successor, wrapping back to the
@@ -925,15 +927,16 @@ int main(int argc, char* argv[]) {
         // it like any single game. Forcing the value here also stops a
         // fullscreen=0 left behind by the in-game toggle from carrying
         // into the next launch.
-        // Only a one-screen PAIR keeps windowed halves - that layout is
-        // the point of choosing One Screen for two cabinets. A bigger
-        // ring runs every cabinet fullscreen; on one monitor they stack
-        // and the player alt-tabs to the cabinet they are riding, while
-        // the rest keep simulating behind it.
+        // Linked cabinets sharing one display are laid out as one
+        // borderless surface split into cells - halves for a pair, a grid
+        // for a ring - so together they read as a single fullscreen wall
+        // rather than stacked windows or floating tiles. A cabinet with a
+        // display of its own goes ordinarily fullscreen on it.
         const bool cabinets_share_display =
-            cabinet_node != 0 && cabinet_count <= 2 && one_screen_pair &&
+            cabinet_node != 0 &&
             (launch_mode == cabinet_launch_mode::linked_pair ||
-             launch_mode == cabinet_launch_mode::linked_network);
+             launch_mode == cabinet_launch_mode::linked_network) &&
+            (one_screen_pair || cabinet_count > 2);
         settings.fullscreen =
             settings.wall_count <= 1 && !cabinets_share_display;
         // Escape hatch for bring-up: a windowed presenter window starts
@@ -948,9 +951,7 @@ int main(int argc, char* argv[]) {
         // The half-desktop split only makes sense for a pair; a bigger ring
         // runs every cabinet as an ordinary window on the main display and
         // the compositor tiles them.
-        settings.twin_one_screen = one_screen_pair && cabinet_count <= 2 &&
-            (launch_mode == cabinet_launch_mode::linked_pair ||
-             launch_mode == cabinet_launch_mode::linked_network);
+        settings.twin_one_screen = cabinets_share_display;
         if (cabinet_node) {
             // linked_network spreads the two cabinets across different
             // physical displays (cabinet 1 → display 0, cabinet 2 →
