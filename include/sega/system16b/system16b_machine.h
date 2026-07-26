@@ -199,6 +199,13 @@ public:
                 0, 255, 255, 255, 255, 255, 255, 3,
                 255, 255, 255, 2, 255, 1, 0, 255};
             sprite_banklist_ = alternate_banklist.data();
+        } else if (set == ::system16b::system16b_rom_set::altered_beast) {
+            // 1 credit to start, demo sounds on, 3 lives, normal.
+            dsw2_ = 0xfd;
+            // ROM board 171-5521 (a 5704 with a jumper): mapper-decoded,
+            // eight 128 KiB sprite banks.
+            sprite_bank_mod_ = 8;
+            mapper_decode_ = true;
         } else if (set == ::system16b::system16b_rom_set::golden_axe) {
             // 1 credit to start, demo sounds on, normal difficulty.
             dsw2_ = 0xfd;

@@ -190,6 +190,10 @@ system16b_rom_set system16b_rom_loader::identify_set(const std::string& path) {
     if (read_entry(path, "epr-12523.a7", tmp) &&
         read_entry(path, "317-0112.c2", tmp))
         return system16b_rom_set::golden_axe;
+    // Altered Beast (set 8, i8751 317-0078): 68000 pair + MCU dump.
+    if (read_entry(path, "epr-11907.a7", tmp) &&
+        read_entry(path, "317-0078.c2", tmp))
+        return system16b_rom_set::altered_beast;
     // A directory must contain either shinobi_main.bin (the staged
     // 256 KiB program image) OR the MAME file names. A ZIP must contain
     // at least one of shinobi_main.bin or mpr-11363.a14.
@@ -207,6 +211,7 @@ const char* system16b_rom_loader::set_short_name(system16b_rom_set set) {
     case system16b_rom_set::aurail: return "aurail";
     case system16b_rom_set::riot_city: return "riotcity";
     case system16b_rom_set::golden_axe: return "goldnaxe2";
+    case system16b_rom_set::altered_beast: return "altbeast";
     case system16b_rom_set::unknown: return "";
     }
     return "";
@@ -223,6 +228,8 @@ const char* system16b_rom_loader::set_display_name(system16b_rom_set set) {
         return "Riot City (Sega System 16B, Japan)";
     case system16b_rom_set::golden_axe:
         return "Golden Axe (Sega System 16B, set 2, i8751)";
+    case system16b_rom_set::altered_beast:
+        return "Altered Beast (Sega System 16B, set 8, i8751)";
     case system16b_rom_set::unknown:    return "Unknown Shinobi-style set";
     }
     return "Unknown Shinobi-style set";
@@ -621,6 +628,87 @@ system16b_rom_load_result load_golden_axe(const std::string& path) {
     }
     return r;
 }
+
+// Altered Beast (MAME `altbeast`, set 8, ROM board 171-5521, i8751
+// 317-0078). One program pair, one 128 KiB chip per tile plane, four
+// word-interleaved sprite pairs and two uPD7759 sample chips.
+system16b_rom_load_result load_altered_beast(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::altered_beast;
+
+    r.roms.program.fill(0xff);
+    {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, "epr-11907.a7", even) ||
+            !read_game_entry(path, "epr-11906.a5", odd) ||
+            even.size() != 0x20000 || odd.size() != 0x20000) {
+            r.error = "missing program pair epr-11907.a7 + epr-11906.a5";
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.program[i * 2]     = even[i];
+            r.roms.program[i * 2 + 1] = odd[i];
+        }
+    }
+
+    const auto read_plane = [&](const char* name, auto& plane) {
+        std::vector<uint8_t> tmp;
+        if (!read_game_entry(path, name, tmp) || tmp.size() != 0x20000)
+            return false;
+        plane.fill(0);
+        std::memcpy(plane.data(), tmp.data(), tmp.size());
+        return true;
+    };
+    if (!read_plane("opr-11674.a14", r.roms.tile_plane0) ||
+        !read_plane("opr-11675.a15", r.roms.tile_plane1) ||
+        !read_plane("opr-11676.a16", r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (opr-11674/75/76)";
+        return r;
+    }
+
+    struct sprite_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<sprite_spec, 4> sprite_pairs{{
+        {"epr-11681.b5", "epr-11677.b1", 0x00000},
+        {"epr-11682.b6", "epr-11678.b2", 0x40000},
+        {"epr-11683.b7", "epr-11679.b3", 0x80000},
+        {"epr-11684.b8", "epr-11680.b4", 0xc0000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x20000 || odd.size() != 0x20000)
+            continue;  // like Shinobi: missing sprites render silently
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Z80 program, two sample chips and the i8751 MCU program.
+    {
+        std::vector<uint8_t> tmp;
+        if (read_game_entry(path, "epr-11671.a10", tmp) &&
+            tmp.size() == r.roms.sound_prog.size())
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(), tmp.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+        if (read_game_entry(path, "opr-11672.a11", tmp) &&
+            tmp.size() == 0x20000)
+            std::memcpy(r.roms.sound_data.data(), tmp.data(), tmp.size());
+        if (read_game_entry(path, "opr-11673.a12", tmp) &&
+            tmp.size() == 0x20000)
+            std::memcpy(r.roms.sound_data.data() + 0x20000, tmp.data(),
+                        tmp.size());
+        if (read_game_entry(path, "317-0078.c2", tmp) &&
+            tmp.size() == 0x1000)
+            r.roms.mcu = tmp;
+        else
+            r.error = "missing i8751 MCU program 317-0078.c2";
+    }
+    return r;
+}
 }  // namespace
 
 system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
@@ -638,6 +726,8 @@ system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
         return load_riot_city(path);
     if (r.set == system16b_rom_set::golden_axe)
         return load_golden_axe(path);
+    if (r.set == system16b_rom_set::altered_beast)
+        return load_altered_beast(path);
 
     // 1) Program image (256 KiB - Shinobi's own size, half the shared
     //    buffer). Prefer the consolidated flat image; otherwise assemble
