@@ -95,6 +95,17 @@ public:
         int wanted, std::function<cover(int)> cover_for,
         std::function<bool()> tick = {});
 
+    // The boot screen. Shown while the library is being read and artwork
+    // gathered, so the front end is on screen from the first moment rather
+    // than the desktop being empty until everything is ready. Call it as each
+    // step begins; `progress` is 0..1 and drives the loading bar.
+    void show_splash(const std::string& step, float progress);
+
+    // A short line about the machine's network state, drawn in the corner of
+    // every browsing screen ("Waiting for another machine", "2 machines
+    // connected"). Empty hides it.
+    void set_status(const std::string& text, bool good);
+
     // Displays scrollable text using the same launcher presentation.
     void show_text(const std::string& title, const std::string& text,
                    const std::string& back_label = "Back");
