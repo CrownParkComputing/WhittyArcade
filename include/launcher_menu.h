@@ -97,7 +97,11 @@ public:
                     // True when the page has an information panel to show;
                     // the grid then offers the "i" chip and returns
                     // info_request when it is asked for.
-                    bool info = false);
+                    bool info = false,
+                    // True renders the page as a single-column list with
+                    // small thumbnails instead of the cover-art card grid -
+                    // forty games scan faster as rows than as posters.
+                    bool list_view = false);
 
     // Picks several games from one grid rather than asking repeatedly. Cards
     // already chosen are numbered in the order they were taken, and the grid
