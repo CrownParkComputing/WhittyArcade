@@ -830,6 +830,11 @@ add_executable(c139_transport_test
 target_include_directories(c139_transport_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(c139_transport_test PRIVATE
     musashi Threads::Threads ${WHITTY_MATH_LIB})
+# The cabinet link is a UDP transport, and Windows keeps sockets in a library
+# of their own - the same line the two Model 2 tests already carry.
+if(WIN32)
+    target_link_libraries(c139_transport_test PRIVATE ws2_32)
+endif()
 target_compile_options(c139_transport_test PRIVATE
     -Wall -Wextra -Wpedantic)
 add_test(NAME c139_transport_test COMMAND c139_transport_test)
