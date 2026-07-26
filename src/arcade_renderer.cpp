@@ -127,7 +127,10 @@ bool native_model2_enabled() {
 }
 
 bool place_window_on_cabinet_half(SDL_Window* window, int cabinet_node) {
-    return whitty_window::place_cabinet_half(window, cabinet_node);
+    const char* count_text = std::getenv("WHITTY_CABINET_COUNT");
+    const int count = count_text ? std::atoi(count_text) : 2;
+    return whitty_window::place_cabinet_cell(window, cabinet_node,
+                                             count >= 2 ? count : 2);
 }
 
 // Which half of the shared desktop this process owns. The launcher exports the
@@ -136,7 +139,7 @@ bool place_window_on_cabinet_half(SDL_Window* window, int cabinet_node) {
 int cabinet_node_from_environment() {
     const char* node_text = std::getenv("WHITTY_CABINET_NODE");
     const int node = node_text ? std::atoi(node_text) : 0;
-    return node >= 1 && node <= 2 ? node : 1;
+    return node >= 1 && node <= 8 ? node : 1;
 }
 
 constexpr float normalized_byte(uint8_t value) {

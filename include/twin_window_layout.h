@@ -450,6 +450,69 @@ inline bool place_cabinet_half(SDL_Window* window, int cabinet_node) {
     return place_wall_slot(window, cabinet_node - 1, 2);
 }
 
+// A ring of cabinets on one screen: a borderless grid that covers the
+// display edge to edge, so eight linked Daytonas read as one wall of
+// cabinets rather than a pile of windows. Two cabinets are the familiar
+// halves; up to four take quarters, up to six a 3x2, up to eight a 4x2.
+inline bool place_cabinet_cell(SDL_Window* window, int cabinet_node,
+                               int cabinet_count) {
+    if (!window || cabinet_node < 1 || cabinet_count < 2 ||
+        cabinet_node > cabinet_count)
+        return false;
+    if (cabinet_count <= 2)
+        return place_cabinet_half(window, cabinet_node);
+
+    int display_count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&display_count);
+    if (!displays || display_count == 0) {
+        if (displays) SDL_free(displays);
+        return false;
+    }
+    SDL_Rect bounds{0, 0, 1920, 1080};
+    if (!SDL_GetDisplayBounds(displays[0], &bounds))
+        SDL_GetDisplayUsableBounds(displays[0], &bounds);
+    SDL_free(displays);
+
+    const int columns = cabinet_count <= 4 ? 2 : cabinet_count <= 6 ? 3 : 4;
+    const int rows = (cabinet_count + columns - 1) / columns;
+    const int cell = cabinet_node - 1;
+    const int column = cell % columns;
+    const int row = cell / columns;
+    // The last column and row absorb the rounding so no seam is left at
+    // the display's far edges.
+    const int x = bounds.x + bounds.w * column / columns;
+    const int y = bounds.y + bounds.h * row / rows;
+    const int width = bounds.x + bounds.w * (column + 1) / columns - x;
+    const int height = bounds.y + bounds.h * (row + 1) / rows - y;
+
+    SDL_SetWindowBordered(window, false);
+    SDL_SetWindowMinimumSize(window, 1, 1);
+    SDL_SetWindowMaximumSize(window, 16384, 16384);
+    SDL_SetWindowSize(window, width, height);
+    SDL_ShowWindow(window);
+    SDL_SyncWindow(window);
+#if defined(__linux__)
+    // Same contract as a wall column: the compositor must know the window
+    // before it can be placed, and the caller retries when it does not.
+    int had_x = 0, had_y = 0, had_width = 0, had_height = 0;
+    const bool known =
+        compositor_window_geometry(had_x, had_y, had_width, had_height);
+    if (!known && std::getenv("HYPRLAND_INSTANCE_SIGNATURE")) return false;
+    run_hyprctl_place(x, y, width, height);
+#endif
+    SDL_SetWindowPosition(window, x, y);
+    SDL_SyncWindow(window);
+    int got_x = 0, got_y = 0, got_width = 0, got_height = 0;
+    if (compositor_window_geometry(got_x, got_y, got_width, got_height)) {
+        return std::abs(got_x - x) <= 4 && std::abs(got_width - width) <= 4 &&
+               std::abs(got_height - height) <= 4;
+    }
+    int actual_width = 0, actual_height = 0;
+    SDL_GetWindowSize(window, &actual_width, &actual_height);
+    return std::abs(actual_width - width) <= 2 &&
+           std::abs(actual_height - height) <= 2;
+}
+
 inline void arrange_twin_windows(SDL_Window* player1, SDL_Window* player2,
                                  int requested_width) {
     if (!player1 || !player2) return;

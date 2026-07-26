@@ -3677,15 +3677,19 @@ void alternate_presenter::apply_settings(const emulator_settings& settings) {
             m_impl->window, settings.wall_slot, settings.wall_count);
         m_impl->wall_place_countdown = 0;
     } else if (settings.twin_one_screen) {
-        // Two linked cabinets sharing one screen: this process owns one half
-        // of the desktop, the companion process owns the other.
+        // Linked cabinets sharing one screen: each owns its exact cell of
+        // a borderless grid - halves for a pair, quarters and beyond for
+        // a ring - so together they cover the display like one wall.
         SDL_SetWindowFullscreen(m_impl->window, false);
         SDL_ShowWindow(m_impl->window);
         m_impl->first_present = false;
         const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+        const char* count_text = std::getenv("WHITTY_CABINET_COUNT");
         const int node = node_text ? std::atoi(node_text) : 0;
-        if (!whitty_window::place_cabinet_half(
-                m_impl->window, node >= 1 && node <= 2 ? node : 1))
+        const int count = count_text ? std::atoi(count_text) : 2;
+        if (!whitty_window::place_cabinet_cell(
+                m_impl->window, node >= 1 ? node : 1,
+                count >= 2 ? count : 2))
             SDL_SetWindowPosition(m_impl->window, SDL_WINDOWPOS_CENTERED,
                                   SDL_WINDOWPOS_CENTERED);
     } else if (settings.output == output_mode::dual &&
