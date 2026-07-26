@@ -199,6 +199,25 @@ public:
                 0, 255, 255, 255, 255, 255, 255, 3,
                 255, 255, 255, 2, 255, 1, 0, 255};
             sprite_banklist_ = alternate_banklist.data();
+        } else if (set == ::system16b::system16b_rom_set::dynamite_dux) {
+            // Demo sounds on, normal difficulty, 3 lives.
+            dsw2_ = 0xfe;
+            sprite_bank_mod_ = 8;
+            mapper_decode_ = true;
+        } else if (set == ::system16b::system16b_rom_set::tough_turf) {
+            // Continues none (factory), normal difficulty.
+            dsw2_ = 0xfc;
+            // ROM board 171-5358: the alternate sprite bank wiring, four
+            // 128 KiB banks, and the i8751 programs the standard layout
+            // through the mapper it shares with the 68000.
+            static constexpr std::array<uint8_t, 16> alternate_banklist{
+                0, 255, 255, 255, 255, 255, 255, 3,
+                255, 255, 255, 2, 255, 1, 0, 255};
+            sprite_banklist_ = alternate_banklist.data();
+            sprite_bank_mod_ = 4;
+            mapper_decode_ = true;
+            mapper_rom_base_ = {0, 0x20000, 0x40000};
+            mapper_rom_mask_ = 0x1ffff;
         } else if (set == ::system16b::system16b_rom_set::altered_beast) {
             // 1 credit to start, demo sounds on, 3 lives, normal.
             dsw2_ = 0xfd;
@@ -247,6 +266,13 @@ public:
     // tile bank register wherever it likes, and Aurail and Riot City
     // already disagree about all of them.
     bool mapper_decode_{false};
+    // What mapper regions 0-2 serve: the program-buffer offset each ROM
+    // window shows, with kMapperTileBank marking the 5704/5521 tile bank
+    // register instead. The 5358 has three 128 KiB ROM windows; the 5704
+    // has two 256 KiB ones and the bank register.
+    static constexpr uint32_t kMapperTileBank = 0xffffffffu;
+    std::array<uint32_t, 3> mapper_rom_base_{0, 0x40000, kMapperTileBank};
+    uint32_t mapper_rom_mask_{0x3ffff};
     std::array<uint8_t, 2> tile_banks_{0, 1};
 };
 
