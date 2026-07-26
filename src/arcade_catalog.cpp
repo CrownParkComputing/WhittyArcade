@@ -8,8 +8,8 @@ namespace {
 constexpr arcade_board_list boards{{
     {arcade_board_type::system22, "system22", "Namco System 22",
      "NAMCO SYSTEM 22", "system22"},
-    {arcade_board_type::system246, "system246", "Namco System 246",
-     "NAMCO SYSTEM 246", "system246"},
+    {arcade_board_type::system246, "system246", "Namco System 246/256",
+     "NAMCO SYSTEM 246/256", "system246"},
     {arcade_board_type::xbox360, "xbox360", "Microsoft Xbox 360",
      "XBOX 360", "xbox360"},
     {arcade_board_type::model1, "model1", "Sega Model 1",
