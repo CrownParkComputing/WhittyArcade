@@ -424,6 +424,9 @@ struct alternate_presenter::implementation {
     std::string title_capture_name;
     int title_capture_countdown{-1};
     bool title_capture_due{false};
+    // Shared-screen cabinet cell placement, maintained like a wall column.
+    bool cabinet_placed{};
+    int cabinet_place_countdown{};
     device_image scene_depth;
     VkFramebuffer scene_framebuffer{};
     // Depth for the polygon boards' offscreen pass. The RGBA path never
@@ -3190,6 +3193,37 @@ struct alternate_presenter::implementation {
             }
         }
 
+        // Linked cabinets sharing one screen hold their grid cells the same
+        // way a wall column holds its slot: re-checked every 30 presents,
+        // because the compositor does not know a window at start-up and a
+        // sibling cabinet opening re-tiles the ones already up.
+        if (settings.twin_one_screen) {
+            if (--cabinet_place_countdown <= 0) {
+                cabinet_place_countdown = 30;
+                if (!cabinet_placed) {
+                    static const int node = [] {
+                        const char* text =
+                            std::getenv("WHITTY_CABINET_NODE");
+                        const int value = text ? std::atoi(text) : 1;
+                        return value >= 1 ? value : 1;
+                    }();
+                    static const int count = [] {
+                        const char* text =
+                            std::getenv("WHITTY_CABINET_COUNT");
+                        const int value = text ? std::atoi(text) : 2;
+                        return value >= 2 ? value : 2;
+                    }();
+                    const bool took = whitty_window::place_cabinet_cell(
+                        window, node, count);
+                    if (took != cabinet_placed || !took)
+                        whitty_wall_log::note("cabinet cell %d/%d %s",
+                                              node, count,
+                                              took ? "took" : "not yet");
+                    cabinet_placed = took;
+                }
+            }
+        }
+
         const int surface_w = static_cast<int>(swapchain_extent.width);
         const int surface_h = static_cast<int>(swapchain_extent.height);
         const int aspect_width = display_width > 0 ? display_width : width;
@@ -3687,11 +3721,11 @@ void alternate_presenter::apply_settings(const emulator_settings& settings) {
         const char* count_text = std::getenv("WHITTY_CABINET_COUNT");
         const int node = node_text ? std::atoi(node_text) : 0;
         const int count = count_text ? std::atoi(count_text) : 2;
-        if (!whitty_window::place_cabinet_cell(
-                m_impl->window, node >= 1 ? node : 1,
-                count >= 2 ? count : 2))
-            SDL_SetWindowPosition(m_impl->window, SDL_WINDOWPOS_CENTERED,
-                                  SDL_WINDOWPOS_CENTERED);
+        m_impl->cabinet_placed = whitty_window::place_cabinet_cell(
+            m_impl->window, node >= 1 ? node : 1, count >= 2 ? count : 2);
+        // The per-present loop keeps trying: at this point the compositor
+        // usually does not know the window yet.
+        m_impl->cabinet_place_countdown = 0;
     } else if (settings.output == output_mode::dual &&
                settings.twin_separate_monitors) {
         // A cabinet per display: each one fullscreen on its own screen. Two

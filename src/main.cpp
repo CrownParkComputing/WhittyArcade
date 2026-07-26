@@ -1024,6 +1024,9 @@ int main(int argc, char* argv[]) {
             // which cabinet this is and what it is doing; the comm board
             // prints on stderr if the four-second search finds nobody.
             shared_video->set_cabinet_status(
+                cabinet_count > 2 ?
+                    "CABINET " + std::to_string(cabinet_node) +
+                        "  |  STARTING UP" :
                 cabinet_node == 2 ?
                     std::string("PLAYER 2 CABINET  |  STARTING UP - "
                                 "INSERT COIN TO JOIN") :
