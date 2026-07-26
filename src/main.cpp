@@ -679,6 +679,9 @@ int main(int argc, char* argv[]) {
     settings.wall_slot = runtime.wall_slot;
     settings.wall_count = runtime.wall_count;
     whitty_wall_log::begin(runtime.wall_slot, runtime.wall_count);
+    // A cabinet of a linked pair keeps its own file for the same reason a
+    // wall column does - nobody can read the second one's stderr.
+    whitty_wall_log::begin_cabinet(runtime.cabinet_node);
     if (runtime.wall_count > 1)
         whitty_wall_log::note("spawned column, rom=%s pid=%d ppid=%d",
                               runtime.positional.empty()

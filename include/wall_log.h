@@ -28,6 +28,22 @@ inline std::FILE*& sink() {
     return file;
 }
 
+// A linked cabinet has the same problem a wall column does, for the same
+// reason: the second cabinet is a spawned process whose stderr lands in the
+// parent's terminal mixed with the parent's own, if it is seen at all. It
+// gets a file of its own, named for the cabinet rather than the column.
+inline void begin_cabinet(int node) {
+    if (sink() || (node != 1 && node != 2)) return;
+    const char* home = std::getenv("HOME");
+    std::string root = home && *home ? home : "/tmp";
+    root += "/.local/share/WhittyArcade/cabinet-" + std::to_string(node) +
+            ".log";
+    sink() = std::fopen(root.c_str(), "w");
+    if (!sink()) return;
+    std::fprintf(sink(), "cabinet %d of 2\n", node);
+    std::fflush(sink());
+}
+
 inline void begin(int slot, int count) {
     if (sink() || count <= 1) return;
     // Truncated per run: the interesting question is always what this launch
