@@ -365,10 +365,12 @@ struct launcher_menu::implementation {
         }
     }
 
-    // One hint: either a face button carrying a letter, or the d-pad.
+    // One hint: a face button carrying a letter, a shoulder button, or the
+    // d-pad.
     struct hint {
         std::string letter;   // empty for the d-pad
         std::string label;
+        bool shoulder{};      // drawn as a bumper rather than a face button
     };
 
     // Xbox-pad colours, because that is what is plugged in and the colour is
@@ -400,15 +402,30 @@ struct launcher_menu::implementation {
         constexpr int between = 22;
 
         std::vector<rendered_text> labels;
+        std::vector<int> icon_widths;
         int total = 0;
         for (const hint& item : hints) {
             labels.push_back(make_text(renderer, small, item.label, muted));
-            total += icon + inner_gap + labels.back().width + between;
+            // A bumper is a wider, flatter shape than a face button, and
+            // carries two letters.
+            icon_widths.push_back(item.shoulder ? icon * 2 : icon);
+            total += icon_widths.back() + inner_gap +
+                     labels.back().width + between;
         }
         int x = std::max(horizontal_margin, (logical_width - total) / 2);
         for (std::size_t index = 0; index < hints.size(); ++index) {
             const hint& item = hints[index];
-            if (item.letter.empty()) {
+            const int width = icon_widths[index];
+            if (item.shoulder) {
+                SDL_SetRenderDrawColor(renderer, 74, 88, 102, 255);
+                const SDL_FRect bumper = frect(x, y + 3, width, icon - 6);
+                SDL_RenderFillRect(renderer, &bumper);
+                rendered_text mark = make_text(renderer, small, item.letter,
+                                               SDL_Color{232, 240, 248, 255});
+                draw_text(renderer, mark, x + width / 2 - mark.width / 2,
+                          y + icon / 2 - mark.height / 2);
+                destroy_text(mark);
+            } else if (item.letter.empty()) {
                 draw_dpad(x, y, icon);
             } else {
                 fill_disc(x + icon / 2, y + icon / 2, icon / 2,
@@ -419,9 +436,9 @@ struct launcher_menu::implementation {
                           y + icon / 2 - mark.height / 2);
                 destroy_text(mark);
             }
-            draw_text(renderer, labels[index], x + icon + inner_gap,
+            draw_text(renderer, labels[index], x + width + inner_gap,
                       y + (icon - labels[index].height) / 2);
-            x += icon + inner_gap + labels[index].width + between;
+            x += width + inner_gap + labels[index].width + between;
             destroy_text(labels[index]);
         }
     }
@@ -665,7 +682,19 @@ struct launcher_menu::implementation {
                 redraw = true;
             }
             if (horizontal) {
-                selected = std::clamp(selected + horizontal, 0, total - 1);
+                // On a paged view, pushing past the end turns the page - the
+                // way you would expect a book of boards to work. Shoulders
+                // and PgUp/PgDn still jump directly, but a stick and two
+                // buttons is all an arcade panel has, and this needs no
+                // instructions.
+                const int moved = selected + horizontal;
+                if (paging && (moved < 0 || moved >= total)) {
+                    chosen.assign(1, horizontal < 0 ?
+                                      launcher_menu::page_back :
+                                      launcher_menu::page_forward);
+                    break;
+                }
+                selected = std::clamp(moved, 0, total - 1);
                 redraw = true;
             }
             if (vertical) {
@@ -844,7 +873,7 @@ struct launcher_menu::implementation {
                 std::to_string(wanted) + ")" : std::string("Play")});
         if (wanted <= 0) hints.push_back({"Y", "View"});
         if (info) hints.push_back({"X", "Board Info"});
-        if (paging) hints.push_back({"", "Page"});
+        if (paging) hints.push_back({"LB RB", "Turn Page", true});
         hints.push_back({"B", back_label});
         draw_hints(hints, list_bottom + 18);
         draw_status_chip();
