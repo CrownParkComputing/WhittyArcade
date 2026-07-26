@@ -629,7 +629,7 @@ constexpr std::array<const char*, 5> play_style_names{
 const char* board_wiki_article(arcade_board_type type) {
     switch (type) {
     case arcade_board_type::system22: return "Namco System 22";
-    case arcade_board_type::system246: return "Namco System 246";
+    case arcade_board_type::system246: return "Namco System 246/256";
     case arcade_board_type::xbox360: return "Xbox 360";
     case arcade_board_type::model1: return "Sega Model 1";
     case arcade_board_type::model2: return "Sega Model 2";
@@ -665,6 +665,26 @@ banner::banner_image load_local_art(const std::string& path) {
                     pixels + static_cast<std::size_t>(width) * height * 4);
     stbi_image_free(pixels);
     return out;
+}
+
+// The mark a card carries, and its colour. A game usually supports more than
+// one of these; the badge names the one that takes the most people, since
+// that is the question being asked when someone is scanning the shelf.
+struct play_badge {
+    const char* text{};
+    int tone{};
+};
+
+play_badge badge_for_choice(const rom_choice& choice) {
+    const launch_capabilities caps = probe_choice(choice);
+    if (caps.system_link) return {"LINK", 2};
+    if (caps.network_two_player) return {"NET", 1};
+    switch (caps.multiplayer) {
+    case arcade_multiplayer_mode::simultaneous: return {"2P", 0};
+    case arcade_multiplayer_mode::alternating: return {"2P", 0};
+    case arcade_multiplayer_mode::none: break;
+    }
+    return {};
 }
 
 bool matches_play_style(const rom_choice& choice, int style) {
@@ -805,9 +825,11 @@ int browse_library_grid(
                 });
             std::vector<std::size_t> game_indices;
             std::vector<std::string> labels;
+            std::vector<play_badge> badges;
             for (const browse_entry& entry : visible) {
                 game_indices.push_back(entry.index);
                 labels.push_back(choices[entry.index].label);
+                badges.push_back(badge_for_choice(choices[entry.index]));
             }
             std::string view_name =
                 sort_mode == 1 ? "Most Played" :
@@ -925,7 +947,8 @@ int browse_library_grid(
                         board_summary :
                         "View: " + view_name + "  \u00b7  " +
                             std::to_string(labels.size()) +
-                            " games  \u00b7  TAB changes view",
+                            " games  \u00b7  2P two players here, "
+                            "NET two machines, LINK cabinet link",
                 labels, back_label, std::min(remembered,
                     std::max(0, static_cast<int>(labels.size()) - 1)),
                 [&](int index) {
@@ -933,6 +956,10 @@ int browse_library_grid(
                     if (index < 0 ||
                         index >= static_cast<int>(labels.size()))
                         return art;
+                    const play_badge& badge =
+                        badges[static_cast<std::size_t>(index)];
+                    art.badge = badge.text;
+                    art.badge_tone = badge.tone;
                     // Locally harvested arcade title screens come first -
                     // they are the game's own artwork and need no network -
                     // with the IGDB cover as the fallback for anything the

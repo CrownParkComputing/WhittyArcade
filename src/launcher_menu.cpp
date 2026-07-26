@@ -836,9 +836,10 @@ struct launcher_menu::implementation {
                     static_cast<float>(x), static_cast<float>(y),
                     static_cast<float>(metrics.card_width),
                     static_cast<float>(metrics.cover_height)};
-                SDL_Texture* texture = grid_texture_for(
-                    textures, index, cover_for ? cover_for(index)
-                                               : launcher_menu::cover{});
+                const launcher_menu::cover details =
+                    cover_for ? cover_for(index) : launcher_menu::cover{};
+                SDL_Texture* texture =
+                    grid_texture_for(textures, index, details);
                 if (texture) {
                     SDL_RenderTexture(renderer, texture, nullptr, &art);
                 } else {
@@ -870,6 +871,33 @@ struct launcher_menu::implementation {
                         metrics.card_width - 16);
                     draw_text(renderer, label, x + 8, y + 10);
                     destroy_text(label);
+                }
+                // How many can play, in the corner of the card, so a night
+                // with two people does not mean opening games one at a time
+                // to find out which of them take a second player.
+                if (details.badge && *details.badge) {
+                    TTF_Font* small = hint_font ? hint_font : font;
+                    rendered_text mark = make_text(
+                        renderer, small, details.badge,
+                        SDL_Color{12, 18, 26, 255});
+                    const SDL_Color tone =
+                        details.badge_tone == 1 ?
+                            SDL_Color{86, 206, 255, 255} :
+                        details.badge_tone == 2 ?
+                            SDL_Color{255, 190, 74, 255} :
+                            SDL_Color{124, 214, 128, 255};
+                    const int plate_w = mark.width + 12;
+                    const int plate_h = mark.height + 6;
+                    const int plate_x = x + metrics.card_width - plate_w - 6;
+                    const int plate_y =
+                        y + metrics.card_height - plate_h - 6;
+                    SDL_SetRenderDrawColor(renderer, tone.r, tone.g, tone.b,
+                                           active || taken ? 255 : 205);
+                    const SDL_FRect plate =
+                        frect(plate_x, plate_y, plate_w, plate_h);
+                    SDL_RenderFillRect(renderer, &plate);
+                    draw_text(renderer, mark, plate_x + 6, plate_y + 3);
+                    destroy_text(mark);
                 }
             }
         }

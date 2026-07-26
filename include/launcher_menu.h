@@ -65,6 +65,14 @@ public:
         const uint8_t* pixels{};
         int width{};
         int height{};
+        // A short mark in the card's corner saying how many people can play
+        // this one and how - "2P", "LINK", "NET". Null draws nothing, which
+        // is what a one-player board gets. The text is not owned: pass a
+        // string literal, since this is asked for while drawing.
+        const char* badge{};
+        // Colours the badge so the kind registers before the word is read:
+        // 0 two players here, 1 two machines, 2 the cabinet link.
+        int badge_tone{};
     };
 
     // Cover-art grid selector, the console-style counterpart to select().
