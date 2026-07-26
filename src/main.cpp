@@ -43,6 +43,7 @@
 #include <windows.h>
 #else
 #include <csignal>
+#include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -193,6 +194,12 @@ child_handle spawn_child(const std::string& executable,
 #else
     const pid_t child = fork();
     if (child == 0) {
+#if defined(__linux__)
+        // The ring dies with its owner: if cabinet 1 goes away for any
+        // reason - including a crash that never runs its teardown - the
+        // kernel delivers SIGTERM here rather than leaving orphans.
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+#endif
         execvp(executable.c_str(), native.data());
         std::_Exit(127);
     }
@@ -451,6 +458,23 @@ public:
     }
 
     bool running() const { return !m_processes.empty(); }
+
+    // True once any spawned cabinet has exited. A ring with a missing
+    // member is already broken - its comm loop is cut - so the owner
+    // tears the whole session down rather than racing ghosts.
+    bool any_exited() {
+#if defined(_WIN32)
+        return false;
+#else
+        for (child_handle process : m_processes) {
+            int status = 0;
+            if (process != no_child &&
+                waitpid(process, &status, WNOHANG) == process)
+                return true;
+        }
+        return false;
+#endif
+    }
 
 private:
     std::vector<child_handle> m_processes;
@@ -1247,6 +1271,17 @@ int main(int argc, char* argv[]) {
 
             if (++wall_frames <= 3 || wall_frames % 600 == 0)
                 whitty_wall_log::note("frame %lld", wall_frames);
+            // Closing any cabinet of a linked session closes the session:
+            // the ring is cut the moment one member dies, so the rest are
+            // ghosts. Checked at a walking pace - it is a waitpid per
+            // child.
+            if (companion.running() && wall_frames % 30 == 0 &&
+                companion.any_exited()) {
+                whitty_wall_log::note(
+                    "a linked cabinet exited: closing the session");
+                host_action = arcade_host_action::return_to_menu;
+                break;
+            }
             // Lockstep netplay: the board may only advance when the peer's
             // input for the next frame has arrived. Running ahead on a guess
             // is exactly the divergence the whole scheme exists to prevent,
@@ -1358,7 +1393,9 @@ int main(int argc, char* argv[]) {
         whitty_wall_log::note("event loop ended, action=%d",
                               static_cast<int>(host_action));
         if (host_action == arcade_host_action::return_to_menu) {
-            if (cabinet_node == 2 &&
+            // A spawned cabinet has no launcher to go back to: leaving the
+            // game means leaving the process. Only cabinet 1 owns the menu.
+            if (cabinet_node >= 2 &&
                 launch_mode != cabinet_launch_mode::linked_network)
                 return 0;
             // The launcher owns its own SDL window, so tear down the running
