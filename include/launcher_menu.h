@@ -39,10 +39,15 @@ public:
     launcher_menu& operator=(const launcher_menu&) = delete;
 
     // Returns the selected item index, or -1 for Back/window close.
+    // `unavailable` names items that are shown but cannot be chosen - a
+    // second monitor on a machine that has only one. Hiding them instead
+    // leaves a player wondering whether the feature exists; greying one out
+    // says it does, and that this machine cannot do it today.
     int select(const std::string& title, const std::string& description,
                const std::vector<std::string>& items,
                const std::string& back_label = "Back",
-               int initial_selection = 0);
+               int initial_selection = 0,
+               const std::vector<int>& unavailable = {});
 
     // As select(), but returns interrupted when the background condition
     // becomes true. Used by the multiplayer lobby so Player 2 launches

@@ -559,6 +559,31 @@ std::vector<rom_choice> discover_rom_choices(const std::string& current_path) {
 
 namespace {
 
+// How many displays this machine has. Asked at the moment the question is
+// put, not cached: a monitor can be plugged in while the front end is open.
+int display_count() {
+    int count = 0;
+    if (SDL_DisplayID* displays = SDL_GetDisplays(&count)) SDL_free(displays);
+    return count;
+}
+
+bool has_second_monitor() { return display_count() > 1; }
+
+// The "two monitors" entry, greyed out and saying so on a machine with one.
+std::string second_monitor_label(const std::string& text) {
+    return has_second_monitor() ? text : text + "   (no second display)";
+}
+
+std::vector<int> second_monitor_blocked() {
+    return has_second_monitor() ? std::vector<int>{} : std::vector<int>{1};
+}
+
+std::string second_monitor_note() {
+    return has_second_monitor() ? std::string() :
+        std::string("  Only one display is connected, so the two-monitor "
+                    "option is unavailable until another is plugged in.");
+}
+
 struct launch_capabilities {
     const rom_set_manifest* manifest{};
     arcade_multiplayer_mode multiplayer{arcade_multiplayer_mode::none};
@@ -1090,7 +1115,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 return rom_selection_result{
                     rom_selection_action::selected, choice.path,
                     cabinet_launch_mode::linked_network, node,
-                    false, false, {}};
+                    false, false, true, {}};
         }
         return rom_selection_result{};
     };
@@ -1166,7 +1191,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     !caps.network_two_player) {
                     // Genuinely a one-player board: nothing to ask about.
                     return {rom_selection_action::selected, choice.path,
-                            cabinet_launch_mode::single, 0, false, false, {}};
+                            cabinet_launch_mode::single, 0, false, false,
+                            false, {}};
                 }
                 int wanted = -1;
                 while (wanted < 0) {
@@ -1230,11 +1256,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     if (identity) lobby->launch_game(identity->short_name);
                     return {rom_selection_action::selected, choice.path,
                             cabinet_launch_mode::linked_network, 1, false,
-                            false, {}};
+                            false, true, {}};
                 }
                 if (wanted == 0 || wanted == 1 || wanted == 2) {
                     return {rom_selection_action::selected, choice.path,
-                            cabinet_launch_mode::single, 0, false, false, {}};
+                            cabinet_launch_mode::single, 0, false, false,
+                            wanted != 0, {}};
                 }
                 play_style = wanted;   // twin screens or linked cabinets
             }
@@ -1242,51 +1269,39 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 // One cabinet, both players sharing it exactly as the
                 // original game was played.
                 return {rom_selection_action::selected, choice.path,
-                        cabinet_launch_mode::single, 0, false, false, {}};
+                        cabinet_launch_mode::single, 0, false, false, true,
+                        {}};
             }
             if (play_style == 3) {
-                // One monitor and nothing to decide: split it. The question
-                // is only worth asking when a second display exists.
-                int display_count = 0;
-                if (SDL_DisplayID* displays = SDL_GetDisplays(&display_count))
-                    SDL_free(displays);
-                if (display_count <= 1) {
-                    return {rom_selection_action::selected, choice.path,
-                            cabinet_launch_mode::independent_pair, 0, false,
-                            false, {}};
-                }
+                // A machine with one display cannot put a player on a
+                // second one, but the option still shows - greyed out, so it
+                // reads as "this machine cannot", not "this cannot be done".
                 const int mode = menu.select(
                     "Start " + choice.label + " - Twin Screens",
                     "Each player gets an aspect-correct view of the same "
                     "session: fullscreen split down the middle, or one "
-                    "monitor each.",
+                    "monitor each." + second_monitor_note(),
                     {"Split This Monitor  |  fullscreen, half each",
-                     "Two Monitors  |  one per display"},
-                    "Back");
+                     second_monitor_label("Two Monitors  |  one per display")},
+                    "Back", 0, second_monitor_blocked());
                 if (mode < 0) continue;
                 return {rom_selection_action::selected, choice.path,
                         cabinet_launch_mode::independent_pair, 0, mode == 1,
-                        false, {}};
-            }
-            int link_displays = 0;
-            if (SDL_DisplayID* displays = SDL_GetDisplays(&link_displays))
-                SDL_free(displays);
-            if (link_displays <= 1) {
-                // Two linked cabinets on the one screen, half each.
-                return {rom_selection_action::selected, choice.path,
-                        cabinet_launch_mode::linked_pair, 0, false, true, {}};
+                        false, true, {}};
             }
             const int mode = menu.select(
                 "Start " + choice.label + " - Linked Cabinets",
                 "Two original cabinets, linked exactly as in the arcade: "
-                "side by side on this display, or one cabinet per monitor.",
+                "side by side on this display, or one cabinet per monitor." +
+                    second_monitor_note(),
                 {"Side By Side  |  this display, half each",
-                 "Two Monitors  |  one cabinet per display"},
-                "Back");
+                 second_monitor_label(
+                     "Two Monitors  |  one cabinet per display")},
+                "Back", 0, second_monitor_blocked());
             if (mode < 0) continue;
             return {rom_selection_action::selected, choice.path,
                     cabinet_launch_mode::linked_pair, 0, mode == 1, mode == 0,
-                    {}};
+                    true, {}};
         }
 
         // Back from the grid: the system menu. Everything that is not
@@ -1427,7 +1442,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 if (!identity) continue;
                 lobby->launch_game(identity->short_name);
                 return {rom_selection_action::selected, choice.path,
-                        cabinet_launch_mode::linked_network, 1, false, false, {}};
+                        cabinet_launch_mode::linked_network, 1, false, false,
+                        true, {}};
             }
             continue;
         }
