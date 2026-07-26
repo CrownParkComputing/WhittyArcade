@@ -2,8 +2,10 @@ name: Linux distribution builds
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -86,23 +88,30 @@ jobs:
 
       - name: Stage ${{ matrix.distro }} executable
         run: |
-          cmake -E make_directory artifact
+          package=WhittyArcade-${{ matrix.distro }}-x86_64
+          cmake -E make_directory "$package"
           cmake -E copy \
-            build-${{ matrix.distro }}/WhittyArcade artifact/WhittyArcade
-          cmake -E copy LINUX_README.md artifact/README.md
-          cmake -E copy LICENSE artifact/LICENSE.txt
+            build-${{ matrix.distro }}/WhittyArcade "$package/WhittyArcade"
+          cmake -E copy LINUX_README.md "$package/README.md"
+          cmake -E copy LICENSE "$package/LICENSE.txt"
           cmake -E copy THIRD_PARTY_NOTICES.md \
-            artifact/THIRD_PARTY_NOTICES.md
-          strip --strip-unneeded artifact/WhittyArcade
-          chmod +x artifact/WhittyArcade
+            "$package/THIRD_PARTY_NOTICES.md"
+          strip --strip-unneeded "$package/WhittyArcade"
+          chmod +x "$package/WhittyArcade"
           WHITTYARCADE_HEADLESS=1 \
-            artifact/WhittyArcade --list-roms > /dev/null
-          (cd artifact && sha256sum WhittyArcade > WhittyArcade.sha256)
+            "$package/WhittyArcade" --list-roms > /dev/null
+          (cd "$package" && sha256sum WhittyArcade > WhittyArcade.sha256)
+          # See the CachyOS job: the archive has to be made here, where the
+          # executable bit still exists.
+          tar -czf "$package.tar.gz" "$package"
+          sha256sum "$package.tar.gz" > "$package.tar.gz.sha256"
 
       - name: Upload ${{ matrix.distro }} x86-64 build
         uses: actions/upload-artifact@v7
         with:
           name: WhittyArcade-${{ matrix.distro }}-x86_64
-          path: artifact/
+          path: |
+            WhittyArcade-${{ matrix.distro }}-x86_64.tar.gz
+            WhittyArcade-${{ matrix.distro }}-x86_64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30
