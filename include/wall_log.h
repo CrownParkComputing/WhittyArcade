@@ -44,6 +44,20 @@ inline void begin_cabinet(int node) {
     std::fflush(sink());
 }
 
+// An ordinary single launch keeps a file too. It has neither a column nor a
+// cabinet number, so it wrote nothing at all - which left the one
+// configuration worth comparing against as the one nobody could see.
+inline void begin_session() {
+    if (sink()) return;
+    const char* home = std::getenv("HOME");
+    std::string root = home && *home ? home : "/tmp";
+    root += "/.local/share/WhittyArcade/session.log";
+    sink() = std::fopen(root.c_str(), "w");
+    if (!sink()) return;
+    std::fprintf(sink(), "single cabinet\n");
+    std::fflush(sink());
+}
+
 inline void begin(int slot, int count) {
     if (sink() || count <= 1) return;
     // Truncated per run: the interesting question is always what this launch
