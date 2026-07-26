@@ -68,7 +68,7 @@ jobs:
                 ca-certificates gcc gcc-c++ cmake git ninja pkgconf-pkg-config \
                 Mesa-libGL-devel SDL3-devel SDL3_ttf-devel \
                 openal-soft-devel glew-devel glm-devel zlib-devel \
-                minizip-devel vulkan-devel mpg123-devel glslang \
+                minizip-devel vulkan-devel mpg123-devel glslang-devel \
                 dejavu-fonts
               ;;
           esac
