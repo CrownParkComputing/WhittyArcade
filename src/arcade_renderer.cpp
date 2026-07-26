@@ -1834,6 +1834,20 @@ void polygon_renderer_gpu::set_cabinet_status(std::string status) {
             const std::string title = m_cabinet_status.empty() ?
                 "WhittyArcade" : "WhittyArcade - " + m_cabinet_status;
             SDL_SetWindowTitle(window, title.c_str());
+            // Cabinet 2's window opens last and takes the desktop focus
+            // with it, so the keyboard starts out driving player 2. The
+            // moment the pair reports LINKED, cabinet 1 asks for the
+            // focus back - once, so a player who deliberately switches
+            // windows afterwards is left alone.
+            if (!m_raised_when_linked &&
+                m_cabinet_status.find("LINKED") != std::string::npos) {
+                const char* node_text =
+                    std::getenv("WHITTY_CABINET_NODE");
+                if (node_text && std::atoi(node_text) == 1) {
+                    SDL_RaiseWindow(window);
+                    m_raised_when_linked = true;
+                }
+            }
         }
     }
 }

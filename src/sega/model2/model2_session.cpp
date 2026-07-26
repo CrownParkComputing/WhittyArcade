@@ -2,6 +2,7 @@
 
 #include "arcade_session_internal.h"
 #include "arcade_frontend.h"
+#include "wall_log.h"
 #include "sega/model1/model1_audio.h"
 #include "sega/model1/model1_rom.h"
 #include "sega/model2/model2_audio.h"
@@ -225,9 +226,11 @@ private:
                 if (m_machine) m_machine->sound_midi_receive(data);
             });
             m_audio->start();
+            whitty_wall_log::note("scsp audio up");
         } else {
             std::fprintf(stderr,
                          "Model 2 audio disabled; video will continue\n");
+            whitty_wall_log::note("scsp audio FAILED to initialize");
             m_audio.reset();
         }
     }
@@ -390,6 +393,27 @@ private:
                 packet_end - layers_end).count();
 
             const uint64_t frame = ++m_frame_number;
+            // Sound travels i960 -> 8251 -> SCSP 68000 -> voices -> OpenAL,
+            // and a silent cabinet gives no hint which hop died. Every ten
+            // seconds the cabinet log says how far the sound got: midi
+            // counts the commands that arrived, voices and peak say what
+            // the SCSP made of them.
+            if (frame % 600 == 0) {
+                if (m_audio)
+                    whitty_wall_log::note(
+                        "audio: 68k=%06x midi=%llu scsp=%llu voices=%d "
+                        "peak=%d",
+                        m_audio->program_counter(),
+                        static_cast<unsigned long long>(
+                            m_audio->midi_bytes()),
+                        static_cast<unsigned long long>(
+                            m_audio->scsp_writes()),
+                        m_audio->active_voices(), m_audio->peak_sample());
+                else if (m_pcm_audio)
+                    whitty_wall_log::note("audio: multipcm board active");
+                else
+                    whitty_wall_log::note("audio: NO BOARD RUNNING");
+            }
             if (frame % 60 == 0 && session_trace_enabled()) {
                 const double elapsed = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - epoch).count();

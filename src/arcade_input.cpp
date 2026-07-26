@@ -932,6 +932,26 @@ void arcade_input::scan_for_controller() {
         SDL_free(ids);
         return;
     }
+    // Two linked cabinets are two processes reading the same physical
+    // controllers, and a controller answers whichever process polls it -
+    // window focus does not arbitrate. Without partitioning, one wheel
+    // steers both cabinets and a single coin enters both riders. Cabinet N
+    // takes the Nth controller and nothing else; a cabinet without its own
+    // controller stays on the keyboard, which does follow the focus.
+    const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+    const int cabinet = node_text ? std::atoi(node_text) : 0;
+    if (cabinet >= 1) {
+        int gamepad_index = 0;
+        for (int index = 0; index < count; ++index) {
+            if (!SDL_IsGamepad(ids[index])) continue;
+            if (++gamepad_index == cabinet) {
+                open_controller(ids[index]);
+                break;
+            }
+        }
+        SDL_free(ids);
+        return;
+    }
     for (int index = 0; index < count; ++index)
         if (open_controller(ids[index])) {
             SDL_free(ids);
