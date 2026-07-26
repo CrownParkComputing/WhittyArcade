@@ -3768,7 +3768,17 @@ bool alternate_presenter::upload_scene_sheet(scene_sheet sheet,
     if (shape.streams) {
         // Rewritten as the board runs: stage it and let the next frame's
         // command buffer carry the copy, rather than stalling the queue.
-        if (bytes < capacity_bytes) return false;
+        if (bytes < capacity_bytes) {
+            // Say so: this refusal ran silently while Model 2's 2D layers
+            // were handed over in pixels rather than bytes, and the only
+            // symptom was every 2D screen on the board coming up black.
+            static int refused = 0;
+            if (whitty_wall_log::first(refused))
+                whitty_wall_log::note(
+                    "sheet %d upload refused: %zu bytes, image needs %zu",
+                    index, bytes, capacity_bytes);
+            return false;
+        }
         auto& stream =
             m_impl->sheet_streaming[static_cast<std::size_t>(index)];
         if (!stream.buffer &&
