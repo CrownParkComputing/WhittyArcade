@@ -589,6 +589,12 @@ target_link_libraries(wall_workspace_test PRIVATE SDL3::SDL3)
 target_compile_options(wall_workspace_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME wall_workspace_test COMMAND wall_workspace_test)
 
+add_executable(netplay_lockstep_test
+    tests/netplay_lockstep_test.cpp
+)
+target_compile_options(netplay_lockstep_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME netplay_lockstep_test COMMAND netplay_lockstep_test)
+
 add_executable(menu_stick_test
     tests/menu_stick_test.cpp
 )
@@ -1079,6 +1085,20 @@ else()
     add_test(NAME galaxian_mooncrst_machine_test
         COMMAND galaxian_mooncrst_machine_test)
 endif()
+
+add_executable(galaxian_determinism_test
+    tests/galaxian_determinism_test.cpp
+    src/high_scores.cpp
+    src/namco/galaxian/galaxian_machine.cpp
+    src/namco/galaxian/galaxian_machine_mooncrst.cpp
+)
+target_include_directories(galaxian_determinism_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(galaxian_determinism_test SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/chips)
+target_link_libraries(galaxian_determinism_test PRIVATE
+    chips_z80 PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(galaxian_determinism_test PRIVATE -Wall -Wextra)
 
 add_executable(galaxian_base_machine_test
     tests/galaxian_base_machine_test.cpp

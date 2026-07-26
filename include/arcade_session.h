@@ -48,6 +48,9 @@ public:
     virtual bool paused() const = 0;
     virtual void set_paused(bool paused) = 0;
     virtual void refresh_output() = 0;
+    // Polls the netplay link without running a frame, so a cabinet waiting
+    // on its partner still notices when that partner goes away.
+    virtual void pump_netplay_link() {}
     virtual double frame_seconds() const = 0;
     // 1/2 for an alternating game's active side, 0 when both players are
     // active, and -1 when this board does not expose a verified turn marker.

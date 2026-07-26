@@ -74,6 +74,7 @@ public:
     bool paused() const final { return m_gpu_renderer->paused(); }
     void set_paused(bool value) final { set_audio_paused(value); }
     void refresh_output() final { m_gpu_renderer->refresh_output(); }
+    void pump_netplay_link() final { arcade_input_netplay_poll(); }
     void open_operator_settings() override {}
 
 protected:

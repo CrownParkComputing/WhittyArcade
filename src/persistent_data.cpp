@@ -133,6 +133,16 @@ std::vector<persistent_game_info> build_games() {
     return games;
 }
 
+std::uint64_t hash_bytes(std::uint64_t hash, const void* data,
+                         std::size_t size) {
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (std::size_t at = 0; at < size; ++at) {
+        hash ^= bytes[at];
+        hash *= 1099511628211ull;  // FNV-1a
+    }
+    return hash;
+}
+
 bool read_exact(const fs::path& path, void* destination, std::size_t size) {
     std::ifstream input(path, std::ios::binary);
     if (!input) return false;
@@ -420,4 +430,28 @@ bool save_system22_eeprom(const std::string& short_name,
         nvram_root() / whitty_platform::cabinet_scoped_name(short_name) /
             "eeprom",
         source, size);
+}
+
+std::uint64_t persistent_state_hash(const std::string& short_name) {
+    const std::vector<persistent_game_info> games = persistent_games();
+    const persistent_game_info* game = find_persistent_game(games, short_name);
+    if (!game) return 0;  // A board with nothing to keep cannot disagree.
+    std::uint64_t hash = 1469598103934665603ull;
+    bool any = false;
+    for (const persistent_file_info& file : game->files) {
+        std::ifstream input(file.path, std::ios::binary);
+        if (!input) {
+            // A missing file is itself a state both sides must share.
+            hash = hash_bytes(hash, file.key.data(), file.key.size());
+            hash = hash_bytes(hash, "absent", 6);
+            any = true;
+            continue;
+        }
+        const std::string bytes((std::istreambuf_iterator<char>(input)),
+                                std::istreambuf_iterator<char>());
+        hash = hash_bytes(hash, file.key.data(), file.key.size());
+        hash = hash_bytes(hash, bytes.data(), bytes.size());
+        any = true;
+    }
+    return any ? (hash ? hash : 1) : 0;
 }

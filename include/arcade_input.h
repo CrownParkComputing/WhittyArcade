@@ -15,6 +15,31 @@
 // from the other WhittyArcade instance. Native cabinet links (for example
 // Sega Rally's Model 2 board) report their own state instead.
 bool arcade_input_network_peer_seen();
+// Netplay, read by the host loop: true while this machine is waiting for the
+// peer's input for the frame it is about to run. The board must not be
+// stepped while it is true, or the two machines diverge.
+bool arcade_input_netplay_stalled();
+// True when this launch is a lockstep netplay session at all.
+bool arcade_input_netplay_active();
+// How many frames of the peer's input are buffered ahead of the local frame.
+int arcade_input_netplay_lead();
+// The frame the local machine has advanced to under lockstep.
+uint32_t arcade_input_netplay_frame();
+// A hash of the running board's state, published by the session each frame
+// and compared with the peer's to notice a divergence.
+void arcade_input_netplay_publish_state(uint32_t frame, uint64_t hash);
+// Non-zero once the two machines have simulated the same frame differently;
+// the value is the frame the divergence was seen on.
+uint32_t arcade_input_netplay_desync_frame();
+// True once a netplay peer that was connected has gone away. The two
+// cabinets are one session: when either app closes, the other has nothing
+// left to play against and should close too rather than sit waiting.
+bool arcade_input_netplay_peer_lost();
+// Polls the netplay link without running a frame. A cabinet waiting on its
+// partner stops calling update(), so this is what still notices the partner
+// leaving. There is exactly one linked input per process, which registers
+// itself when the link opens.
+void arcade_input_netplay_poll();
 uint32_t arcade_input_network_peer_ipv4();
 void arcade_input_set_authoritative_player(uint8_t player);
 uint8_t arcade_input_network_authoritative_player();
@@ -46,6 +71,10 @@ public:
     void reload_mappings();
     void shutdown();
     void update();
+    // Drains the link and ages the peer without merging or advancing a
+    // frame. A stalled cabinet stops calling update(), so this is what lets
+    // it still notice its partner leaving.
+    void poll_link();
     void set_suppressed(bool suppressed) { m_suppressed = suppressed; }
     void set_test_input_enabled(bool enabled) {
         m_test_input_enabled.store(enabled, std::memory_order_release);
@@ -66,6 +95,9 @@ private:
     bool initialize_network_link();
     void shutdown_network_link();
     void exchange_network_input(const input_state& local_state);
+    void send_link_packet(const input_state& local_state);
+    bool drain_network_input();
+    void wait_for_peer_frame(uint32_t frame);
 
     SDL_Gamepad* m_controller{nullptr};
     input_mapping_config m_mappings{};
@@ -119,4 +151,40 @@ private:
     uint32_t m_network_peer_sequence{};
     uint16_t m_network_peer_age{0xffff};
     input_state m_network_peer_state{};
+
+    // Lockstep netplay. Both machines simulate every frame themselves and
+    // exchange only inputs, so a frame may only be simulated once both
+    // sides' inputs for it are known. Local input is published for a frame
+    // some way ahead - the delay - and each side keeps a small ring of the
+    // peer's future inputs, which is what absorbs jitter without either
+    // machine waiting on the other in the common case.
+    static constexpr int netplay_delay_frames = 3;
+    static constexpr int netplay_ring = 64;
+    bool m_netplay{false};
+    uint32_t m_netplay_frame{0};
+    std::array<input_state, netplay_ring> m_netplay_local{};
+    std::array<input_state, netplay_ring> m_netplay_peer{};
+    std::array<bool, netplay_ring> m_netplay_peer_known{};
+    // Highest frame the peer has published, for the stall report.
+    uint32_t m_netplay_peer_frame{0};
+    bool m_netplay_stalled{false};
+    bool m_netplay_peer_ever_seen{false};
+    uint8_t m_netplay_last_cabinet{0};
+
+public:
+    // Turns the input link from "newest packet wins" into frame-locked
+    // exchange. Both cabinets must agree, so the host decides and the mode
+    // travels with the launch.
+    void set_netplay(bool enabled) { m_netplay = enabled; }
+    bool netplay() const { return m_netplay; }
+    // The frame the local machine is about to simulate. Netplay advances it
+    // only when the peer's input for that frame has arrived.
+    uint32_t netplay_frame() const { return m_netplay_frame; }
+    // True while waiting on the peer: the caller must not step the board.
+    bool netplay_stalled() const { return m_netplay_stalled; }
+    // How far ahead the peer has published - a health reading for the UI.
+    int netplay_lead_frames() const {
+        return static_cast<int>(m_netplay_peer_frame) -
+               static_cast<int>(m_netplay_frame);
+    }
 };

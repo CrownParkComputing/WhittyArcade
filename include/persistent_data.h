@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,12 @@ persistent_action_result export_persistent_game(const std::string& short_name,
                                                 const std::string& directory);
 persistent_action_result import_persistent_game(const std::string& short_name,
                                                 const std::string& source);
+
+// A hash of every persistent file a game owns, or 0 when it has none - the
+// 2D boards keep nothing between sessions. Netplay compares this across the
+// two machines before the first frame: identical ROMs but different operator
+// data means the two boards start from different memory and diverge.
+std::uint64_t persistent_state_hash(const std::string& short_name);
 
 // Exact-sized System 22 EEPROM helpers shared by the emulator and manager.
 bool load_system22_eeprom(const std::string& short_name,
