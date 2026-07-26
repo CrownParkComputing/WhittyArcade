@@ -344,6 +344,7 @@ set(SOURCES
     src/sega/model2/model2_bus.cpp
     src/sega/model2/model2_machine.cpp
     src/sega/model2/model2_geometry.cpp
+    src/sega/model2/model2_draw_list.cpp
     src/sega/model2/model2_video.cpp
     src/namco/galaxian/galaxian_rom.cpp
     src/namco/galaxian/galaxian_audio.cpp
@@ -567,13 +568,21 @@ add_executable(vulkan_presenter_harness
     src/arcade_presenter.cpp
     src/arcade_settings.cpp
     src/namco/system22/system22_rom.cpp
+    src/sega/model2/model2_rom.cpp
+    src/sega/model2/model2_bus.cpp
+    src/sega/model2/model2_machine.cpp
+    src/sega/model2/model2_geometry.cpp
+    src/sega/model2/model2_draw_list.cpp
+    src/sega/model2/model2_video.cpp
 )
 add_dependencies(vulkan_presenter_harness whitty_shaders)
 target_include_directories(vulkan_presenter_harness PRIVATE
     ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party/i960
     ${WHITTY_SHADER_HEADER_DIR})
 target_link_libraries(vulkan_presenter_harness PRIVATE SDL3::SDL3
-    Vulkan::Vulkan PkgConfig::MINIZIP ZLIB::ZLIB)
+    Vulkan::Vulkan i960 mb86233 system24_video model1_io
+    PkgConfig::MINIZIP ZLIB::ZLIB ${WHITTY_MATH_LIB})
 target_compile_options(vulkan_presenter_harness PRIVATE -Wall -Wextra)
 
 add_executable(igdb_artwork_test

@@ -5,6 +5,7 @@
 #include "arcade_presenter.h"
 #include "arcade_sdl_guard.h"
 #include "network_video_link.h"
+#include "sega/model2/model2_draw_list.h"
 #include "platform_paths.h"
 #include "bezel_library.h"
 #include "system22_vulkan_uniforms.h"
@@ -199,41 +200,9 @@ static_assert(offsetof(draw_vertex, clip_left) ==
 static_assert(offsetof(draw_vertex, sprite) ==
               system22_vertex_layout::render_flags);
 
-struct model2_draw_vertex {
-    float x, y, z;
-    float u, v;
-    float center_x, center_y;
-    float clip_left, clip_right, clip_top, clip_bottom;
-    float header0, header1, header2;
-    float color_base;
-    float luma;
-    float renderer;
-    float texture_lod;
-    float draw_priority;
-};
-
-// As with draw_vertex above, the Vulkan pipeline declares its attributes from
-// these offsets, so this array uploads unmodified.
-static_assert(sizeof(model2_draw_vertex) == model2_vertex_layout::stride);
-static_assert(offsetof(model2_draw_vertex, x) ==
-              model2_vertex_layout::position);
-static_assert(offsetof(model2_draw_vertex, u) == model2_vertex_layout::uv);
-static_assert(offsetof(model2_draw_vertex, center_x) ==
-              model2_vertex_layout::center);
-static_assert(offsetof(model2_draw_vertex, clip_left) ==
-              model2_vertex_layout::clip);
-static_assert(offsetof(model2_draw_vertex, header0) ==
-              model2_vertex_layout::header0);
-static_assert(offsetof(model2_draw_vertex, color_base) ==
-              model2_vertex_layout::color_base);
-static_assert(offsetof(model2_draw_vertex, luma) == model2_vertex_layout::luma);
-static_assert(offsetof(model2_draw_vertex, renderer) ==
-              model2_vertex_layout::renderer);
-static_assert(offsetof(model2_draw_vertex, texture_lod) ==
-              model2_vertex_layout::texture_lod);
-static_assert(offsetof(model2_draw_vertex, draw_priority) ==
-              model2_vertex_layout::draw_priority);
-
+// model2_draw_vertex and the draw-list construction live in
+// sega/model2/model2_draw_list.h, shared with the Vulkan presenter harness so
+// its replay exercises the exact records the game submits.
 
 constexpr const char* model2_vertex_shader_source = R"GLSL(
 #version 430 core
@@ -3544,14 +3513,17 @@ void polygon_renderer_gpu::present_model2_frame(model2_gpu_frame frame) {
                         frame.foreground_rgba.data());
     }
     // The Vulkan scene pass samples its own copies of the two 2D layers.
-    // They are rewritten every frame, so they stream in with it.
+    // They are rewritten every frame, so they stream in with it. Sizes are
+    // BYTES, not pixels: a streaming sheet refuses a short upload outright,
+    // so passing the uint32 element count here left both layers permanently
+    // black - polygons over nothing.
     if (m_alternate_presenter && native_model2_enabled()) {
         m_alternate_presenter->upload_scene_sheet(
             scene_sheet::model2_base, frame.base_rgba.data(),
-            frame.base_rgba.size());
+            frame.base_rgba.size() * sizeof(uint32_t));
         m_alternate_presenter->upload_scene_sheet(
             scene_sheet::model2_foreground, frame.foreground_rgba.data(),
-            frame.foreground_rgba.size());
+            frame.foreground_rgba.size() * sizeof(uint32_t));
     }
     if (texture_packet) {
         glBindTexture(GL_TEXTURE_2D_ARRAY, m_model2_sheet_texture);
@@ -3579,36 +3551,7 @@ void polygon_renderer_gpu::present_model2_frame(model2_gpu_frame frame) {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 128,
                         GL_RED_INTEGER, GL_UNSIGNED_BYTE, frame.luma.data());
 
-    const auto word_at = [](const std::vector<uint8_t>& memory,
-                            std::size_t index) {
-        const std::size_t offset = index * 2;
-        return static_cast<uint16_t>(memory[offset]) |
-               (static_cast<uint16_t>(memory[offset + 1]) << 8);
-    };
-    const auto gamma = [](uint8_t value) {
-        if (value <= 64) return static_cast<uint8_t>(0);
-        return static_cast<uint8_t>(std::min(
-            255, (static_cast<int>(value) - 64) * 255 / 191));
-    };
-        std::vector<uint8_t> colors(std::size_t{1024} * 64 * 3);
-        for (unsigned luma = 0; luma < 64; ++luma) {
-            for (unsigned base = 0; base < 1024; ++base) {
-                const uint16_t color = word_at(frame.palette, 0x1000 + base);
-                const unsigned red_index = luma + ((color & 0x1f) << 8);
-                const unsigned green_index =
-                    0x2000 + luma + (((color >> 5) & 0x1f) << 8);
-                const unsigned blue_index =
-                    0x4000 + luma + (((color >> 10) & 0x1f) << 8);
-                const std::size_t output =
-                    (static_cast<std::size_t>(luma) * 1024 + base) * 3;
-                colors[output] = gamma(static_cast<uint8_t>(
-                    word_at(frame.color_translation, red_index)));
-                colors[output + 1] = gamma(static_cast<uint8_t>(
-                    word_at(frame.color_translation, green_index)));
-                colors[output + 2] = gamma(static_cast<uint8_t>(
-                    word_at(frame.color_translation, blue_index)));
-            }
-        }
+        const std::vector<uint8_t> colors = model2_build_color_table(frame);
         glBindTexture(GL_TEXTURE_2D, m_model2_color_texture);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1024, 64,
                         GL_RGB, GL_UNSIGNED_BYTE, colors.data());
@@ -3623,59 +3566,8 @@ void polygon_renderer_gpu::present_model2_frame(model2_gpu_frame frame) {
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
-    std::vector<model2_draw_vertex> vertices;
-    vertices.reserve(frame.polygons.size() * 18);
-    const std::vector<std::size_t> polygon_order =
-        model2_polygon_draw_order(frame.polygons);
-    const auto append_vertex = [&vertices, &frame](
-        const model2_geometry_polygon& polygon,
-        const model2_geometry_vertex& source,
-        float priority) {
-        vertices.push_back({
-            source.x, source.y, source.z, source.u, source.v,
-            static_cast<float>(polygon.center[0]),
-            static_cast<float>(polygon.center[1]),
-            static_cast<float>(polygon.viewport[0] +
-                               frame.horizontal_offset),
-            static_cast<float>(polygon.viewport[2] +
-                               frame.horizontal_offset),
-            static_cast<float>(384 - polygon.viewport[3] +
-                               frame.vertical_offset),
-            static_cast<float>(384 - polygon.viewport[1] +
-                               frame.vertical_offset),
-            static_cast<float>(polygon.texture_header[0]),
-            static_cast<float>(polygon.texture_header[1]),
-            static_cast<float>(polygon.texture_header[2]),
-            static_cast<float>(polygon.color_base),
-            static_cast<float>(polygon.luma),
-            static_cast<float>(polygon.renderer),
-            static_cast<float>(polygon.texture_lod),
-            priority});
-    };
-    const auto append_triangle = [&append_vertex](
-        const model2_geometry_polygon& polygon,
-        const model2_geometry_vertex& a,
-        const model2_geometry_vertex& b,
-        const model2_geometry_vertex& c, float priority) {
-        append_vertex(polygon, a, priority);
-        append_vertex(polygon, b, priority);
-        append_vertex(polygon, c, priority);
-    };
-    for (std::size_t rank = 0; rank < polygon_order.size(); ++rank) {
-        const model2_geometry_polygon& polygon =
-            frame.polygons[polygon_order[rank]];
-        const model2_clipped_polygon clipped =
-            model2_clip_polygon(polygon);
-        if (clipped.vertex_count < 3) continue;
-        const float priority = static_cast<float>(rank + 1) /
-            static_cast<float>(polygon_order.size() + 1);
-        for (unsigned vertex = 1; vertex + 1 < clipped.vertex_count;
-             ++vertex) {
-            append_triangle(polygon, clipped.vertices[0],
-                            clipped.vertices[vertex],
-                            clipped.vertices[vertex + 1], priority);
-        }
-    }
+    const std::vector<model2_draw_vertex> vertices =
+        model2_build_draw_vertices(frame);
 
     // With Vulkan owning the window the whole Model 2 frame rasterises there:
     // base layer, polygons and foreground layer straight into the image the

@@ -21,12 +21,17 @@
 #include "namco/system22/system22_rom.h"
 #include "arcade_settings.h"
 #include "system22_vulkan_uniforms.h"
+#include "sega/model2/model2_machine.h"
+#include "sega/model2/model2_draw_list.h"
 
 #include <SDL3/SDL.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -308,6 +313,198 @@ int run(alternate_presenter& presenter, const char* rom_path) {
 
 } // namespace s22_replay
 
+
+// ---------------------------------------------------------------------------
+// Model 2 frame replay: boots the real board, hands its final frame to the
+// native Vulkan path exactly as present_model2_frame would - the same
+// upload calls, the same shared draw-list construction - and diffs the
+// result against the machine's own software rasteriser.
+//
+// WHITTY_HARNESS_M2_ROM=<path to srallyc.zip> selects it;
+// WHITTY_HARNESS_M2_OUT names a directory for the gpu/reference PPM pairs.
+//
+// Two attract frames are checked from one boot, because they fail
+// differently: frame 1200 is the title screen - pure 2D layer, no polygons -
+// so a lost layer upload leaves it entirely black, while frame 1500 is
+// mid-race - sky and scenery are POLYGONS there, so it stays bright with the
+// layers dead and only the polygon path can fail it. The layer-upload bug
+// this pins (2D layers handed over in pixels rather than bytes, refusal
+// ignored) passed every polygon-level check while every 2D screen in the
+// game was black.
+//
+// The two rasterisers are not texel-identical, so the check is coverage,
+// not equality: where the reference has picture, the GPU frame must have
+// picture too.
+namespace m2_replay {
+
+bool write_ppm(const std::filesystem::path& path, const uint8_t* rgba,
+               int width, int height) {
+    std::FILE* output = std::fopen(path.string().c_str(), "wb");
+    if (!output) return false;
+    std::fprintf(output, "P6\n%d %d\n255\n", width, height);
+    for (std::size_t pixel = 0;
+         pixel < static_cast<std::size_t>(width) * height; ++pixel)
+        std::fwrite(rgba + pixel * 4, 1, 3, output);
+    std::fclose(output);
+    return true;
+}
+
+// Renders the machine's current frame through the native Vulkan path with
+// the exact hand-over present_model2_frame performs, and requires the GPU
+// picture to carry what the software rasteriser drew.
+int snapshot(alternate_presenter& presenter, model2_machine& machine,
+             const char* label) {
+    machine.render_video_layers();
+    const model2_gpu_frame frame = machine.make_gpu_frame();
+    std::printf("m2 replay %s: %zu polygons, texture=%zu color=%zu\n", label,
+                frame.polygons.size(), frame.texture_sheet_0.size(),
+                frame.luma.size());
+
+    if (!presenter.upload_scene_sheet(
+            scene_sheet::model2_base, frame.base_rgba.data(),
+            frame.base_rgba.size() * sizeof(uint32_t)) ||
+        !presenter.upload_scene_sheet(
+            scene_sheet::model2_foreground, frame.foreground_rgba.data(),
+            frame.foreground_rgba.size() * sizeof(uint32_t))) {
+        std::fprintf(stderr, "m2 replay %s: 2D layer upload refused\n",
+                     label);
+        return 1;
+    }
+    // Texture and colour packets arrive only when the board rewrote them;
+    // the presenter keeps the previous sheets otherwise, as production does.
+    if (!frame.texture_sheet_0.empty()) {
+        std::vector<uint8_t> both(frame.texture_sheet_0.size() +
+                                  frame.texture_sheet_1.size());
+        std::memcpy(both.data(), frame.texture_sheet_0.data(),
+                    frame.texture_sheet_0.size());
+        std::memcpy(both.data() + frame.texture_sheet_0.size(),
+                    frame.texture_sheet_1.data(),
+                    frame.texture_sheet_1.size());
+        if (!presenter.upload_scene_sheet(scene_sheet::model2_sheets,
+                                          both.data(), both.size())) {
+            std::fprintf(stderr, "m2 replay %s: texture upload refused\n",
+                         label);
+            return 1;
+        }
+    }
+    if (!frame.luma.empty()) {
+        const std::vector<uint8_t> colors = model2_build_color_table(frame);
+        if (!presenter.upload_scene_sheet(scene_sheet::model2_luma,
+                                          frame.luma.data(),
+                                          frame.luma.size()) ||
+            colors.empty() ||
+            !presenter.upload_model2_color_table(colors.data(),
+                                                 colors.size())) {
+            std::fprintf(stderr, "m2 replay %s: colour upload refused\n",
+                         label);
+            return 1;
+        }
+    }
+
+    const std::vector<model2_draw_vertex> vertices =
+        model2_build_draw_vertices(frame);
+    model2_scene scene;
+    scene.width = model2_gpu_frame::width;
+    scene.height = model2_gpu_frame::height;
+    scene.vertices = vertices.data();
+    scene.vertex_count = vertices.size();
+    scene.crtc_offset[0] = static_cast<float>(frame.horizontal_offset);
+    scene.crtc_offset[1] = static_cast<float>(frame.vertical_offset);
+    const board_overlays overlays;
+    if (!presenter.render_model2_scene(scene) ||
+        !presenter.render_board_frame(nullptr, 0, 0, true, overlays, false,
+                                      scene.width, scene.height)) {
+        std::fprintf(stderr, "m2 replay %s: frame did not render\n", label);
+        return 1;
+    }
+    std::vector<uint8_t> gpu;
+    int width = 0;
+    int height = 0;
+    if (!presenter.read_scene_image(gpu, width, height) ||
+        width != scene.width || height != scene.height) {
+        std::fprintf(stderr, "m2 replay %s: readback failed (%dx%d)\n", label,
+                     width, height);
+        return 1;
+    }
+
+    const uint8_t* reference =
+        reinterpret_cast<const uint8_t*>(machine.frame_buffer());
+    if (const char* out = std::getenv("WHITTY_HARNESS_M2_OUT")) {
+        std::filesystem::create_directories(out);
+        write_ppm(std::filesystem::path(out) /
+                      (std::string("gpu-") + label + ".ppm"),
+                  gpu.data(), width, height);
+        write_ppm(std::filesystem::path(out) /
+                      (std::string("reference-") + label + ".ppm"),
+                  reference, width, height);
+    }
+
+    // Where the reference sees picture, the GPU must not see black. The
+    // reverse is not checked: the GPU's bilinear filtering lights texels the
+    // point-sampling software rasteriser leaves dark, and that is fine.
+    const auto bright = [](const uint8_t* pixel) {
+        return pixel[0] > 24 || pixel[1] > 24 || pixel[2] > 24;
+    };
+    std::size_t reference_lit = 0;
+    std::size_t gpu_dark_where_lit = 0;
+    for (std::size_t pixel = 0;
+         pixel < static_cast<std::size_t>(width) * height; ++pixel) {
+        if (!bright(reference + pixel * 4)) continue;
+        ++reference_lit;
+        if (!bright(gpu.data() + pixel * 4)) ++gpu_dark_where_lit;
+    }
+    const double lost = reference_lit == 0 ? 1.0 :
+        static_cast<double>(gpu_dark_where_lit) /
+        static_cast<double>(reference_lit);
+    std::printf("m2 replay %s: reference lit %zu px, gpu dark on %zu of "
+                "them (%.1f%%)\n",
+                label, reference_lit, gpu_dark_where_lit, lost * 100.0);
+    // Both pinned frames light most of the screen; losing a fifth of the
+    // lit picture means a layer or the polygon pass is missing, not a
+    // filtering difference.
+    if (reference_lit < 10000 || lost > 0.20) {
+        std::fprintf(stderr, "m2 replay %s: FAIL - the GPU frame is missing "
+                             "picture the software rasteriser draws\n",
+                     label);
+        return 1;
+    }
+    return 0;
+}
+
+int run(alternate_presenter& presenter, const char* rom_path) {
+    std::printf("M2 frame replay: %s\n", rom_path);
+    // The title screen: 2D layers only, so it exists entirely on the path
+    // the polygon frame cannot test.
+    constexpr int title_frame = 1200;
+    // Mid-attract race: thousands of textured polygons.
+    constexpr int race_frame = 1500;
+
+    model2_machine machine;
+    if (!machine.initialize(rom_path)) {
+        std::fprintf(stderr, "m2 replay: ROM set did not load\n");
+        return 1;
+    }
+    int failures = 0;
+    for (int frame = 0; frame < race_frame && !machine.cpu_faulted();
+         ++frame) {
+        const int frame_number = frame + 1;
+        machine.run_frame(frame_number == title_frame ||
+                          frame_number == race_frame);
+        if (frame_number == title_frame)
+            failures += snapshot(presenter, machine, "title");
+    }
+    if (machine.cpu_faulted()) {
+        std::fprintf(stderr, "m2 replay: i960 faulted during boot\n");
+        return 1;
+    }
+    failures += snapshot(presenter, machine, "race");
+    if (failures) return 1;
+    std::printf("m2 replay: GPU frames carry the software picture\n");
+    return 0;
+}
+
+} // namespace m2_replay
+
 int main() {
     if (const char* enabled = std::getenv("WHITTY_PRESENTER_HARNESS");
         !enabled || *enabled != '1') {
@@ -354,6 +551,7 @@ int main() {
     }
 
     const char* replay_rom = std::getenv("WHITTY_HARNESS_S22_ROM");
+    const char* m2_rom = std::getenv("WHITTY_HARNESS_M2_ROM");
 
     alternate_presenter presenter;
     if (!presenter.initialize(renderer_backend::vulkan, 640, 480, settings)) {
@@ -364,6 +562,19 @@ int main() {
 
     if (replay_rom) {
         const int result = s22_replay::run(presenter, replay_rom);
+        presenter.shutdown();
+        SDL_Quit();
+        return result;
+    }
+
+    if (m2_rom) {
+        // Boot from factory defaults, never the user's persistent NVRAM.
+#if defined(_WIN32)
+        _putenv_s("XDG_CONFIG_HOME", "/nonexistent/whitty-harness");
+#else
+        setenv("XDG_CONFIG_HOME", "/nonexistent/whitty-harness", 1);
+#endif
+        const int result = m2_replay::run(presenter, m2_rom);
         presenter.shutdown();
         SDL_Quit();
         return result;
