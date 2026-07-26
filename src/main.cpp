@@ -942,9 +942,11 @@ int main(int argc, char* argv[]) {
             // which cabinet this is and what it is doing; the comm board
             // prints on stderr if the four-second search finds nobody.
             shared_video->set_cabinet_status(
-                "CABINET " + std::to_string(cabinet_node) + " OF 2  |  " +
-                "STARTING " + identity->short_name +
-                " - LOOKING FOR THE OTHER CABINET...");
+                cabinet_node == 2 ?
+                    std::string("PLAYER 2 CABINET  |  STARTING UP - "
+                                "INSERT COIN TO JOIN") :
+                    std::string("PLAYER 1 CABINET  |  STARTING UP - "
+                                "INSERT COIN TO PLAY"));
         } else if (launch_mode == cabinet_launch_mode::independent_pair) {
             shared_video->set_cabinet_status(
                 "TWIN SCREEN  |  PLAYER 1 + PLAYER 2");
@@ -1218,8 +1220,15 @@ int main(int argc, char* argv[]) {
                 std::chrono::steady_clock::now() - session_began >
                     std::chrono::seconds(6)) {
                 startup_status_shown = false;
+                // Past the discovery window the invitation is the useful
+                // thing to leave on screen: a second cabinet is worth
+                // nothing until somebody puts a coin in it.
                 shared_video->set_cabinet_status(
-                    "CABINET " + std::to_string(cabinet_node) + " OF 2");
+                    cabinet_node == 2 ?
+                        std::string("PLAYER 2 CABINET  |  INSERT COIN TO "
+                                    "JOIN") :
+                        std::string("PLAYER 1 CABINET  |  INSERT COIN TO "
+                                    "PLAY"));
             }
 
             // A wall column watches its own speed. The capacity rule budgets
