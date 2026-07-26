@@ -86,6 +86,10 @@ constexpr std::array companion_archives{
 constexpr std::array collection_aliases{
     "ridgera28", "virtua_formula", "virtua_fighter",
     "star_wars_arcade", "wing_war",
+    // Merged collections name the archive after the PARENT set; the games
+    // WhittyArcade ships from inside them can be a specific revision with a
+    // different short name (manxtt.zip holds the Twin-mode manxttc).
+    "manxtt",
 };
 
 identified_archive identify_archive(const fs::path& path) {

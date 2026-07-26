@@ -1101,6 +1101,16 @@ int browse_library_grid(
 
 } // namespace
 
+int linked_cabinet_maximum(const std::string& short_name) {
+    // Daytona's ring hardware takes 8 cabinets; per-car operator records
+    // for all 8 are in place and 3- and 4-cabinet rings race on host (the
+    // ring ids number DOWNWARDS from the master - the fact that unblocked
+    // everything past a twin). Sega Rally's own link menu stops at 4 but
+    // its 3+ ring has not been exercised, so it stays a twin for now.
+    if (short_name == "daytona") return 8;
+    return 2;
+}
+
 std::string show_in_game_game_browser(const std::vector<rom_choice>& choices) {
     // A software launcher avoids stealing the running cabinet's GL context,
     // exactly as the in-game controls mapper does.
@@ -1318,9 +1328,28 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                         cabinet_launch_mode::independent_pair, 0, mode == 1,
                         false, true, {}};
             }
+            // Games whose comm ring runs more than a twin offer the count
+            // first; everything else launches the classic pair directly.
+            int cabinet_count = 2;
+            const auto link_identity = identify_arcade_game(choice.path);
+            const int cabinet_maximum = link_identity ?
+                linked_cabinet_maximum(link_identity->short_name) : 2;
+            if (cabinet_maximum > 2) {
+                std::vector<std::string> counts;
+                for (int count = 2; count <= cabinet_maximum; ++count)
+                    counts.push_back(std::to_string(count) + " Cabinets" +
+                                     (count == 2 ? "  |  classic twin" : ""));
+                const int picked = menu.select(
+                    "Start " + choice.label + " - Cabinets In The Link",
+                    "Every cabinet is its own machine on the ring, exactly "
+                    "as the arcade linked them.",
+                    counts, "Back", 0);
+                if (picked < 0) continue;
+                cabinet_count = 2 + picked;
+            }
             const int mode = menu.select(
                 "Start " + choice.label + " - Linked Cabinets",
-                "Two original cabinets, linked exactly as in the arcade: "
+                "Original cabinets, linked exactly as in the arcade: "
                 "side by side on this display, or one cabinet per monitor." +
                     second_monitor_note(),
                 {"Side By Side  |  this display, half each",
@@ -1328,9 +1357,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                      "Two Monitors  |  one cabinet per display")},
                 "Back", 0, second_monitor_blocked());
             if (mode < 0) continue;
-            return {rom_selection_action::selected, choice.path,
-                    cabinet_launch_mode::linked_pair, 0, mode == 1, mode == 0,
-                    true, {}};
+            rom_selection_result linked{rom_selection_action::selected,
+                                        choice.path,
+                                        cabinet_launch_mode::linked_pair, 0,
+                                        mode == 1, mode == 0, true, {}};
+            linked.cabinet_count = cabinet_count;
+            return linked;
         }
 
         // Back from the grid: the system menu. Everything that is not

@@ -1019,7 +1019,7 @@ add_executable(model2_io_test
 target_include_directories(model2_io_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/mb86233)
-target_link_libraries(model2_io_test PRIVATE model1_io mb86233)
+target_link_libraries(model2_io_test PRIVATE model1_io mb86233 ZLIB::ZLIB)
 if(WIN32)
     target_link_libraries(model2_io_test PRIVATE ws2_32)
 endif()

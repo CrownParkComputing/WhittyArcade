@@ -42,7 +42,16 @@ struct rom_selection_result {
     // primary display. Empty unless the wall was chosen; entry 0 is this
     // process's own game.
     std::vector<std::string> wall_games;
+    // Linked cabinets in the ring, chosen at launch. 2 for a classic twin;
+    // games whose link supports more (Daytona's hardware takes up to 8)
+    // offer the larger counts once verified.
+    int cabinet_count{2};
 };
+
+// How many cabinets a game's link supports in this build. The hardware
+// ceilings are higher (Daytona 8, Sega Rally 4); a game is raised here only
+// once its ring actually races at that size.
+int linked_cabinet_maximum(const std::string& short_name);
 
 // The library browser as a modal over a paused, running cabinet: same grid,
 // views and covers as the launcher. Returns the chosen ROM path, or empty

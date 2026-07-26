@@ -76,6 +76,7 @@ int max_wall_columns() {
 
 struct runtime_options {
     int cabinet_node{};
+    int cabinet_count{2};
     int wall_slot{};
     int wall_count{};
     uint16_t pair_port_base{35112};
@@ -128,6 +129,8 @@ runtime_options parse_runtime_options(int argc, char* argv[]) {
         const std::string_view argument(argv[index]);
         if (argument == "--cabinet-node" && index + 1 < argc) {
             options.cabinet_node = std::atoi(argv[++index]);
+        } else if (argument == "--cabinet-count" && index + 1 < argc) {
+            options.cabinet_count = std::atoi(argv[++index]);
         } else if (argument == "--pair-port-base" && index + 1 < argc) {
             const int value = std::atoi(argv[++index]);
             if (value > 1024 && value < 65535)
@@ -150,7 +153,8 @@ runtime_options parse_runtime_options(int argc, char* argv[]) {
             options.positional.emplace_back(argument);
         }
     }
-    if (options.cabinet_node != 1 && options.cabinet_node != 2)
+    options.cabinet_count = std::clamp(options.cabinet_count, 2, 8);
+    if (options.cabinet_node < 1 || options.cabinet_node > options.cabinet_count)
         options.cabinet_node = 0;
     // Anything outside a real wall means no wall. A column process trusts the
     // count its parent chose - the parent measured the machine, and a child
@@ -301,14 +305,16 @@ private:
     int m_workspace{0};
 };
 
-void configure_cabinet_environment(int node, uint16_t port_base,
+void configure_cabinet_environment(int node, int count, uint16_t port_base,
                                    bool linked_model2,
                                    bool linked_system22 = false,
                                    bool network_link = false,
                                    bool generic_input_link = false) {
-    if (node != 1 && node != 2) {
+    count = std::clamp(count, 2, 8);
+    if (node < 1 || node > count) {
         unset_environment("WHITTY_CABINET_NODE");
         unset_environment("MODEL2_COMM_NODE");
+        unset_environment("MODEL2_COMM_COUNT");
         unset_environment("MODEL2_COMM_LOCAL_PORT");
         unset_environment("MODEL2_COMM_PEER_PORT");
         unset_environment("MODEL2_COMM_NETWORK");
@@ -330,15 +336,22 @@ void configure_cabinet_environment(int node, uint16_t port_base,
         static_cast<uint16_t>(port_base + (node == 1 ? 1 : 0));
     set_environment("WHITTY_CABINET_NODE", std::to_string(node));
     if (linked_model2) {
+        // The comm board is a ring of up to 8 cabinets: node N listens on
+        // base+N-1 and transmits to its successor, wrapping back to the
+        // master. For two cabinets this reduces to the classic pair.
         set_environment("MODEL2_COMM_NODE", std::to_string(node));
-        set_environment("MODEL2_COMM_LOCAL_PORT", std::to_string(local_port));
-        set_environment("MODEL2_COMM_PEER_PORT", std::to_string(peer_port));
+        set_environment("MODEL2_COMM_COUNT", std::to_string(count));
+        set_environment("MODEL2_COMM_LOCAL_PORT",
+                        std::to_string(port_base + node - 1));
+        set_environment("MODEL2_COMM_PEER_PORT",
+                        std::to_string(port_base + node % count));
         if (network_link)
             set_environment("MODEL2_COMM_NETWORK", "1");
         else
             unset_environment("MODEL2_COMM_NETWORK");
     } else {
         unset_environment("MODEL2_COMM_NODE");
+        unset_environment("MODEL2_COMM_COUNT");
         unset_environment("MODEL2_COMM_LOCAL_PORT");
         unset_environment("MODEL2_COMM_PEER_PORT");
         unset_environment("MODEL2_COMM_NETWORK");
@@ -388,44 +401,57 @@ uint16_t choose_pair_port_base() {
 #else
     const unsigned process_id = static_cast<unsigned>(getpid());
 #endif
-    return static_cast<uint16_t>(36000 + (process_id % 12000) * 2 % 24000);
+    // Eight consecutive ports per launch - one per possible ring cabinet -
+    // with bases spaced so two concurrent launches can never overlap.
+    return static_cast<uint16_t>(36000 + (process_id % 3000) * 8);
 }
 
 class cabinet_companion {
 public:
     ~cabinet_companion() { stop(); }
 
+    // Spawns cabinets 2..count; each is a full machine of its own on the
+    // comm ring. A classic twin is count == 2.
     bool start(const std::string& executable, const std::string& rom_path,
                const std::string& bios_path, bool explicit_bios_path,
                uint16_t port_base, bool independent_pair,
-               bool one_screen = false, bool two_player = false) {
+               bool one_screen = false, bool two_player = false,
+               int count = 2) {
         stop();
-        std::vector<std::string> arguments{
-            executable,
-            "--cabinet-node", "2",
-            "--pair-port-base", std::to_string(port_base),
-        };
-        if (independent_pair)
-            arguments.emplace_back("--independent-cabinet");
-        // The second cabinet loads settings.ini for itself, so the shared-
-        // display choice has to travel on the command line.
-        if (one_screen) arguments.emplace_back("--twin-one-screen");
-        if (two_player) arguments.emplace_back("--two-player");
-        arguments.push_back(rom_path);
-        if (explicit_bios_path) arguments.push_back(bios_path);
-        m_process = spawn_child(executable, arguments);
-        return m_process != no_child && m_process >= 0;
+        bool all_started = true;
+        for (int node = 2; node <= std::clamp(count, 2, 8); ++node) {
+            std::vector<std::string> arguments{
+                executable,
+                "--cabinet-node", std::to_string(node),
+                "--cabinet-count", std::to_string(std::clamp(count, 2, 8)),
+                "--pair-port-base", std::to_string(port_base),
+            };
+            if (independent_pair)
+                arguments.emplace_back("--independent-cabinet");
+            // The other cabinets load settings.ini for themselves, so the
+            // shared-display choice has to travel on the command line.
+            if (one_screen) arguments.emplace_back("--twin-one-screen");
+            if (two_player) arguments.emplace_back("--two-player");
+            arguments.push_back(rom_path);
+            if (explicit_bios_path) arguments.push_back(bios_path);
+            const child_handle process = spawn_child(executable, arguments);
+            if (process != no_child && process >= 0)
+                m_processes.push_back(process);
+            else
+                all_started = false;
+        }
+        return all_started && !m_processes.empty();
     }
 
     void stop() {
-        terminate_child(m_process);
-        m_process = no_child;
+        for (child_handle& process : m_processes) terminate_child(process);
+        m_processes.clear();
     }
 
-    bool running() const { return m_process != no_child; }
+    bool running() const { return !m_processes.empty(); }
 
 private:
-    child_handle m_process{no_child};
+    std::vector<child_handle> m_processes;
 };
 
 int run_video_lifecycle_test() {
@@ -669,6 +695,7 @@ int main(int argc, char* argv[]) {
                     cabinet_launch_mode::linked_pair)) :
             cabinet_launch_mode::single);
     int cabinet_node = runtime.cabinet_node;
+    int cabinet_count = runtime.cabinet_count;
     bool one_screen_pair = runtime.twin_one_screen;
     // Set by the launch, not by the board: a session begun as two-player
     // must begin a two-player game. The second cabinet process is told on
@@ -733,6 +760,7 @@ int main(int argc, char* argv[]) {
                 rom_path = std::move(selection.path);
                 launch_mode = selection.launch_mode;
                 cabinet_node = selection.cabinet_node;
+                cabinet_count = std::clamp(selection.cabinet_count, 2, 8);
                 settings.twin_separate_monitors =
                     selection.twin_separate_monitors;
                 one_screen_pair = selection.twin_one_screen;
@@ -823,12 +851,14 @@ int main(int argc, char* argv[]) {
             // file is missing afterwards then this process never took the
             // linked-pair path at all - which is an answer in itself.
             whitty_wall_log::begin_cabinet(1);
-            whitty_wall_log::note("linked pair: spawning cabinet 2, "
+            whitty_wall_log::note("linked launch: spawning cabinets 2-%d, "
                                   "port base %u, one screen %d",
-                                  pair_port_base, one_screen_pair ? 1 : 0);
+                                  cabinet_count, pair_port_base,
+                                  one_screen_pair ? 1 : 0);
             if (!companion.start(argv[0], rom_path, bios_path,
                                  explicit_bios_path, pair_port_base,
-                                 false, one_screen_pair, true)) {
+                                 false, one_screen_pair, true,
+                                 cabinet_count)) {
                 std::fprintf(stderr,
                              "Could not start the second cabinet process (execv"
                              "p failed). WhittyArcade was launched as \"%s\". "
@@ -853,7 +883,7 @@ int main(int argc, char* argv[]) {
         else
             unset_environment("WHITTY_TWO_PLAYER");
         configure_cabinet_environment(
-            cabinet_node, pair_port_base,
+            cabinet_node, cabinet_count, pair_port_base,
             native_model2_link &&
                 (launch_mode == cabinet_launch_mode::linked_pair ||
                  launch_mode == cabinet_launch_mode::linked_network),
@@ -892,7 +922,10 @@ int main(int argc, char* argv[]) {
             if (*force == '1' && settings.wall_count <= 1)
                 settings.fullscreen = true;
         // Two linked cabinets sharing one display, half the desktop each.
-        settings.twin_one_screen = one_screen_pair &&
+        // The half-desktop split only makes sense for a pair; a bigger ring
+        // runs every cabinet as an ordinary window on the main display and
+        // the compositor tiles them.
+        settings.twin_one_screen = one_screen_pair && cabinet_count <= 2 &&
             (launch_mode == cabinet_launch_mode::linked_pair ||
              launch_mode == cabinet_launch_mode::linked_network);
         if (cabinet_node) {
@@ -906,8 +939,15 @@ int main(int argc, char* argv[]) {
             // setup.
             // One Screen instead keeps both cabinets on display 0 and lets
             // the half-desktop placement separate them.
+            //
+            // A ring bigger than a pair must NOT follow the one-display-per-
+            // cabinet rule: cabinet N would target display N-1, and a window
+            // sent to a display that does not exist stalls that cabinet -
+            // which cuts the comm ring, leaving only the adjacent survivors
+            // linked to each other.
             settings.display_index =
-                settings.twin_one_screen ? 0 : cabinet_node - 1;
+                (settings.twin_one_screen || cabinet_count > 2) ?
+                    0 : cabinet_node - 1;
             if (settings.twin_one_screen) {
                 std::printf("Starting cabinet %d on the %s half of display 1\n",
                             cabinet_node,
@@ -1297,7 +1337,7 @@ int main(int argc, char* argv[]) {
             settings.wall_slot = 0;
             cabinet_node = 0;
             launch_mode = cabinet_launch_mode::single;
-            configure_cabinet_environment(0, pair_port_base, false);
+            configure_cabinet_environment(0, 2, pair_port_base, false);
             settings = load_settings();
             startup_menu = true;
             restart = true;

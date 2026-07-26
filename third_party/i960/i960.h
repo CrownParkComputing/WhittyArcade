@@ -72,6 +72,7 @@ public:
     using write_callback = address_space::write_callback;
     using read32_callback = address_space::read32_callback;
     using write32_callback = address_space::write32_callback;
+    using write16_callback = address_space::write16_callback;
     using flags_callback = address_space::flags_callback;
 
 	static constexpr uint16_t BURST = 0x0001;
@@ -82,7 +83,8 @@ public:
     void set_program_callbacks(read_callback read, write_callback write,
                                flags_callback flags = {},
                                read32_callback read32 = {},
-                               write32_callback write32 = {});
+                               write32_callback write32 = {},
+                               write16_callback write16 = {});
     void set_input_line(int line, int state) { execute_set_input(line, state); }
     uint32_t program_counter() const { return m_IP; }
     uint32_t previous_program_counter() const { return m_PIP; }

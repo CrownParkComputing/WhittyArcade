@@ -4,6 +4,8 @@
 #include "platform_paths.h"
 #include "wall_log.h"
 
+#include <zlib.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -42,7 +44,15 @@ uint16_t environment_port(const char* name, uint16_t fallback) {
 int environment_comm_node() {
     const char* node = std::getenv("MODEL2_COMM_NODE");
     const int node_id = node ? std::atoi(node) : 0;
-    return node_id == 1 || node_id == 2 ? node_id : 0;
+    // Ring position 1..8 - Daytona's hardware maximum. Node 1 is the
+    // ring master; anything else runs as a slave car.
+    return node_id >= 1 && node_id <= 8 ? node_id : 0;
+}
+
+int environment_comm_count() {
+    const char* count = std::getenv("MODEL2_COMM_COUNT");
+    const int cabinets = count ? std::atoi(count) : 2;
+    return std::clamp(cabinets, 2, 8);
 }
 
 void write_packet_u32(uint8_t* destination, uint32_t value) {
@@ -173,6 +183,134 @@ constexpr std::array<uint16_t, 64> srally_factory_eeprom{{
     0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
     0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
     0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+}};
+
+// Daytona's operator settings live in a 128-byte "SEGA" record the game
+// keeps in the model1io board's EEPROM and twice at the start of backup RAM.
+// Byte 0x0b is CAR NUMBER, 0x0c LINK ID (0 master, 1 slave), 0x1b and 0x7c
+// COUNTRY (2 = EXPORT, the English program). The two checksum bytes at
+// 0x08-0x09 are not the CRC-16/CCITT other Sega records use, so these
+// records were written by the game itself through its GAME SYSTEM menu and
+// are applied whole rather than field by field.
+constexpr std::array<uint8_t, 0x80> daytona_operator_master{{
+    0x53, 0x45, 0x47, 0x41, 0x40, 0x82, 0x02, 0x00,
+    0xc7, 0x17, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x01, 0x01, 0x00, 0x01, 0x01, 0x00,
+    0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x02, 0x02, 0x14, 0x1c, 0x00, 0x01, 0x00, 0x01,
+    0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+}};
+// Slave records for cars 3-8 differ from the car-2 record only in the
+// checksum, the car index at 0x0c and the group byte at 0x7c; each set of
+// values below was likewise saved by the game itself.
+struct daytona_slave_patch {
+    uint8_t sum_high, sum_low, car_index, group;
+};
+constexpr std::array<daytona_slave_patch, 7> daytona_slave_patches{{
+    {0xe6, 0x70, 0x01, 0x02}, // CAR 2
+    {0x99, 0x67, 0x02, 0x03}, // CAR 3
+    {0x3f, 0xb7, 0x03, 0x03}, // CAR 4
+    {0x0f, 0xa4, 0x04, 0x03}, // CAR 5
+    {0xa9, 0x74, 0x05, 0x03}, // CAR 6
+    {0x62, 0x15, 0x06, 0x03}, // CAR 7
+    {0xc4, 0xc5, 0x07, 0x03}, // CAR 8
+}};
+
+constexpr std::array<uint8_t, 0x80> daytona_operator_slave{{
+    0x53, 0x45, 0x47, 0x41, 0x40, 0x82, 0x02, 0x00,
+    0xe6, 0x70, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x01, 0x01, 0x00, 0x01, 0x01, 0x00,
+    0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x02, 0x02, 0x14, 0x1c, 0x00, 0x01, 0x00, 0x01,
+    0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+}};
+
+// Virtua Fighter 2 keeps its GAME ASSIGNMENT record at 0x3300 in backup RAM
+// (magic eb0a, checksum, "VIRTUA FIGHTER 2", settings; COUNTRY at +0x50,
+// 2 = EXPORT - the English program). Saved by the game itself through its
+// test menu and applied whole, like Daytona's operator records.
+constexpr std::size_t vf2_operator_offset = 0x3300;
+constexpr std::array<uint8_t, 0x60> vf2_operator_export{{
+    0xeb, 0x0a, 0xd4, 0x19, 0x00, 0x00, 0x18, 0x00,
+    0x56, 0x49, 0x52, 0x54, 0x55, 0x41, 0x20, 0x46,
+    0x49, 0x47, 0x48, 0x54, 0x45, 0x52, 0x20, 0x32,
+    0x9e, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0x02, 0x02, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x0f,
+    0x02, 0x08, 0xa0, 0x00, 0xc8, 0x00, 0x40, 0x40,
+    0x40, 0x25, 0x25, 0x25, 0x1f, 0xff, 0xff, 0xff,
+}};
+
+// A fresh Virtua Fighter 2 board seeded with only the assignment record
+// boots with uninitialised bookkeeping (a garbage credit counter), because
+// a valid record makes the game skip its own factory pass. So a fresh
+// board gets the complete backup image the game itself wrote on first
+// power-up with COUNTRY already set to EXPORT - deflated, since it is
+// 16 KiB of mostly repeating filler.
+constexpr std::size_t vf2_factory_backup_size = 0x4000;
+constexpr std::array<uint8_t, 322> vf2_factory_backup_deflate{{
+    0x78, 0xda, 0xed, 0xd4, 0xad, 0x4e, 0xc3, 0x50, 0x18, 0xc6, 0xf1, 0x77,
+    0xe5, 0x1c, 0x18, 0x33, 0x20, 0x10, 0xa0, 0x98, 0x99, 0x23, 0x84, 0x80,
+    0x00, 0xd9, 0x06, 0xf6, 0x71, 0x68, 0xb6, 0x92, 0x75, 0x25, 0x0c, 0x0c,
+    0x97, 0x81, 0x83, 0x7b, 0xc0, 0xa0, 0x60, 0x92, 0x84, 0x0b, 0xc0, 0x92,
+    0xa9, 0x29, 0x14, 0x0a, 0x85, 0x21, 0x21, 0xc1, 0xc0, 0x05, 0x90, 0x71,
+    0x7a, 0x08, 0x27, 0x04, 0x0c, 0x82, 0x4c, 0xb0, 0xff, 0x4f, 0xbd, 0x4f,
+    0x7a, 0xd2, 0xbc, 0x6d, 0xda, 0x47, 0x8e, 0x01, 0xe0, 0xef, 0x08, 0xaf,
+    0x00, 0x00, 0x9d, 0x02, 0x80, 0x4e, 0x01, 0x40, 0xa7, 0x00, 0x00, 0x9d,
+    0x02, 0x80, 0x4e, 0x01, 0x40, 0xa7, 0x00, 0x00, 0x9d, 0x02, 0x80, 0x4e,
+    0x01, 0x40, 0xa7, 0x00, 0x18, 0x43, 0xc3, 0x11, 0x90, 0xb5, 0xe1, 0x58,
+    0x7b, 0x38, 0x55, 0xd2, 0xcd, 0x96, 0x45, 0x44, 0x4b, 0xee, 0xec, 0x42,
+    0x89, 0x89, 0xab, 0x76, 0x9a, 0x74, 0x79, 0xe7, 0xca, 0xe6, 0xfd, 0xc8,
+    0x4e, 0x53, 0x2e, 0x17, 0xaf, 0x95, 0x74, 0xa2, 0x38, 0x9f, 0x5c, 0xbe,
+    0xe9, 0x2b, 0x49, 0x4d, 0xcb, 0x4e, 0x25, 0x97, 0x8f, 0x6e, 0xed, 0xf9,
+    0x56, 0x22, 0x9f, 0x56, 0xee, 0xed, 0xf9, 0xa4, 0x69, 0xa7, 0x82, 0xcb,
+    0x4f, 0x8f, 0x4a, 0x92, 0x7a, 0x66, 0xa7, 0xc0, 0xe5, 0xde, 0xab, 0x92,
+    0x86, 0xd9, 0xb2, 0xd3, 0x84, 0xcb, 0x7b, 0x6f, 0xf6, 0x7a, 0x6a, 0xec,
+    0xa4, 0x5c, 0x9e, 0x9d, 0xd6, 0xb2, 0x5d, 0xad, 0xf9, 0xfd, 0x06, 0x73,
+    0x5a, 0x9a, 0x26, 0xf3, 0xfb, 0x9d, 0x94, 0xb5, 0x98, 0x34, 0xf1, 0xfb,
+    0x6d, 0x2c, 0x69, 0xe9, 0x46, 0x4d, 0xbf, 0xdf, 0xcb, 0xba, 0xb6, 0xf7,
+    0x8b, 0xfc, 0x7e, 0x97, 0x9b, 0x5a, 0x62, 0xb7, 0xff, 0x87, 0xc3, 0x24,
+    0x3f, 0x1f, 0xfb, 0xfd, 0xe6, 0x0f, 0xf2, 0xeb, 0x89, 0xdf, 0xef, 0xbf,
+    0x7b, 0x2e, 0xdd, 0x2d, 0xd8, 0xa7, 0x96, 0x5d, 0xd3, 0xee, 0x64, 0x51,
+    0xb9, 0x66, 0xea, 0x8d, 0x4e, 0xb5, 0x5d, 0x5e, 0x3d, 0x2f, 0x7c, 0x3b,
+    0x18, 0x38, 0x3f, 0xbe, 0x9f, 0x20, 0x28, 0x7c, 0x35, 0x13, 0x14, 0x7b,
+    0x32, 0x90, 0x30, 0x0c, 0x2b, 0x95, 0xca, 0xe2, 0x6f, 0xfe, 0x3f, 0x00,
+    0x00, 0x00, 0x00, 0x18, 0x91, 0x77, 0x78, 0x85, 0x5b, 0x8a,
+}};
+
+// The matching 93C46 image (serialised as 64 little-endian words), also
+// written by the game itself on the same first power-up.
+constexpr std::array<uint8_t, 0x30> vf2_factory_eeprom{{
+    0xda, 0xea, 0x24, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04,
+    0x00, 0x00, 0x80, 0x3f, 0xf2, 0xff, 0xff, 0xff,
+    0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 }};
 
 void initialize_srally_backup(std::vector<uint8_t>& ram) {
@@ -310,8 +448,15 @@ void model2_bus::initialize_comm_board() {
         m_comm_peer_mode && std::getenv("MODEL2_COMM_NETWORK") != nullptr;
     m_comm_node_id =
         m_comm_peer_mode ? static_cast<uint8_t>(node_id) : 0;
-    const uint16_t default_local = node_id == 2 ? 15113 : 15112;
-    const uint16_t default_peer = node_id == 2 ? 15112 : 15113;
+    // Ring of up to 8 cabinets: node N listens on base+N-1 and transmits to
+    // its successor (wrapping to the master). The launcher sets the ports
+    // explicitly; the defaults serve hand-started test runs.
+    m_comm_link_count = static_cast<uint8_t>(
+        m_comm_peer_mode ? std::max(environment_comm_count(), node_id) : 0);
+    const uint16_t default_local = static_cast<uint16_t>(
+        15112 + (node_id > 0 ? node_id - 1 : 0));
+    const uint16_t default_peer = static_cast<uint16_t>(
+        15112 + (m_comm_peer_mode ? node_id % m_comm_link_count : 1));
     m_comm_local_port =
         environment_port("MODEL2_COMM_LOCAL_PORT", default_local);
     m_comm_peer_port =
@@ -346,6 +491,22 @@ void model2_bus::tick_comm_peer() {
     if (m_comm_socket == -1 || m_communication_ram.size() <
             comm_frame_receive + comm_frame_size)
         return;
+    // The master paces the ring: it transmits once per vblank and the
+    // slave answers each received frame from comm_peer_receive() - the
+    // request/response shape MAME's m2comm implements, where the reply
+    // happens while the game polls FG inside the same video frame. Both
+    // roles transmitting blindly per vblank starves Daytona's versus
+    // handshake, which retries a step every frame until the answer
+    // arrives within it.
+    if (m_comm_link_timer > 0) --m_comm_link_timer;
+    if (m_comm_node_id == 1 || !m_comm_link_alive) comm_peer_send();
+    comm_peer_receive();
+}
+
+void model2_bus::comm_peer_send() {
+    if (m_comm_socket == -1 || m_communication_ram.size() <
+            comm_frame_receive + comm_frame_size)
+        return;
 
     std::array<uint8_t, comm_packet_header + comm_frame_size> packet{};
     std::copy(comm_packet_magic.begin(), comm_packet_magic.end(),
@@ -377,6 +538,13 @@ void model2_bus::tick_comm_peer() {
                static_cast<int>(packet.size()), 0,
                reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
     }
+}
+
+bool model2_bus::comm_peer_receive() {
+    if (m_comm_socket == -1 || m_communication_ram.size() <
+            comm_frame_receive + comm_frame_size)
+        return false;
+    const native_socket socket_handle = to_native_socket(m_comm_socket);
 
     bool received_payload = false;
     for (;;) {
@@ -405,24 +573,47 @@ void model2_bus::tick_comm_peer() {
                         comm_frame_size,
                         m_communication_ram.begin() + comm_frame_receive);
             received_payload = true;
+            // Each delivered frame is one ring hop: the receive buffer
+            // overlaps the transmit buffer 0x1c0 in, so answering NOW
+            // forwards the whole shifted ring - a node's own slot followed
+            // by everything upstream. Answering once after draining the
+            // socket collapsed queued hops into one and the ring's shift
+            // register lost slots, which Daytona's network check measures.
+            m_comm_zfg ^= 1;
+            if (m_comm_node_id >= 2 && m_comm_link_alive) comm_peer_send();
         }
     }
 
-    if (m_comm_peer_seen && !m_comm_link_alive) {
+    // The board spends its discovery period pending (status 0, id and
+    // count 0xff) before the ring goes alive - the EPR-16726 sequence the
+    // games watch. Going alive on the first packet raced the other
+    // cabinets' power-on: with three or more boards the network check
+    // started counting a half-formed ring and never finished. The timer
+    // runs from tick_comm_peer; here the link only completes once the
+    // period has elapsed and a predecessor has actually been heard.
+    if (m_comm_peer_seen && !m_comm_link_alive && m_comm_link_timer == 0) {
         m_comm_link_alive = true;
         m_communication_ram[0x00] = 0x01;
-        m_communication_ram[0x02] = m_comm_node_id;
-        m_communication_ram[0x03] = 0x02;
+        // EPR-16726's ID exchange numbers the ring DOWNWARDS from the
+        // master: the node the master transmits to takes the highest id
+        // and the node transmitting into the master takes 2 (observed on
+        // MAME's m2comm with three cabinets: 1, 3, 2 in launch order).
+        // For a twin both orders coincide; with more cabinets each game
+        // derives its data slot from this id, and numbering upwards left
+        // every ring bigger than two stuck after its network check.
+        m_communication_ram[0x02] = m_comm_node_id <= 1 ? 1 :
+            static_cast<uint8_t>(m_comm_link_count - m_comm_node_id + 2);
+        m_communication_ram[0x03] = m_comm_link_count;
         whitty_wall_log::note("comm: linked, local port %u peer port %u",
                               m_comm_local_port, m_comm_peer_port);
-        std::printf("Model 2 cabinet %u: linked as node %u of 2\n",
-                    m_comm_node_id, m_comm_node_id);
+        std::printf("Model 2 cabinet %u: linked as node %u of %u\n",
+                    m_comm_node_id, m_comm_node_id, m_comm_link_count);
     } else if (!m_comm_link_alive) {
         m_communication_ram[0x00] = 0x00;
         m_communication_ram[0x02] = 0xff;
         m_communication_ram[0x03] = 0xff;
     }
-    if (received_payload) m_comm_zfg ^= 1;
+    return received_payload;
 }
 
 uint32_t model2_bus::video_control() const {
@@ -442,52 +633,161 @@ uint32_t model2_bus::master_z_clip() const {
     return read_dword(m_z_clip, 0);
 }
 
-void model2_bus::load_nvram() {
-    const fs::path directory = model2_nvram_directory(m_profile.nvram_leaf);
+namespace {
+// Every linked cabinet is its own machine with its own operator settings
+// and bookkeeping; sharing one NVRAM directory would let the cabinets
+// overwrite each other's records mid-run (last writer wins). Cabinet 1 and
+// single launches keep the plain per-game directory.
+fs::path cabinet_nvram_directory(const char* leaf) {
+    const int node = environment_comm_node();
+    if (node >= 2) {
+        const std::string cabinet_leaf =
+            std::string(leaf) + "-cab" + std::to_string(node);
+        return model2_nvram_directory(cabinet_leaf.c_str());
+    }
+    return model2_nvram_directory(leaf);
+}
+} // namespace
 
-    if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram) {
-        // model1io2 cabinets (Virtua Cop) keep bookkeeping and service settings
-        // in the board 93C46 rather than the CPU-board EEPROM. Start it blank
-        // (the firmware writes factory defaults) and restore any saved image so
-        // it survives a restart.
+void model2_bus::load_nvram() {
+    const fs::path directory = cabinet_nvram_directory(m_profile.nvram_leaf);
+
+    if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram ||
+        m_profile.io == model2_game_profile::io_kind::model1io_dpram) {
+        // I/O-board cabinets keep bookkeeping and service settings in the
+        // board's serial EEPROM. Start it blank (the firmware writes factory
+        // defaults) and restore any saved image so it survives a restart.
         m_iob_eeprom.fill(0xff);
         read_exact(directory / "ioboard_eeprom", m_iob_eeprom.data(),
                    m_iob_eeprom.size());
         m_iob_eeprom_saved = m_iob_eeprom;
-        return;
+        // model1io2 (Virtua Cop) uses nothing on the CPU board; the Daytona
+        // cabinet also persists the CPU-board backup RAM and 93C46 below.
+        if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram)
+            return;
     }
 
-    initialize_srally_backup(m_backup_ram);
-    m_eeprom_words = srally_factory_eeprom;
+    if (m_profile.io == model2_game_profile::io_kind::model1io_dpram) {
+        // Daytona initialises its own records on a blank board; the Sega
+        // Rally factory image would only trip its checksum check.
+        std::fill(m_backup_ram.begin(), m_backup_ram.end(), 0);
+        m_eeprom_words.fill(0);
+    } else {
+        initialize_srally_backup(m_backup_ram);
+        m_eeprom_words = srally_factory_eeprom;
+    }
 
     std::vector<uint8_t> backup(m_backup_ram.size());
-    if (read_exact(directory / "backup1", backup.data(), backup.size()))
-        m_backup_ram = std::move(backup);
+    const bool backup_loaded =
+        read_exact(directory / "backup1", backup.data(), backup.size());
+    if (backup_loaded) m_backup_ram = std::move(backup);
     std::array<uint8_t, 128> eeprom{};
     if (read_exact(directory / "eeprom", eeprom.data(), eeprom.size())) {
         // MAME serializes the 93C46 as 64 little-endian 16-bit words.
         for (unsigned word = 0; word < m_eeprom_words.size(); ++word)
             m_eeprom_words[word] = static_cast<uint16_t>(
                 eeprom[word * 2] | (eeprom[word * 2 + 1] << 8));
+    } else if (m_roms && m_roms->default_eeprom.size() == 0x80) {
+        // The set ships a factory 93C46 image (Manx TT's Twin-mode
+        // configuration); a fresh board starts from it.
+        for (unsigned word = 0; word < m_eeprom_words.size(); ++word)
+            m_eeprom_words[word] = static_cast<uint16_t>(
+                m_roms->default_eeprom[word * 2] |
+                (m_roms->default_eeprom[word * 2 + 1] << 8));
+    }
+
+    if (m_profile.io == model2_game_profile::io_kind::crx_fighter &&
+        std::strcmp(m_profile.nvram_leaf, "vf2") == 0 && !backup_loaded &&
+        m_backup_ram.size() >= vf2_factory_backup_size) {
+        // First power-up: the complete image the game itself wrote,
+        // COUNTRY already EXPORT and bookkeeping properly zeroed. Seeding
+        // only the assignment record made the game skip its factory pass
+        // and boot with a garbage credit counter.
+        uLongf inflated = vf2_factory_backup_size;
+        if (uncompress(m_backup_ram.data(), &inflated,
+                       vf2_factory_backup_deflate.data(),
+                       vf2_factory_backup_deflate.size()) == Z_OK &&
+            inflated == vf2_factory_backup_size) {
+            for (unsigned word = 0; word < m_eeprom_words.size(); ++word) {
+                const std::size_t offset = word * 2;
+                m_eeprom_words[word] = offset + 1 <
+                        vf2_factory_eeprom.size() ?
+                    static_cast<uint16_t>(
+                        vf2_factory_eeprom[offset] |
+                        (vf2_factory_eeprom[offset + 1] << 8)) :
+                    0xffff;
+            }
+            m_nvram_dirty = true;
+        }
+    }
+
+    if (m_profile.io == model2_game_profile::io_kind::crx_fighter &&
+        std::strcmp(m_profile.nvram_leaf, "vf2") == 0 &&
+        m_backup_ram.size() >= vf2_operator_offset +
+                                  vf2_operator_export.size() &&
+        m_backup_ram[vf2_operator_offset + 0x50] !=
+            vf2_operator_export[0x50]) {
+        // COUNTRY must stay EXPORT for the English program; the record is
+        // replaced only when that field disagrees, so other assignment
+        // changes survive ordinary launches.
+        std::copy(vf2_operator_export.begin(), vf2_operator_export.end(),
+                  m_backup_ram.begin() + vf2_operator_offset);
+        m_nvram_dirty = true;
+    }
+
+    if (m_profile.io == model2_game_profile::io_kind::model1io_dpram) {
+        // Enforce Daytona's operator record for this launch: every linked
+        // cabinet after the first must run SLAVE with its own car number
+        // or several boards claim the ring's master role and the versus
+        // handshake deadlocks, and COUNTRY must stay EXPORT for the
+        // English program. The whole record is replaced only when one of
+        // those fields disagrees, so other operator settings survive
+        // ordinary launches.
+        const int node = environment_comm_node();
+        std::array<uint8_t, 0x80> record = daytona_operator_master;
+        if (node >= 2) {
+            record = daytona_operator_slave;
+            const daytona_slave_patch& patch =
+                daytona_slave_patches[static_cast<std::size_t>(node - 2)];
+            record[0x08] = patch.sum_high;
+            record[0x09] = patch.sum_low;
+            record[0x0c] = patch.car_index;
+            record[0x7c] = patch.group;
+        }
+        const bool matches =
+            m_iob_eeprom[0x0b] == record[0x0b] &&
+            m_iob_eeprom[0x0c] == record[0x0c] &&
+            m_iob_eeprom[0x1b] == record[0x1b] &&
+            m_iob_eeprom[0x7c] == record[0x7c];
+        if (!matches && m_backup_ram.size() >= 0x100) {
+            std::copy(record.begin(), record.end(), m_iob_eeprom.begin());
+            std::copy(record.begin(), record.end(), m_backup_ram.begin());
+            std::copy(record.begin(), record.end(),
+                      m_backup_ram.begin() + 0x80);
+            m_nvram_dirty = true;
+        }
     }
 }
 
 bool model2_bus::save_nvram() {
-    const fs::path directory = model2_nvram_directory(m_profile.nvram_leaf);
+    const fs::path directory = cabinet_nvram_directory(m_profile.nvram_leaf);
     std::error_code error;
     fs::create_directories(directory, error);
     if (error) return false;
 
-    if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram) {
-        const bool saved = write_exact(directory / "ioboard_eeprom",
-                                       m_iob_eeprom.data(),
-                                       m_iob_eeprom.size());
-        if (saved) {
-            m_iob_eeprom_saved = m_iob_eeprom;
-            m_nvram_dirty = false;
-            m_last_nvram_save_frame = m_frame_number;
+    if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram ||
+        m_profile.io == model2_game_profile::io_kind::model1io_dpram) {
+        const bool io_saved = write_exact(directory / "ioboard_eeprom",
+                                          m_iob_eeprom.data(),
+                                          m_iob_eeprom.size());
+        if (io_saved) m_iob_eeprom_saved = m_iob_eeprom;
+        if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram) {
+            if (io_saved) {
+                m_nvram_dirty = false;
+                m_last_nvram_save_frame = m_frame_number;
+            }
+            return io_saved;
         }
-        return saved;
     }
 
     bool saved = write_exact(directory / "backup1", m_backup_ram.data(),
@@ -630,15 +930,20 @@ void model2_bus::attach(const model2_roms& roms,
     m_framebuffer_b.resize(0x80000);
     m_tgp_data_ram.resize(0x400);
 
-    // A model1io2 cabinet shares dual-port RAM with the i960 at 0x01c00000.
-    // Build the board (running the real epr-17181 firmware) when the profile
-    // selects that I/O kind; other cabinets read the 315-5296 chip there.
-    if (m_profile.io == model2_game_profile::io_kind::model1io2_dpram &&
+    // Original Model 2 cabinets share dual-port RAM with an I/O board at
+    // 0x01c00000: Virtua Cop the model1io2 (TMPZ84C015, epr-17181), Daytona
+    // the earlier model1io driving board (315-5338A, epr-14869) the Model 1
+    // racers use. Build whichever the profile selects and run its real
+    // firmware; other cabinets read the 315-5296 chip there instead.
+    if ((m_profile.io == model2_game_profile::io_kind::model1io2_dpram ||
+         m_profile.io == model2_game_profile::io_kind::model1io_dpram) &&
         roms.io_cpu.size() == 0x10000) {
         m_iob_dpram.assign(0x800, 0);
         m_iob = std::make_unique<model1_io_board>(
-            model1_io_board_type::advanced_tmpz84c015, roms.io_cpu,
-            m_iob_dpram, m_iob_eeprom);
+            m_profile.io == model2_game_profile::io_kind::model1io2_dpram ?
+                model1_io_board_type::advanced_tmpz84c015 :
+                model1_io_board_type::standard_315_5338a,
+            roms.io_cpu, m_iob_dpram, m_iob_eeprom);
     }
     reset();
 }
@@ -649,6 +954,17 @@ void model2_bus::reset() {
         std::fill(memory.begin(), memory.end(), value);
     };
     clear(m_local_ram);
+    if (m_profile.original_model2 && m_roms &&
+        m_roms->main_cpu.size() >= 0x40000) {
+        // Original Model 2 maps 0x00220000-0x0023ffff as program ROM
+        // (maincpu offset 0x20000) where Model 2A has RAM. The i960 burst
+        // path reads local RAM through a raw pointer, so the window is
+        // mirrored into it here and the write paths below discard stores
+        // to keep it behaving as ROM.
+        std::copy(m_roms->main_cpu.begin() + 0x20000,
+                  m_roms->main_cpu.begin() + 0x40000,
+                  m_local_ram.begin() + 0x20000);
+    }
     clear(m_work_ram);
     clear(m_geometry_ram);
     clear(m_geometry_program);
@@ -697,6 +1013,8 @@ void model2_bus::reset() {
     m_comm_link_alive = false;
     m_comm_link_timer = 0;
     m_comm_node_id = 0;
+    m_comm_link_count = 0;
+    m_comm_fg_poll_counter = 0;
     m_comm_local_port = 0;
     m_comm_peer_port = 0;
     m_comm_sequence = 0;
@@ -713,6 +1031,9 @@ void model2_bus::reset() {
     if (m_iob) m_iob->reset();
     m_iob_clock_accum = 0;
     m_uart_tx_ready = true;
+    m_uart_expect_mode = true;
+    m_uart_tx_enabled = false;
+    m_uart_rx_enabled = false;
     m_uart_tx_empty_cycles = 0;
     m_uart_tx_empty = true;
     m_uart_tx_shift_active = false;
@@ -842,13 +1163,50 @@ uint8_t model2_bus::read8(uint32_t address) {
     if (in_range(address, 0x0181c000, m_z_clip.size()))
         return read_region(m_z_clip, address, 0x0181c000, 0);
     if (in_range(address, 0x01a00000, m_communication_ram.size()) ||
-        in_range(address, 0x01a10000, m_communication_ram.size()))
-        return m_communication_ram[(address - 0x01a00000) & 0x3fff];
+        in_range(address, 0x01a10000, m_communication_ram.size())) {
+        const uint8_t value =
+            m_communication_ram[(address - 0x01a00000) & 0x3fff];
+        if (std::getenv("MODEL2_COMM_RW_TRACE")) {
+            static unsigned reported = 0;
+            if (reported < 4096) {
+                ++reported;
+                std::fprintf(stderr, "COMMR %08x=%02x pc=%08x f=%u\n",
+                             address, value,
+                             m_program_counter_probe ?
+                                 m_program_counter_probe() : 0,
+                             m_frame_number);
+            }
+        }
+        return value;
+    }
     if (address == 0x01a04000 || address == 0x01a14000)
         return static_cast<uint8_t>(m_comm_cn | 0xfe);
-    if (address == 0x01a04002 || address == 0x01a14002)
-        return static_cast<uint8_t>(m_comm_fg |
-                                    ((~m_comm_zfg & 1) << 7) | 0x7e);
+    if (address == 0x01a04002 || address == 0x01a14002) {
+        // The board processes ring traffic while the game polls this
+        // register (MAME m2comm read_fg does the same): a versus handshake
+        // step sends a frame and spins on FG for the reply within the same
+        // video frame. Polled at most every 8th read so a tight i960 wait
+        // loop does not turn into a syscall storm.
+        if (m_comm_peer_mode && m_comm_cn &&
+            ++m_comm_fg_poll_counter >= 8) {
+            m_comm_fg_poll_counter = 0;
+            comm_peer_receive();
+        }
+        const uint8_t value = static_cast<uint8_t>(
+            m_comm_fg | ((~m_comm_zfg & 1) << 7) | 0x7e);
+        if (std::getenv("MODEL2_COMM_RW_TRACE")) {
+            static unsigned reported = 0;
+            if (reported < 512) {
+                ++reported;
+                std::fprintf(stderr, "COMMFG %08x=%02x pc=%08x f=%u\n",
+                             address, value,
+                             m_program_counter_probe ?
+                                 m_program_counter_probe() : 0,
+                             m_frame_number);
+            }
+        }
+        return value;
+    }
     if (m_iob && in_range(address, 0x01c00000, 0x1000)) {
         // Virtua Cop: the whole 0x01c00000 window is the model1io2 dual-port
         // RAM. Byte-wide on even i960 lanes (umask 0x00ff00ff), same layout as
@@ -1003,6 +1361,8 @@ void model2_bus::write32(uint32_t address, uint32_t value) {
         return;
     }
     if (contained(0x00200000, m_local_ram.size())) {
+        // The upper half is a ROM window on original Model 2 boards.
+        if (m_profile.original_model2 && address >= 0x00220000) return;
         write_dword(m_local_ram, address - 0x00200000, value);
         return;
     }
@@ -1037,6 +1397,39 @@ void model2_bus::write32(uint32_t address, uint32_t value) {
     write8(address + 3, static_cast<uint8_t>(value >> 24));
 }
 
+void model2_bus::write16(uint32_t address, uint16_t value) {
+    // A halfword store is one bus transaction. The TGP command and argument
+    // FIFO consumes one word per transaction, so splitting a 16-bit store
+    // into byte-lane writes - which only push on lane 3 - swallows the word
+    // outright. Daytona's versus handshake pushes a 16-bit argument exactly
+    // this way (stis to 0x00884000) and then deadlocks against the TGP
+    // waiting for results that can never come.
+    if (address >= 0x00880000 && address <= 0x00887fff) {
+        const uint32_t data = value;
+        if (address < 0x00884000) {
+            const uint32_t function =
+                (((address & ~3U) - 0x00880000) >> 4) & 0xff;
+            const uint32_t command =
+                (data & 0x800fffffU) | (function << 23);
+            m_tgp_fifo_in.push_back(command);
+            if (trace_fifo_words(m_frame_number))
+                std::fprintf(stderr, "%u IN %08x (halfword)\n",
+                             m_frame_number, command);
+        } else if (read_dword(m_control_registers, 0) & 0x80000000U) {
+            write_dword(m_geometry_program, m_tgp_program_index * 4, data);
+            ++m_tgp_program_index;
+        } else {
+            m_tgp_fifo_in.push_back(data);
+            if (trace_fifo_words(m_frame_number))
+                std::fprintf(stderr, "%u IN %08x (halfword)\n",
+                             m_frame_number, data);
+        }
+        return;
+    }
+    write8(address, static_cast<uint8_t>(value));
+    write8(address + 1, static_cast<uint8_t>(value >> 8));
+}
+
 void model2_bus::write8(uint32_t address, uint8_t value) {
     if (!m_roms) return;
     if (const uint32_t watch = watched_work_address()) {
@@ -1049,6 +1442,10 @@ void model2_bus::write8(uint32_t address, uint8_t value) {
                             m_program_counter_probe() : 0);
         }
     }
+    // The upper half of local RAM is a ROM window on original Model 2.
+    if (m_profile.original_model2 &&
+        in_range(address, 0x00220000, 0x20000))
+        return;
     if (write_region(m_local_ram, address, 0x00200000, value) ||
         write_region(m_work_ram, address, 0x00500000, value))
         return;
@@ -1168,8 +1565,12 @@ void model2_bus::write8(uint32_t address, uint8_t value) {
     if (in_range(address, 0x00e80004, 4)) {
         const uint32_t before = m_irq_enable;
         set_dword_byte(m_irq_enable, address, value);
-        if (m_uart_tx_ready && (m_irq_enable & (1U << 10)))
-            m_irq_request |= 1U << 10;
+        // No retroactive raise: the request latch registers TXRDY/RXRDY
+        // EDGES that occur while the source is enabled, exactly like
+        // MAME's sound_ready_w. Re-checking levels on an enable write
+        // handed Virtua Fighter 2 an interrupt from a TXRDY that had been
+        // sitting high since UART configuration, and its table still
+        // pointed that vector at the unexpected-interrupt stub.
         if (std::getenv("MODEL2_UART_TRACE") &&
             ((before ^ m_irq_enable) & (1U << 10)))
             std::fprintf(stderr,
@@ -1297,9 +1698,31 @@ void model2_bus::write8(uint32_t address, uint8_t value) {
                 m_uart_tx_holding_full = true;
             }
             m_uart_tx_empty = false;
-        } else if ((address & 3) == 2 &&
-                   std::getenv("MODEL2_UART_TRACE")) {
-            std::fprintf(stderr, "Model 2 UART control %02x\n", value);
+        } else if ((address & 3) == 2) {
+            if (std::getenv("MODEL2_UART_TRACE"))
+                std::fprintf(stderr, "Model 2 UART control %02x\n", value);
+            // 8251 programming sequence: the first control write after a
+            // reset is the mode word, everything after is a command whose
+            // bit 0 enables the transmitter, bit 2 the receiver and bit 6
+            // returns to the mode phase. Until TxEN, TXRDY must not raise
+            // the sound interrupt: Virtua Fighter 2 writes its interrupt
+            // mask before programming the UART, and an immediate vector
+            // from a reset-state "ready" transmitter lands in its
+            // unexpected-interrupt stub, which prints Interrupt Halt over
+            // the whole attract.
+            if (m_uart_expect_mode) {
+                m_uart_expect_mode = false;
+            } else if (value & 0x40) {
+                m_uart_expect_mode = true;
+                m_uart_tx_enabled = false;
+                m_uart_rx_enabled = false;
+            } else {
+                m_uart_tx_enabled = (value & 0x01) != 0;
+                m_uart_rx_enabled = (value & 0x04) != 0;
+                if (m_uart_tx_enabled && m_uart_tx_ready &&
+                    (m_irq_enable & (1U << 10)))
+                    m_irq_request |= 1U << 10;
+            }
         }
         return;
     }
@@ -1331,6 +1754,11 @@ void model2_bus::write8(uint32_t address, uint8_t value) {
         return;
     }
     if (address == 0x01a04002 || address == 0x01a14002) {
+        if (std::getenv("MODEL2_COMM_RW_TRACE"))
+            std::fprintf(stderr, "COMMFGW %02x pc=%08x f=%u\n", value,
+                         m_program_counter_probe ?
+                             m_program_counter_probe() : 0,
+                         m_frame_number);
         m_comm_fg = value & 1;
         return;
     }
@@ -1397,7 +1825,20 @@ void model2_bus::write8(uint32_t address, uint8_t value) {
 
 void model2_bus::set_inputs(const input_state& state) {
     m_inputs = state;
-    if (m_iob) m_iob->set_gun_inputs(state);
+    if (state.shift_down && !m_shift_down_previous && m_gear > 0)
+        --m_gear;
+    if (state.shift_up && !m_shift_up_previous && m_gear < 4)
+        ++m_gear;
+    m_shift_down_previous = state.shift_down;
+    m_shift_up_previous = state.shift_up;
+    if (m_iob) {
+        if (m_profile.io == model2_game_profile::io_kind::model1io_dpram) {
+            static constexpr std::array<uint8_t, 5> gear_code{0, 2, 1, 6, 5};
+            m_iob->set_daytona_inputs(state, gear_code[m_gear]);
+        } else {
+            m_iob->set_gun_inputs(state);
+        }
+    }
     if (std::getenv("MODEL2_INPUT_TRACE") &&
         (state.coin1 || state.start || state.gas || state.brake ||
          state.steering != 0x800))
@@ -1406,12 +1847,6 @@ void model2_bus::set_inputs(const input_state& state) {
                      "gas=%03x brake=%03x\n",
                      m_frame_number, state.coin1, state.start,
                      state.steering, state.gas, state.brake);
-    if (state.shift_down && !m_shift_down_previous && m_gear > 0)
-        --m_gear;
-    if (state.shift_up && !m_shift_up_previous && m_gear < 4)
-        ++m_gear;
-    m_shift_down_previous = state.shift_down;
-    m_shift_up_previous = state.shift_up;
 }
 
 uint8_t model2_bus::io_read(uint8_t offset) {
@@ -1420,6 +1855,24 @@ uint8_t model2_bus::io_read(uint8_t offset) {
     // and the guns arrive through the serial-channel-2 mux at registers
     // 0x0a/0x0c rather than the wheel/pedal ADC.
     const bool gun = m_profile.io == model2_game_profile::io_kind::crx_gun;
+    const bool fighter =
+        m_profile.io == model2_game_profile::io_kind::crx_fighter;
+    const bool bike =
+        m_profile.io == model2_game_profile::io_kind::crx_bike;
+    // Virtua Fighter 2: punch/kick/guard on bits 0-2, the 8-way stick on
+    // bits 4-7 (down/up/right/left), one pad per port, all active low.
+    const auto fighter_pad = [](const uint8_t* buttons, uint8_t x,
+                                uint8_t y) {
+        uint8_t value = 0xff;
+        if (buttons[0]) value &= ~uint8_t{0x01}; // Punch
+        if (buttons[1]) value &= ~uint8_t{0x02}; // Kick
+        if (buttons[2]) value &= ~uint8_t{0x04}; // Guard
+        if (y > 0xaf) value &= ~uint8_t{0x10};   // Down
+        if (y < 0x50) value &= ~uint8_t{0x20};   // Up
+        if (x > 0xaf) value &= ~uint8_t{0x40};   // Right
+        if (x < 0x50) value &= ~uint8_t{0x80};   // Left
+        return value;
+    };
     const auto gun_axis = [this](unsigned port) -> uint16_t {
         // 10-bit ADC ranges from MAME's vcop2 light-gun calibration; port
         // order matches m_lightgun_ports {P1_Y, P1_X, P2_Y, P2_X}.
@@ -1443,14 +1896,15 @@ uint8_t model2_bus::io_read(uint8_t offset) {
             255, (static_cast<uint32_t>(value) * 255 + maximum / 2) /
                      maximum));
     };
-    const auto input_port = [this, gun](unsigned port) {
+    const auto input_port = [this, gun, fighter, bike,
+                             &fighter_pad](unsigned port) {
         if (port == 1) {
             uint8_t value = 0xff;
             if (m_inputs.coin1) value &= ~uint8_t{0x01};
             if (m_inputs.coin2) value &= ~uint8_t{0x02};
             if (m_inputs.test) value &= ~uint8_t{0x04};
             if (m_inputs.service) value &= ~uint8_t{0x08};
-            if (gun) {
+            if (gun || fighter) {
                 if (m_inputs.start) value &= ~uint8_t{0x10};    // START1
                 if (m_inputs.p2_start) value &= ~uint8_t{0x20}; // START2
             } else {
@@ -1473,6 +1927,16 @@ uint8_t model2_bus::io_read(uint8_t offset) {
             return value;
         }
         if (port == 2) {
+            if (bike) {
+                // Manx TT IN1: shift up 0x10, shift down 0x20, active low.
+                uint8_t value = 0xff;
+                if (m_inputs.shift_up) value &= ~uint8_t{0x10};
+                if (m_inputs.shift_down) value &= ~uint8_t{0x20};
+                return value;
+            }
+            if (fighter)
+                return fighter_pad(m_inputs.buttons, m_inputs.left_stick_x,
+                                   m_inputs.left_stick_y);
             if (gun) {
                 // IN1: P1/P2 triggers (active low), rest unused.
                 uint8_t value = 0xff;
@@ -1484,6 +1948,10 @@ uint8_t model2_bus::io_read(uint8_t offset) {
             return static_cast<uint8_t>(0x8f | (gear_code[m_gear] << 4));
         }
         if (port == 3) {
+            if (bike) return uint8_t{0xff}; // IN2 unused
+            if (fighter)
+                return fighter_pad(m_inputs.p2_buttons, m_inputs.p2_stick_x,
+                                   m_inputs.p2_stick_y);
             if (gun) return uint8_t{0xff}; // IN2: DIP bank, all off
             return m_inputs.view4 ? uint8_t{0xff} : uint8_t{0x00};
         }
@@ -1511,7 +1979,31 @@ uint8_t model2_bus::io_read(uint8_t offset) {
     if (offset == 0x0d) return 0x0c;
     if (offset == 0x0f) {
         uint8_t value = 0xff;
-        switch (m_io_analog_channel) {
+        if (fighter) {
+            // No ADC use on the fighter cabinet.
+        } else if (bike) {
+            // Manx TT: channel 0 throttle, 1 brake, 2 bank (the handlebar
+            // paddle, reversed on the hardware, resting at centre).
+            switch (m_io_analog_channel) {
+            case 0:
+                value = analog_scale(std::min<uint16_t>(m_inputs.gas, 0x610),
+                                     0x610);
+                break;
+            case 1:
+                value = analog_scale(
+                    std::min<uint16_t>(m_inputs.brake, 0x610), 0x610);
+                break;
+            case 2: {
+                const uint16_t steering = std::clamp<uint16_t>(
+                    m_inputs.steering, 0x280, 0xd80);
+                value = static_cast<uint8_t>(255 - analog_scale(
+                    static_cast<uint16_t>(steering - 0x280), 0xb00));
+                break;
+            }
+            default:
+                break;
+            }
+        } else switch (m_io_analog_channel) {
         case 0: {
             const uint16_t steering = std::clamp<uint16_t>(
                 m_inputs.steering, 0x280, 0xd80);
@@ -1763,7 +2255,7 @@ void model2_bus::tick(uint32_t cycles) {
         if (board_cycles) m_iob->execute(static_cast<int>(board_cycles));
     }
     if (m_uart_rx_pending.load(std::memory_order_acquire) &&
-        (m_irq_enable & (1U << 10)))
+        m_uart_rx_enabled && (m_irq_enable & (1U << 10)))
         m_irq_request |= 1U << 10;
     if (m_uart_tx_shift_active) {
         // A scheduler slice is not an integer number of MIDI bit periods.

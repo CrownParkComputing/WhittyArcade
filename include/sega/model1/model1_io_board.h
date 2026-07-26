@@ -36,6 +36,11 @@ public:
     // lines plus two 10-bit gun coordinates per player, read by the firmware
     // through the 315-5338A ports and the on-board FPGA.
     void set_gun_inputs(const input_state& state);
+    // Daytona's driving cabinet through the same dual-port RAM: digital
+    // lanes per MAME's daytona port map, the 4-speed shifter as an
+    // active-high code on IN1 bits 4-6, and steering/accelerator/brake on
+    // analog channels 0-2.
+    void set_daytona_inputs(const input_state& state, uint8_t gear_code);
     void set_dip_switches(const std::array<uint8_t, 3>& switches);
 
     bool active() const;

@@ -81,7 +81,9 @@ std::vector<input_action> relevant_actions(std::string_view short_name) {
     } else if (short_name == "ridgerac" || short_name == "ridgera2" ||
         short_name == "raverace" || short_name == "acedrive" ||
         short_name == "victlap" || short_name == "ridgeracf" ||
-        short_name == "vformula" || short_name == "srallyc") {
+        short_name == "vformula" || short_name == "srallyc" ||
+        short_name == "daytona" || short_name == "manxttc" ||
+        short_name == "motoraid") {
         add({input_action::steer_left, input_action::steer_right,
              input_action::gas, input_action::brake,
              input_action::shift_down, input_action::shift_up,
@@ -104,6 +106,15 @@ std::vector<input_action> relevant_actions(std::string_view short_name) {
              input_action::p1_up, input_action::p1_down,
              input_action::view1, input_action::view2,
              input_action::view3});
+    } else if (short_name == "vf2") {
+        add({input_action::p1_left, input_action::p1_right,
+             input_action::p1_up, input_action::p1_down,
+             input_action::p1_action1, input_action::p1_action2,
+             input_action::p1_action3,
+             input_action::p2_left, input_action::p2_right,
+             input_action::p2_up, input_action::p2_down,
+             input_action::p2_action1, input_action::p2_action2,
+             input_action::p2_action3});
     } else if (short_name == "swa") {
         add({input_action::p1_left, input_action::p1_right,
              input_action::p1_up, input_action::p1_down,

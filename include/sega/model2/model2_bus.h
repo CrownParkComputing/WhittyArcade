@@ -38,6 +38,7 @@ public:
 
     uint8_t read8(uint32_t address);
     void write8(uint32_t address, uint8_t value);
+    void write16(uint32_t address, uint16_t value);
     uint32_t read32(uint32_t address);
     void write32(uint32_t address, uint32_t value);
     uint16_t access_flags(uint32_t address) const;
@@ -132,6 +133,8 @@ private:
     bool open_comm_peer();
     void close_comm_peer();
     void tick_comm_peer();
+    void comm_peer_send();
+    bool comm_peer_receive();
 
     static bool in_range(uint32_t address, uint32_t base,
                          std::size_t size);
@@ -200,6 +203,8 @@ private:
     // Said once, not every frame: a cabinet that never found its partner.
     bool m_comm_link_reported{false};
     bool m_comm_peer_seen{};
+    unsigned m_comm_fg_poll_counter{};
+    uint8_t m_comm_link_count{};
     bool m_comm_link_alive{};
     uint16_t m_comm_link_timer{};
     uint8_t m_comm_node_id{};
@@ -220,6 +225,11 @@ private:
     // >=8 returns the off-screen status.
     uint8_t m_lightgun_mux{};
     bool m_uart_tx_ready{true};
+    // 8251 programming state: mode word first, then commands; TXRDY may
+    // only interrupt once the command word has set TxEN.
+    bool m_uart_expect_mode{true};
+    bool m_uart_tx_enabled{};
+    bool m_uart_rx_enabled{};
     // The 8251 has separate data and shift registers.  A byte reaches the
     // SCSP only after its full 10-bit MIDI frame, while TXRDY may reassert as
     // soon as the data register has moved into the shifter.

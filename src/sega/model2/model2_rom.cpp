@@ -616,6 +616,541 @@ model2_rom_load_result load_virtua_cop(const source_reader& source) {
     result.error = errors.str();
     return result;
 }
+
+model2_rom_load_result load_daytona(const source_reader& source,
+                                    const fs::path& selected_path) {
+    // Daytona USA (Revision A) is an original Sega Model 2 driving game
+    // (Sega Game ID# 833-10651 DAYTONA TWIN). Like Virtua Cop it pairs the
+    // i960 board with the Sega Model 1 sound board (segam1audio) and an I/O
+    // board over dual-port RAM - here the earlier model1io (315-5338A)
+    // driving board whose firmware ships in the separate model1io.zip device
+    // archive, the same board the Model 1 racers use. The cabinet also
+    // carries the SJ25-0207-01 drive-feedback Z80 and the M2COMM link board
+    // whose program is the same epr-16726.bin Sega Rally loads.
+    //
+    // MAME reference: src/mame/sega/model2.cpp ROM_START(daytona).
+    model2_rom_load_result result;
+    result.set = model2_rom_set::daytona;
+    model2_roms& roms = result.roms;
+    roms.set = model2_rom_set::daytona;
+    std::ostringstream errors;
+
+    // i960 program: a single word32 pair of 0x20000 EPRs.
+    roms.main_cpu.assign(0x200000, 0xff);
+    copy_word32(source, {"epr-16722a.12", 0x020000, 0x48b94318},
+                roms.main_cpu, 0x000000, errors);
+    copy_word32(source, {"epr-16723a.13", 0x020000, 0x8af8b32d},
+                roms.main_cpu, 0x000002, errors);
+
+    // Main data bus: the 0x2000000 original-Model 2 window. Two 0x200000
+    // pairs at 0x000000 and 0x400000, a 0x80000 pair at 0x800000, then
+    // MAME's seven ROM_COPY expansions of that last 0x100000 across
+    // 0x900000..0xf00000.
+    roms.main_data.assign(0x2000000, 0xff);
+    copy_word32(source, {"mpr-16528.10", 0x200000, 0x9ce591f6},
+                roms.main_data, 0x000000, errors);
+    copy_word32(source, {"mpr-16529.11", 0x200000, 0xf7095eaf},
+                roms.main_data, 0x000002, errors);
+    copy_word32(source, {"mpr-16808.8", 0x200000, 0x44f1f5a0},
+                roms.main_data, 0x400000, errors);
+    copy_word32(source, {"mpr-16809.9", 0x200000, 0x37a2dd12},
+                roms.main_data, 0x400002, errors);
+    copy_word32(source, {"epr-16724a.6", 0x080000, 0x469f10fd},
+                roms.main_data, 0x800000, errors);
+    copy_word32(source, {"epr-16725a.7", 0x080000, 0xba0df8db},
+                roms.main_data, 0x800002, errors);
+    for (std::size_t copy_target = 0x900000; copy_target <= 0xf00000;
+         copy_target += 0x100000) {
+        std::copy(roms.main_data.begin() + 0x800000,
+                  roms.main_data.begin() + 0x900000,
+                  roms.main_data.begin() +
+                      static_cast<std::vector<uint8_t>::difference_type>(
+                          copy_target));
+    }
+
+    // Coprocessor extra data (collision / height map) in the COPRO socket.
+    roms.copro_data.assign(0x800000, 0xff);
+    copy_word32(source, {"mpr-16537.ic28", 0x200000, 0x36b7c35a},
+                roms.copro_data, 0, errors);
+    copy_word32(source, {"mpr-16536.ic29", 0x200000, 0x6d6afed9},
+                roms.copro_data, 2, errors);
+
+    // Models: four word32 pairs filling the full 0x1000000 region.
+    roms.polygon_data.assign(0x1000000, 0xff);
+    constexpr std::array<rom_spec, 8> polygons{{
+        {"mpr-16523.ic16", 0x200000, 0x2f484d42},
+        {"mpr-16518.ic20", 0x200000, 0xdf683bf7},
+        {"mpr-16524.ic17", 0x200000, 0x34658bd7},
+        {"mpr-16519.ic21", 0x200000, 0xfacd1c81},
+        {"mpr-16525.ic18", 0x200000, 0xfb517521},
+        {"mpr-16520.ic22", 0x200000, 0xd66bd9bd},
+        {"mpr-16772.ic19", 0x200000, 0x770ed912},
+        {"mpr-16771.ic23", 0x200000, 0xa2205124},
+    }};
+    for (std::size_t index = 0; index < polygons.size(); ++index)
+        copy_word32(source, polygons[index], roms.polygon_data,
+                    (index / 2) * 0x400000 + (index & 1) * 2, errors);
+
+    // Textures: two pairs, the second starting at 0x800000.
+    roms.texture_data.assign(0x1000000, 0xff);
+    copy_word32(source, {"mpr-16522.25", 0x200000, 0x55d39a57},
+                roms.texture_data, 0x000000, errors);
+    copy_word32(source, {"mpr-16521.24", 0x200000, 0xaf1934fb},
+                roms.texture_data, 0x000002, errors);
+    copy_word32(source, {"mpr-16770.27", 0x200000, 0xf9fa7bfb},
+                roms.texture_data, 0x800000, errors);
+    copy_word32(source, {"mpr-16769.26", 0x200000, 0xe57429e9},
+                roms.texture_data, 0x800002, errors);
+
+    // M2COMM communication board program - byte-identical to the ROM the
+    // Sega Rally twin cabinets run.
+    roms.communication_cpu.assign(0x20000, 0xff);
+    copy_linear(source, {"epr-16726.bin", 0x20000, 0xc179b8c7},
+                roms.communication_cpu, 0, errors);
+
+    // Sega Model 1 sound board: 68000 program in a 0xc0000 region, two
+    // 0x20000 word-swapped halves.
+    roms.sound_cpu.assign(0xc0000, 0xff);
+    copy_word_swapped(source, {"epr-16720.7", 0x020000, 0x8e73cffd},
+                      roms.sound_cpu, 0x000000, errors);
+    copy_word_swapped(source, {"epr-16721.8", 0x020000, 0x1bb3b7b7},
+                      roms.sound_cpu, 0x020000, errors);
+
+    // MultiPCM bus 1 and 2: two 0x200000 sample ROMs each.
+    roms.multipcm_samples_1.assign(0x400000, 0x00);
+    copy_linear(source, {"mpr-16491.32", 0x200000, 0x89920903},
+                roms.multipcm_samples_1, 0x000000, errors);
+    copy_linear(source, {"mpr-16492.33", 0x200000, 0x459e701b},
+                roms.multipcm_samples_1, 0x200000, errors);
+
+    roms.multipcm_samples_2.assign(0x400000, 0x00);
+    copy_linear(source, {"mpr-16493.4", 0x200000, 0x9990db15},
+                roms.multipcm_samples_2, 0x000000, errors);
+    copy_linear(source, {"mpr-16494.5", 0x200000, 0x600e1d6c},
+                roms.multipcm_samples_2, 0x200000, errors);
+
+    // TGP CPU-board math tables - identical ROMs to the other Model 2 sets.
+    roms.copro_tgp_tables.assign(0x40000, 0xff);
+    copy_word32(source, {"opr-14742a.45", 0x20000, 0x90c6b117},
+                roms.copro_tgp_tables, 0, errors);
+    copy_word32(source, {"opr-14743a.46", 0x20000, 0xae7f446b},
+                roms.copro_tgp_tables, 2, errors);
+
+    roms.other_data.assign(0x80000, 0xff);
+    constexpr std::array<rom_spec, 4> other{{
+        {"opr-14744.58", 0x20000, 0x730ea9e0},
+        {"opr-14745.59", 0x20000, 0x4c934d96},
+        {"opr-14746.62", 0x20000, 0x2a266cbd},
+        {"opr-14747.63", 0x20000, 0xa4ad5e19},
+    }};
+    for (std::size_t index = 0; index < other.size(); ++index)
+        copy_word32(source, other[index], roms.other_data,
+                    (index / 2) * 0x40000 + (index & 1) * 2, errors);
+
+    // SJ25-0207-01 drive-feedback board program (revision A preferred).
+    roms.drive_cpu.assign(0x10000, 0xff);
+    {
+        std::ostringstream ignored;
+        if (!copy_linear(source, {"epr-16488a.ic12", 0x10000, 0x546c5d1a},
+                         roms.drive_cpu, 0, ignored))
+            copy_linear(source, {"epr-16488.ic12", 0x10000, 0x4f0b8114},
+                        roms.drive_cpu, 0, errors);
+    }
+
+    // model1io driving I/O board firmware. Not part of the game archive -
+    // it is the shared device board - so it is searched in the game archive
+    // first (repacked sets) and then in model1io.zip beside it. Any of the
+    // three firmware revisions runs the cabinet; prefer the newest.
+    roms.io_cpu.assign(0x10000, 0xff);
+    {
+        constexpr std::array<rom_spec, 3> io_firmware{{
+            {"epr-14869c.25", 0x10000, 0x24b68e64},
+            {"epr-14869b.25", 0x10000, 0x2d093304},
+            {"epr-14869.25", 0x10000, 0x6187cd7a},
+        }};
+        const fs::path directory = fs::is_directory(selected_path) ?
+            selected_path : selected_path.parent_path();
+        const source_reader companion(directory / "model1io.zip");
+        bool loaded = false;
+        for (const rom_spec& spec : io_firmware) {
+            std::ostringstream ignored;
+            if (copy_linear(source, spec, roms.io_cpu, 0, ignored) ||
+                (companion.valid() &&
+                 copy_linear(companion, spec, roms.io_cpu, 0, ignored))) {
+                loaded = true;
+                break;
+            }
+        }
+        if (!loaded)
+            errors << "Missing ROM: epr-14869c.25 (model1io.zip I/O board "
+                      "firmware, place it beside the game archive)\n";
+    }
+
+    // Original Model 2 video board: no mpr-1631X tables.
+
+    result.error = errors.str();
+    return result;
+}
+
+model2_rom_load_result load_virtua_fighter_2(const source_reader& source) {
+    // Virtua Fighter 2 (Version 2.1) is a Model 2A fighter (Sega game#
+    // 833-11341): SCSP sound, no drive CPU, no comm board, no I/O board -
+    // the two fighter pads read straight off the 315-5296.
+    //
+    // MAME reference: src/mame/sega/model2.cpp ROM_START(vf2).
+    model2_rom_load_result result;
+    result.set = model2_rom_set::virtua_fighter_2;
+    model2_roms& roms = result.roms;
+    roms.set = model2_rom_set::virtua_fighter_2;
+    std::ostringstream errors;
+
+    // i960 program: two word32 pairs of 0x20000 EPRs.
+    roms.main_cpu.assign(0x200000, 0xff);
+    copy_word32(source, {"epr-18385.12", 0x020000, 0x78ed2d41},
+                roms.main_cpu, 0x000000, errors);
+    copy_word32(source, {"epr-18386.13", 0x020000, 0x3418f428},
+                roms.main_cpu, 0x000002, errors);
+    copy_word32(source, {"epr-18387.14", 0x020000, 0x124a8453},
+                roms.main_cpu, 0x040000, errors);
+    copy_word32(source, {"epr-18388.15", 0x020000, 0x8d347980},
+                roms.main_cpu, 0x040002, errors);
+
+    // Main data bus: four 0x200000 word32 pairs, no ROM_COPY expansion.
+    roms.main_data.assign(0x2400000, 0xff);
+    constexpr std::array<rom_spec, 8> main_data{{
+        {"mpr-17560.10", 0x200000, 0xd1389864},
+        {"mpr-17561.11", 0x200000, 0xb98d0101},
+        {"mpr-17558.8",  0x200000, 0x4b15f5a6},
+        {"mpr-17559.9",  0x200000, 0xd3264de6},
+        {"mpr-17566.6",  0x200000, 0xfb41ef98},
+        {"mpr-17567.7",  0x200000, 0xc3396922},
+        {"mpr-17564.4",  0x200000, 0xd8062489},
+        {"mpr-17565.5",  0x200000, 0x0517c6e9},
+    }};
+    for (std::size_t index = 0; index < main_data.size(); ++index)
+        copy_word32(source, main_data[index], roms.main_data,
+                    (index / 2) * 0x400000 + (index & 1) * 2, errors);
+
+    // Coprocessor data socket is empty (ROMREGION_ERASE00).
+    roms.copro_data.assign(0x800000, 0x00);
+
+    // Models: three word32 pairs in the 0x2000000 window.
+    roms.polygon_data.assign(0x2000000, 0xff);
+    constexpr std::array<rom_spec, 6> polygons{{
+        {"mpr-17554.16", 0x200000, 0x27896d82},
+        {"mpr-17548.20", 0x200000, 0xc95facc2},
+        {"mpr-17555.17", 0x200000, 0x4df2810b},
+        {"mpr-17549.21", 0x200000, 0xe0bce0e6},
+        {"mpr-17556.18", 0x200000, 0x41a47616},
+        {"mpr-17550.22", 0x200000, 0xc36ff3f5},
+    }};
+    for (std::size_t index = 0; index < polygons.size(); ++index)
+        copy_word32(source, polygons[index], roms.polygon_data,
+                    (index / 2) * 0x400000 + (index & 1) * 2, errors);
+
+    // Textures: two pairs, the second starting at 0x800000 (ERASEFF).
+    roms.texture_data.assign(0x1000000, 0xff);
+    copy_word32(source, {"mpr-17553.25", 0x200000, 0x5da1c5d3},
+                roms.texture_data, 0x000000, errors);
+    copy_word32(source, {"mpr-17552.24", 0x200000, 0xe91e7427},
+                roms.texture_data, 0x000002, errors);
+    copy_word32(source, {"mpr-17547.27", 0x200000, 0xbe940431},
+                roms.texture_data, 0x800000, errors);
+    copy_word32(source, {"mpr-17546.26", 0x200000, 0x042a194b},
+                roms.texture_data, 0x800002, errors);
+
+    // SCSP sound program and samples.
+    roms.sound_cpu.assign(0x80000, 0xff);
+    copy_word_swapped(source, {"epr-17574.30", 0x80000, 0x4d4c3a55},
+                      roms.sound_cpu, 0, errors);
+
+    roms.samples.assign(0x800000, 0xff);
+    constexpr std::array<rom_spec, 4> samples{{
+        {"mpr-17573.31", 0x200000, 0xe43557fe},
+        {"mpr-17572.32", 0x200000, 0x4febecc8},
+        {"mpr-17571.36", 0x200000, 0x51caa584},
+        {"mpr-17570.37", 0x200000, 0xbccd324b},
+    }};
+    for (std::size_t index = 0; index < samples.size(); ++index)
+        copy_word_swapped(source, samples[index], roms.samples,
+                          index * 0x200000, errors);
+
+    // TGP CPU-board math tables and Model 2A video board tables - the same
+    // board ROMs every Model 2A set carries.
+    roms.copro_tgp_tables.assign(0x40000, 0xff);
+    copy_word32(source, {"opr-14742a.45", 0x20000, 0x90c6b117},
+                roms.copro_tgp_tables, 0, errors);
+    copy_word32(source, {"opr-14743a.46", 0x20000, 0xae7f446b},
+                roms.copro_tgp_tables, 2, errors);
+
+    roms.other_data.assign(0x80000, 0xff);
+    constexpr std::array<rom_spec, 4> other{{
+        {"opr-14744.58", 0x20000, 0x730ea9e0},
+        {"opr-14745.59", 0x20000, 0x4c934d96},
+        {"opr-14746.62", 0x20000, 0x2a266cbd},
+        {"opr-14747.63", 0x20000, 0xa4ad5e19},
+    }};
+    for (std::size_t index = 0; index < other.size(); ++index)
+        copy_word32(source, other[index], roms.other_data,
+                    (index / 2) * 0x40000 + (index & 1) * 2, errors);
+
+    roms.video_tables.assign(0x200000, 0);
+    copy_byte32(source, {"mpr-16310.15", 0x80000, 0xc078a780},
+                roms.video_tables, 0, errors);
+    copy_byte32(source, {"mpr-16311.16", 0x80000, 0x452a492b},
+                roms.video_tables, 1, errors);
+    copy_byte32(source, {"mpr-16312.14", 0x80000, 0xa25fef5b},
+                roms.video_tables, 2, errors);
+
+    result.error = errors.str();
+    return result;
+}
+
+model2_rom_load_result load_manx_tt(const source_reader& source) {
+    // Manx TT Superbike DX/Twin (Revision C) is a Model 2A motorbike racer:
+    // SCSP sound, throttle/brake/bank on the 315-5296 ADC, an M2COMM link
+    // board running EPR-18643, and a factory 93C46 image that selects Twin
+    // mode. No drive CPU, no I/O board.
+    //
+    // MAME reference: src/mame/sega/model2.cpp ROM_START(manxttc).
+    model2_rom_load_result result;
+    result.set = model2_rom_set::manx_tt;
+    model2_roms& roms = result.roms;
+    roms.set = model2_rom_set::manx_tt;
+    std::ostringstream errors;
+
+    roms.main_cpu.assign(0x200000, 0xff);
+    copy_word32(source, {"epr-18822c.12", 0x020000, 0xc7b3e45a},
+                roms.main_cpu, 0x000000, errors);
+    copy_word32(source, {"epr-18823c.13", 0x020000, 0x6b0c1dfb},
+                roms.main_cpu, 0x000002, errors);
+    copy_word32(source, {"epr-18824c.14", 0x020000, 0x352bb817},
+                roms.main_cpu, 0x040000, errors);
+    copy_word32(source, {"epr-18825c.15", 0x020000, 0xf88b036c},
+                roms.main_cpu, 0x040002, errors);
+
+    // Main data: three 0x200000 pairs, a 0x80000 pair at 0xc00000, then
+    // MAME's three ROM_COPY expansions of that last 0x100000.
+    roms.main_data.assign(0x2400000, 0xff);
+    constexpr std::array<rom_spec, 6> main_data{{
+        {"mpr-18751.10", 0x200000, 0x773ad43d},
+        {"mpr-18752.11", 0x200000, 0x4da3719e},
+        {"mpr-18749.8",  0x200000, 0xc3fe0eea},
+        {"mpr-18750.9",  0x200000, 0x40b55494},
+        {"mpr-18747.6",  0x200000, 0xa65ec1e8},
+        {"mpr-18748.7",  0x200000, 0x375e3748},
+    }};
+    for (std::size_t index = 0; index < main_data.size(); ++index)
+        copy_word32(source, main_data[index], roms.main_data,
+                    (index / 2) * 0x400000 + (index & 1) * 2, errors);
+    copy_word32(source, {"epr-18862.4", 0x080000, 0x9adc3a30},
+                roms.main_data, 0xc00000, errors);
+    copy_word32(source, {"epr-18863.5", 0x080000, 0x603742e9},
+                roms.main_data, 0xc00002, errors);
+    for (std::size_t copy_target = 0xd00000; copy_target <= 0xf00000;
+         copy_target += 0x100000) {
+        std::copy(roms.main_data.begin() + 0xc00000,
+                  roms.main_data.begin() + 0xd00000,
+                  roms.main_data.begin() +
+                      static_cast<std::vector<uint8_t>::difference_type>(
+                          copy_target));
+    }
+
+    roms.copro_data.assign(0x800000, 0xff);
+    copy_word32(source, {"mpr-18761.28", 0x200000, 0x4e39ec05},
+                roms.copro_data, 0, errors);
+    copy_word32(source, {"mpr-18762.29", 0x200000, 0x4ab165d8},
+                roms.copro_data, 2, errors);
+
+    roms.polygon_data.assign(0x2000000, 0xff);
+    constexpr std::array<rom_spec, 6> polygons{{
+        {"mpr-18753.16", 0x200000, 0x33ddaa0d},
+        {"mpr-18756.20", 0x200000, 0x28713617},
+        {"mpr-18754.17", 0x200000, 0x09aabde5},
+        {"mpr-18757.21", 0x200000, 0x25fc92e9},
+        {"mpr-18755.18", 0x200000, 0xbf094d9e},
+        {"mpr-18758.22", 0x200000, 0x1b5473d0},
+    }};
+    for (std::size_t index = 0; index < polygons.size(); ++index)
+        copy_word32(source, polygons[index], roms.polygon_data,
+                    (index / 2) * 0x400000 + (index & 1) * 2, errors);
+
+    roms.texture_data.assign(0x1000000, 0xff);
+    copy_word32(source, {"mpr-18760.25", 0x200000, 0x4e3a4a89},
+                roms.texture_data, 0x000000, errors);
+    copy_word32(source, {"mpr-18759.24", 0x200000, 0x278d8742},
+                roms.texture_data, 0x000002, errors);
+
+    roms.sound_cpu.assign(0x80000, 0xff);
+    copy_word_swapped(source, {"epr-18826.30", 0x40000, 0xed9fe4c1},
+                      roms.sound_cpu, 0, errors);
+
+    roms.samples.assign(0x800000, 0xff);
+    constexpr std::array<rom_spec, 4> samples{{
+        {"mpr-18827.31", 0x200000, 0x58d78ca1},
+        {"mpr-18764.32", 0x200000, 0x0dc6a860},
+        {"mpr-18765.36", 0x200000, 0xca4a803c},
+        {"mpr-18766.37", 0x200000, 0xe41892ea},
+    }};
+    for (std::size_t index = 0; index < samples.size(); ++index)
+        copy_word_swapped(source, samples[index], roms.samples,
+                          index * 0x200000, errors);
+
+    // M2COMM link board program (EPR-18643 revision of the ring firmware).
+    roms.communication_cpu.assign(0x20000, 0xff);
+    copy_word_swapped(source, {"epr-18643.7", 0x20000, 0x7166fca7},
+                      roms.communication_cpu, 0, errors);
+
+    // Factory 93C46 configured for Twin mode - the set ships it.
+    {
+        std::ostringstream ignored;
+        load_checked(source, {"manxttc_twin_nvran", 0x80, 0xf3be38fe},
+                     roms.default_eeprom, ignored, false);
+    }
+
+    roms.copro_tgp_tables.assign(0x40000, 0xff);
+    copy_word32(source, {"opr-14742a.45", 0x20000, 0x90c6b117},
+                roms.copro_tgp_tables, 0, errors);
+    copy_word32(source, {"opr-14743a.46", 0x20000, 0xae7f446b},
+                roms.copro_tgp_tables, 2, errors);
+
+    roms.other_data.assign(0x80000, 0xff);
+    constexpr std::array<rom_spec, 4> other{{
+        {"opr-14744.58", 0x20000, 0x730ea9e0},
+        {"opr-14745.59", 0x20000, 0x4c934d96},
+        {"opr-14746.62", 0x20000, 0x2a266cbd},
+        {"opr-14747.63", 0x20000, 0xa4ad5e19},
+    }};
+    for (std::size_t index = 0; index < other.size(); ++index)
+        copy_word32(source, other[index], roms.other_data,
+                    (index / 2) * 0x40000 + (index & 1) * 2, errors);
+
+    roms.video_tables.assign(0x200000, 0);
+    copy_byte32(source, {"mpr-16310.15", 0x80000, 0xc078a780},
+                roms.video_tables, 0, errors);
+    copy_byte32(source, {"mpr-16311.16", 0x80000, 0x452a492b},
+                roms.video_tables, 1, errors);
+    copy_byte32(source, {"mpr-16312.14", 0x80000, 0xa25fef5b},
+                roms.video_tables, 2, errors);
+
+    result.error = errors.str();
+    return result;
+}
+
+model2_rom_load_result load_motor_raid(const source_reader& source) {
+    // Motor Raid (Sega game ID# 833-13232 MOTOR RAID TWIN) is a Model 2A
+    // combat bike racer on the same cabinet hardware as Manx TT: SCSP
+    // sound, throttle/brake/bank ADC, and the two IN1 buttons are Punch
+    // and Kick rather than a gear shifter.
+    //
+    // MAME reference: src/mame/sega/model2.cpp ROM_START(motoraid).
+    model2_rom_load_result result;
+    result.set = model2_rom_set::motor_raid;
+    model2_roms& roms = result.roms;
+    roms.set = model2_rom_set::motor_raid;
+    std::ostringstream errors;
+
+    roms.main_cpu.assign(0x200000, 0xff);
+    copy_word32(source, {"epr-20007.12", 0x080000, 0xf040c108},
+                roms.main_cpu, 0x000000, errors);
+    copy_word32(source, {"epr-20008.13", 0x080000, 0x78976e1a},
+                roms.main_cpu, 0x000002, errors);
+
+    // Main data: three 0x400000 pairs, a 0x80000 pair at 0x1800000, then
+    // MAME's seven ROM_COPY expansions of that last 0x100000.
+    roms.main_data.assign(0x2400000, 0xff);
+    constexpr std::array<rom_spec, 6> main_data{{
+        {"mpr-20019.10", 0x400000, 0x49053727},
+        {"mpr-20020.11", 0x400000, 0xcc5ddb15},
+        {"mpr-20017.8",  0x400000, 0x4e206acd},
+        {"mpr-20018.9",  0x400000, 0xe7ed0e85},
+        {"mpr-20015.6",  0x400000, 0x23427339},
+        {"mpr-20016.7",  0x400000, 0xc99a83f4},
+    }};
+    for (std::size_t index = 0; index < main_data.size(); ++index)
+        copy_word32(source, main_data[index], roms.main_data,
+                    (index / 2) * 0x800000 + (index & 1) * 2, errors);
+    copy_word32(source, {"epr-20013.4", 0x080000, 0xa4478f52},
+                roms.main_data, 0x1800000, errors);
+    copy_word32(source, {"epr-20014.5", 0x080000, 0x1aa541be},
+                roms.main_data, 0x1800002, errors);
+    for (std::size_t copy_target = 0x1900000; copy_target <= 0x1f00000;
+         copy_target += 0x100000) {
+        std::copy(roms.main_data.begin() + 0x1800000,
+                  roms.main_data.begin() + 0x1900000,
+                  roms.main_data.begin() +
+                      static_cast<std::vector<uint8_t>::difference_type>(
+                          copy_target));
+    }
+
+    roms.polygon_data.assign(0x2000000, 0xff);
+    constexpr std::array<rom_spec, 6> polygons{{
+        {"mpr-20023.16", 0x400000, 0x016be8d6},
+        {"mpr-20026.20", 0x400000, 0x20044a30},
+        {"mpr-20024.17", 0x400000, 0x62fd2d5b},
+        {"mpr-20027.21", 0x400000, 0xb2504ea6},
+        {"mpr-20025.18", 0x400000, 0xd4ecd0be},
+        {"mpr-20028.22", 0x400000, 0x3147e0e1},
+    }};
+    for (std::size_t index = 0; index < polygons.size(); ++index)
+        copy_word32(source, polygons[index], roms.polygon_data,
+                    (index / 2) * 0x800000 + (index & 1) * 2, errors);
+
+    roms.copro_data.assign(0x800000, 0xff);
+    copy_word32(source, {"epr-20011.28", 0x100000, 0x794c026c},
+                roms.copro_data, 0, errors);
+    copy_word32(source, {"epr-20012.29", 0x100000, 0xf53db4e3},
+                roms.copro_data, 2, errors);
+
+    roms.texture_data.assign(0x1000000, 0xff);
+    copy_word32(source, {"mpr-20022.25", 0x400000, 0x9e47b3c2},
+                roms.texture_data, 0x000000, errors);
+    copy_word32(source, {"mpr-20021.24", 0x400000, 0x3cbf36cb},
+                roms.texture_data, 0x000002, errors);
+
+    roms.sound_cpu.assign(0x80000, 0xff);
+    copy_word_swapped(source, {"epr-20029.30", 0x80000, 0x927d31b9},
+                      roms.sound_cpu, 0, errors);
+
+    roms.samples.assign(0x800000, 0xff);
+    constexpr std::array<rom_spec, 4> samples{{
+        {"mpr-20030.31", 0x200000, 0xb70ab686},
+        {"mpr-20031.32", 0x200000, 0x84da70e4},
+        {"mpr-20032.36", 0x200000, 0x15516d35},
+        {"mpr-20033.37", 0x200000, 0x8c8ed187},
+    }};
+    for (std::size_t index = 0; index < samples.size(); ++index)
+        copy_word_swapped(source, samples[index], roms.samples,
+                          index * 0x200000, errors);
+
+    roms.copro_tgp_tables.assign(0x40000, 0xff);
+    copy_word32(source, {"opr-14742a.45", 0x20000, 0x90c6b117},
+                roms.copro_tgp_tables, 0, errors);
+    copy_word32(source, {"opr-14743a.46", 0x20000, 0xae7f446b},
+                roms.copro_tgp_tables, 2, errors);
+
+    roms.other_data.assign(0x80000, 0xff);
+    constexpr std::array<rom_spec, 4> other{{
+        {"opr-14744.58", 0x20000, 0x730ea9e0},
+        {"opr-14745.59", 0x20000, 0x4c934d96},
+        {"opr-14746.62", 0x20000, 0x2a266cbd},
+        {"opr-14747.63", 0x20000, 0xa4ad5e19},
+    }};
+    for (std::size_t index = 0; index < other.size(); ++index)
+        copy_word32(source, other[index], roms.other_data,
+                    (index / 2) * 0x40000 + (index & 1) * 2, errors);
+
+    roms.video_tables.assign(0x200000, 0);
+    copy_byte32(source, {"mpr-16310.15", 0x80000, 0xc078a780},
+                roms.video_tables, 0, errors);
+    copy_byte32(source, {"mpr-16311.16", 0x80000, 0x452a492b},
+                roms.video_tables, 1, errors);
+    copy_byte32(source, {"mpr-16312.14", 0x80000, 0xa25fef5b},
+                roms.video_tables, 2, errors);
+
+    result.error = errors.str();
+    return result;
+}
 } // namespace
 
 bool model2_roms::complete() const {
@@ -633,6 +1168,18 @@ model2_rom_set model2_rom_loader::identify_set(const std::string& path) {
     if (source.contains("epr-17166b.12") &&
         source.contains("epr-17167b.13"))
         return model2_rom_set::virtua_cop;
+    if (source.contains("epr-16722a.12") &&
+        source.contains("epr-16723a.13"))
+        return model2_rom_set::daytona;
+    if (source.contains("epr-18385.12") &&
+        source.contains("epr-18386.13"))
+        return model2_rom_set::virtua_fighter_2;
+    if (source.contains("epr-18822c.12") &&
+        source.contains("epr-18823c.13"))
+        return model2_rom_set::manx_tt;
+    if (source.contains("epr-20007.12") &&
+        source.contains("epr-20008.13"))
+        return model2_rom_set::motor_raid;
     return model2_rom_set::unknown;
 }
 
@@ -641,6 +1188,10 @@ const char* model2_rom_loader::set_short_name(model2_rom_set set) {
     case model2_rom_set::sega_rally_revision_c: return "srallyc";
     case model2_rom_set::virtua_cop_2: return "vcop2";
     case model2_rom_set::virtua_cop: return "vcop";
+    case model2_rom_set::daytona: return "daytona";
+    case model2_rom_set::virtua_fighter_2: return "vf2";
+    case model2_rom_set::manx_tt: return "manxttc";
+    case model2_rom_set::motor_raid: return "motoraid";
     case model2_rom_set::unknown: return "";
     }
     return "";
@@ -654,6 +1205,14 @@ const char* model2_rom_loader::set_display_name(model2_rom_set set) {
         return "Virtua Cop 2 (Model 2A)";
     case model2_rom_set::virtua_cop:
         return "Virtua Cop (Model 2)";
+    case model2_rom_set::daytona:
+        return "Daytona USA (Revision A)";
+    case model2_rom_set::virtua_fighter_2:
+        return "Virtua Fighter 2 (Version 2.1)";
+    case model2_rom_set::manx_tt:
+        return "Manx TT Superbike - Twin (Revision C)";
+    case model2_rom_set::motor_raid:
+        return "Motor Raid - Twin";
     case model2_rom_set::unknown:
         return "Unsupported Sega Model 2 ROM set";
     }
@@ -673,7 +1232,23 @@ model2_game_profile model2_rom_loader::profile_for(model2_rom_set set) {
     case model2_rom_set::virtua_cop:
         // Original Model 2 light-gun cabinet: Sega Model 1 sound board and a
         // model1io2 I/O board over dual-port RAM.
-        return {sound::segam1audio, io::model1io2_dpram, true, "vcop"};
+        return {sound::segam1audio, io::model1io2_dpram, true, "vcop", true};
+    case model2_rom_set::daytona:
+        // Original Model 2 driving cabinet: Sega Model 1 sound board and the
+        // model1io (315-5338A) driving I/O board over dual-port RAM.
+        return {sound::segam1audio, io::model1io_dpram, false, "daytona",
+                true};
+    case model2_rom_set::virtua_fighter_2:
+        // Model 2A-CRX fighter: SCSP sound, two digital pads on the
+        // 315-5296.
+        return {sound::scsp, io::crx_fighter, false, "vf2"};
+    case model2_rom_set::manx_tt:
+        // Model 2A-CRX motorbike cabinet: SCSP sound, throttle/brake/bank
+        // on the 315-5296 ADC.
+        return {sound::scsp, io::crx_bike, false, "manxttc"};
+    case model2_rom_set::motor_raid:
+        // Same motorbike cabinet; the two IN1 buttons are Punch and Kick.
+        return {sound::scsp, io::crx_bike, false, "motoraid"};
     case model2_rom_set::unknown:
         break;
     }
@@ -731,6 +1306,38 @@ bool model2_rom_loader::is_complete(model2_rom_set set,
         expected = &vcop;
         break;
     }
+    case model2_rom_set::daytona: {
+        static constexpr layout daytona{
+            0x200000, 0x2000000, 0x1000000, 0x1000000, 0xc0000,
+            0, 0x400000, 0x40000, 0x80000, 0, 0x10000, true, true,
+        };
+        expected = &daytona;
+        break;
+    }
+    case model2_rom_set::virtua_fighter_2: {
+        static constexpr layout vf2{
+            0x200000, 0x2400000, 0x2000000, 0x1000000, 0x80000,
+            0x800000, 0, 0x40000, 0x80000, 0x200000, 0, false, false,
+        };
+        expected = &vf2;
+        break;
+    }
+    case model2_rom_set::manx_tt: {
+        static constexpr layout manxtt{
+            0x200000, 0x2400000, 0x2000000, 0x1000000, 0x80000,
+            0x800000, 0, 0x40000, 0x80000, 0x200000, 0, false, true,
+        };
+        expected = &manxtt;
+        break;
+    }
+    case model2_rom_set::motor_raid: {
+        static constexpr layout motoraid{
+            0x200000, 0x2400000, 0x2000000, 0x1000000, 0x80000,
+            0x800000, 0, 0x40000, 0x80000, 0x200000, 0, false, false,
+        };
+        expected = &motoraid;
+        break;
+    }
     case model2_rom_set::unknown:
     default:
         return false;
@@ -770,6 +1377,14 @@ model2_rom_load_result model2_rom_loader::load(const std::string& path) {
         return load_virtua_cop_2(source);
     case model2_rom_set::virtua_cop:
         return load_virtua_cop(source);
+    case model2_rom_set::daytona:
+        return load_daytona(source, fs::path(path));
+    case model2_rom_set::virtua_fighter_2:
+        return load_virtua_fighter_2(source);
+    case model2_rom_set::manx_tt:
+        return load_manx_tt(source);
+    case model2_rom_set::motor_raid:
+        return load_motor_raid(source);
     case model2_rom_set::unknown:
         return {model2_rom_set::unknown, {},
                 "Unsupported Sega Model 2 ROM set: " + path + "\n"};

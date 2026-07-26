@@ -51,6 +51,7 @@ constexpr std::array<input_action_descriptor, input_action_count> actions{{
     {input_action::p2_down, "p2_down", "Player 2 - Down"},
     {input_action::p2_action1, "p2_action1", "Player 2 - Action 1"},
     {input_action::p2_action2, "p2_action2", "Player 2 - Action 2"},
+    {input_action::p2_action3, "p2_action3", "Player 2 - Action 3"},
 }};
 
 input_binding key(SDL_Scancode scancode) {
@@ -256,6 +257,7 @@ input_binding_table default_keyboard_bindings() {
     // collide on the same physical keys.
     set(input_action::p2_action1, key(SDL_SCANCODE_Z));
     set(input_action::p2_action2, key(SDL_SCANCODE_X));
+    set(input_action::p2_action3, key(SDL_SCANCODE_C));
     return bindings;
 }
 

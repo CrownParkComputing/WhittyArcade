@@ -128,6 +128,7 @@ public:
     using write_callback = std::function<void(offs_t, u8)>;
     using read32_callback = std::function<u32(offs_t)>;
     using write32_callback = std::function<void(offs_t, u32)>;
+    using write16_callback = std::function<void(offs_t, u16)>;
     using flags_callback = std::function<u16(offs_t)>;
 
     explicit address_space(int data_width = 16) : m_data_width(data_width) {}
@@ -135,12 +136,14 @@ public:
     void set_callbacks(read_callback read, write_callback write,
                        flags_callback flags = {},
                        read32_callback read32 = {},
-                       write32_callback write32 = {}) {
+                       write32_callback write32 = {},
+                       write16_callback write16 = {}) {
         m_read = std::move(read);
         m_write = std::move(write);
         m_flags = std::move(flags);
         m_read32 = std::move(read32);
         m_write32 = std::move(write32);
+        m_write16 = std::move(write16);
     }
 
     int data_width() const { return m_data_width; }
@@ -177,6 +180,14 @@ public:
         if (m_write) m_write(address, value);
     }
     void write_word_unaligned(offs_t address, u16 value) {
+        // A halfword store is a single bus transaction on the real machine.
+        // Devices that consume one word per transaction (the Model 2 TGP
+        // FIFO) lose data if it is split into byte lanes, so a bus that
+        // installs the 16-bit callback sees the store whole.
+        if (m_write16) {
+            m_write16(address, value);
+            return;
+        }
         write_byte(address, static_cast<u8>(value));
         write_byte(address + 1, static_cast<u8>(value >> 8));
     }
@@ -218,6 +229,7 @@ private:
     write_callback m_write;
     read32_callback m_read32;
     write32_callback m_write32;
+    write16_callback m_write16;
     flags_callback m_flags;
 
     u16 flags(offs_t address) const {
