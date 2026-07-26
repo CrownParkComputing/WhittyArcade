@@ -816,6 +816,14 @@ int main(int argc, char* argv[]) {
             launch_mode == cabinet_launch_mode::linked_pair;
         if (cabinet_node == 0 && local_pair) {
             pair_port_base = choose_pair_port_base();
+            // Opened before the spawn, not after it: a pair that fails to
+            // start is exactly the case worth having a file for, and if this
+            // file is missing afterwards then this process never took the
+            // linked-pair path at all - which is an answer in itself.
+            whitty_wall_log::begin_cabinet(1);
+            whitty_wall_log::note("linked pair: spawning cabinet 2, "
+                                  "port base %u, one screen %d",
+                                  pair_port_base, one_screen_pair ? 1 : 0);
             if (!companion.start(argv[0], rom_path, bios_path,
                                  explicit_bios_path, pair_port_base,
                                  false, one_screen_pair, true)) {
@@ -829,13 +837,7 @@ int main(int argc, char* argv[]) {
                 one_screen_pair = false;
             } else {
                 cabinet_node = 1;
-                // Only now is this process cabinet 1 - at startup it was an
-                // ordinary launch with no node - so this is the first moment
-                // it can open the right log. Without this only the spawned
-                // cabinet left a file, and half a pair explains nothing.
-                whitty_wall_log::begin_cabinet(cabinet_node);
-                whitty_wall_log::note("spawned cabinet 2, port base %u",
-                                      pair_port_base);
+                whitty_wall_log::note("cabinet 2 started");
             }
         }
         // Every launch that began as two-player says so, whether the two
