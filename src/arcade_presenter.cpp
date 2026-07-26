@@ -2194,7 +2194,12 @@ struct alternate_presenter::implementation {
                               shape.format) ||
                 !initialise_sheet(sheet))
                 return false;
+            // A new image means a new view, so every set that samples these
+            // sheets has to be written again - both boards' sets, not just
+            // System 22's. Clearing one and not the other is how a board
+            // ends up sampling a view that no longer exists.
             scene_descriptors_valid = false;
+            model2_descriptors_valid = false;
         }
         return true;
     }
@@ -3889,7 +3894,16 @@ bool alternate_presenter::render_model2_scene(const model2_scene& scene) {
         !m_impl->ensure_scene_target(scene.width, scene.height) ||
         !m_impl->create_model2_pipelines()) {
         if (whitty_wall_log::first(declined_note))
-            whitty_wall_log::note("model2 scene declined");
+            whitty_wall_log::note(
+                "model2 scene declined: impl=%d vulkan=%d size=%dx%d "
+                "native=%d target=%d pipelines=%d",
+                m_impl ? 1 : 0,
+                m_impl && m_impl->backend == renderer_backend::vulkan,
+                scene.width, scene.height,
+                m_impl && m_impl->create_native_path(),
+                m_impl && m_impl->ensure_scene_target(scene.width,
+                                                      scene.height),
+                m_impl && m_impl->create_model2_pipelines());
         return false;
     }
 
