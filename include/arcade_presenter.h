@@ -149,6 +149,20 @@ public:
     bool read_scene_image(std::vector<uint8_t>& rgba, int& width,
                           int& height);
 
+    // One-shot launcher-icon capture. Every board - CPU-rastered or
+    // GPU-rendered - converges on the scene image before the post pass,
+    // so counting presented frames here covers all of them. After the
+    // given number of presents the scene is read back once and saved as
+    // titles/<short_name>.bmp.
+    void arm_title_capture(std::string short_name, int frames);
+
+private:
+    // Consumes a due capture after a present; called from the public
+    // entry points on the render thread.
+    void service_title_capture();
+
+public:
+
     // Installs the cabinet bezel drawn around the game, or clears it when
     // pixels is null. The artwork changes only when the board does, so this
     // uploads once rather than riding a frame.

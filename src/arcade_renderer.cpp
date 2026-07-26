@@ -1826,9 +1826,15 @@ void polygon_renderer_gpu::set_board_name(std::string short_name) {
 void polygon_renderer_gpu::arm_title_capture(
         const std::string& short_name) {
     if (short_name.empty() || title_capture_exists(short_name)) return;
-    m_title_capture_name = short_name;
     // Thirty seconds of presented frames: past the self-tests and network
-    // checks, into the title or attract, on every board here.
+    // checks, into the title or attract, on every board here. The count
+    // runs in the presenter, where every board's frames converge - the
+    // CPU-side fallback below only serves the plain OpenGL path.
+    if (m_alternate_presenter) {
+        m_alternate_presenter->arm_title_capture(short_name, 1800);
+        return;
+    }
+    m_title_capture_name = short_name;
     m_title_capture_countdown = 1800;
     whitty_wall_log::note("title capture armed for %s", short_name.c_str());
 }

@@ -1,4 +1,5 @@
 #include "arcade_presenter.h"
+#include "title_capture.h"
 #include "wall_layout.h"
 #include "wall_log.h"
 
@@ -419,6 +420,10 @@ struct alternate_presenter::implementation {
     // One board's picture, sampled by every pane: a twin cabinet shows the
     // same frame to both players.
     device_image scene_image;
+    // One-shot launcher-icon capture (see arm_title_capture).
+    std::string title_capture_name;
+    int title_capture_countdown{-1};
+    bool title_capture_due{false};
     device_image scene_depth;
     VkFramebuffer scene_framebuffer{};
     // Depth for the polygon boards' offscreen pass. The RGBA path never
@@ -3322,6 +3327,13 @@ struct alternate_presenter::implementation {
         present.pSwapchains = &swapchain;
         present.pImageIndices = &image_index;
         const VkResult result = vkQueuePresentKHR(queue, &present);
+        if (title_capture_countdown > 0 && !title_capture_name.empty() &&
+            --title_capture_countdown == 0) {
+            // The scene image is this frame's finished game picture,
+            // before bezels and overlays; one blocking readback at a
+            // single moment of the session is invisible.
+            title_capture_due = true;
+        }
         if (result == VK_ERROR_OUT_OF_DATE_KHR ||
             result == VK_SUBOPTIMAL_KHR) {
             swapchain_dirty = true;
@@ -3541,6 +3553,13 @@ struct alternate_presenter::implementation {
         present.pSwapchains = &swapchain;
         present.pImageIndices = &image_index;
         const VkResult result = vkQueuePresentKHR(queue, &present);
+        if (title_capture_countdown > 0 && !title_capture_name.empty() &&
+            --title_capture_countdown == 0) {
+            // The scene image is this frame's finished game picture,
+            // before bezels and overlays; one blocking readback at a
+            // single moment of the session is invisible.
+            title_capture_due = true;
+        }
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             swapchain_dirty = true;
             return true;
@@ -3745,9 +3764,12 @@ bool alternate_presenter::render_board_frame(const uint8_t* pixels, int width,
     if (pixels)
         m_impl->present_mirror(pixels, width, height, display_width,
                                display_height, menu_visible, flip_y);
-    return m_impl->render_board_frame(pixels, width, height, flip_y, overlays,
-                                      menu_visible, display_width,
-                                      display_height);
+    const bool presented =
+        m_impl->render_board_frame(pixels, width, height, flip_y, overlays,
+                                   menu_visible, display_width,
+                                   display_height);
+    service_title_capture();
+    return presented;
 }
 
 bool alternate_presenter::upload_scene_sheet(scene_sheet sheet,
@@ -3981,6 +4003,31 @@ bool alternate_presenter::set_bezel(const bezel_frame& bezel) {
     return true;
 }
 
+void alternate_presenter::arm_title_capture(std::string short_name,
+                                            int frames) {
+    if (!m_impl || short_name.empty() || frames <= 0) return;
+    m_impl->title_capture_name = std::move(short_name);
+    m_impl->title_capture_countdown = frames;
+    m_impl->title_capture_due = false;
+    whitty_wall_log::note("title capture armed for %s",
+                          m_impl->title_capture_name.c_str());
+}
+
+void alternate_presenter::service_title_capture() {
+    if (!m_impl || !m_impl->title_capture_due) return;
+    m_impl->title_capture_due = false;
+    std::vector<uint8_t> rgba;
+    int width = 0;
+    int height = 0;
+    if (read_scene_image(rgba, width, height) &&
+        title_capture_write(m_impl->title_capture_name, rgba.data(), width,
+                            height, /*top_down=*/true))
+        whitty_wall_log::note("title captured for %s",
+                              m_impl->title_capture_name.c_str());
+    m_impl->title_capture_name.clear();
+    m_impl->title_capture_countdown = -1;
+}
+
 bool alternate_presenter::read_scene_image(std::vector<uint8_t>& rgba,
                                            int& width, int& height) {
     if (!m_impl || m_impl->backend != renderer_backend::vulkan) return false;
@@ -4062,7 +4109,10 @@ bool alternate_presenter::device_lost() const {
 bool alternate_presenter::repeat_board_frame() {
     if (!m_impl || m_impl->backend != renderer_backend::vulkan) return false;
     const board_overlays none{};
-    return m_impl->render_board_frame(nullptr, 0, 0, false, none, false, 0, 0);
+    const bool presented =
+        m_impl->render_board_frame(nullptr, 0, 0, false, none, false, 0, 0);
+    service_title_capture();
+    return presented;
 }
 
 bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
@@ -4076,11 +4126,15 @@ bool alternate_presenter::present_rgba_bottom_up(const uint8_t* pixels,
     if (!m_impl || !pixels || width <= 0 || height <= 0) return false;
     m_impl->present_mirror(pixels, width, height, display_width,
                            display_height, menu_visible);
-    if (m_impl->backend == renderer_backend::vulkan)
-        return m_impl->present_vulkan(pixels, width, height, overlay_pixels,
-                                      overlay_width, overlay_height,
-                                      menu_visible, display_width,
-                                      display_height);
+    if (m_impl->backend == renderer_backend::vulkan) {
+        const bool presented =
+            m_impl->present_vulkan(pixels, width, height, overlay_pixels,
+                                   overlay_width, overlay_height,
+                                   menu_visible, display_width,
+                                   display_height);
+        service_title_capture();
+        return presented;
+    }
     if (!m_impl->software_texture || width != m_impl->texture_width ||
         height != m_impl->texture_height) {
         if (m_impl->software_texture)
