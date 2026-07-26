@@ -1,5 +1,7 @@
 #include "arcade_video_worker.h"
 
+#include "arcade_input.h"
+
 #include "namco/system22/system22_config.h"
 #include "arcade_renderer.h"
 
@@ -387,6 +389,25 @@ void arcade_video_worker::present_rgba_frame(const uint8_t* pixels,
                                              int display_width,
                                              int display_height) {
     if (!pixels || width <= 0 || height <= 0) return;
+    // Netplay divergence check. Two machines running the same board from the
+    // same inputs draw the same picture, so the finished frame is a state
+    // hash that needs no per-board plumbing. Sampled rather than hashed
+    // every frame: a divergence persists, and a full raster is not free.
+    if (arcade_input_netplay_active()) {
+        const uint32_t frame = arcade_input_netplay_frame();
+        if (frame != 0 && frame % 60 == 0) {
+            uint64_t hash = 1469598103934665603ull;  // FNV-1a
+            const std::size_t bytes =
+                static_cast<std::size_t>(width) * height * 4;
+            // Every 97th byte: a stride that is coprime with the row length
+            // walks the whole picture rather than sampling one column.
+            for (std::size_t at = 0; at < bytes; at += 97) {
+                hash ^= pixels[at];
+                hash *= 1099511628211ull;
+            }
+            arcade_input_netplay_publish_state(frame, hash ? hash : 1);
+        }
+    }
     const std::size_t size = static_cast<std::size_t>(width) * height * 4;
     rgba_frame frame{{pixels, pixels + size}, width, height,
                      display_width, display_height};

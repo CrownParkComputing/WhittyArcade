@@ -16,6 +16,7 @@
 #include "multiplayer_lobby.h"
 #include "namco/system22/system22_c139_transport.h"
 #include "namco/system22/system22_cpu.h"
+#include "persistent_data.h"
 #include "play_stats.h"
 #include "rom_library.h"
 
@@ -312,15 +313,17 @@ void configure_cabinet_environment(int node, uint16_t port_base,
                         std::to_string(local_port));
         set_environment("WHITTY_INPUT_PEER_PORT",
                         std::to_string(peer_port));
-        const uint16_t video_port = port_base <= 65533 ?
-            static_cast<uint16_t>(port_base + 2) :
-            static_cast<uint16_t>(port_base - 2);
-        set_environment("WHITTY_VIDEO_ROLE", std::to_string(node));
-        set_environment("WHITTY_VIDEO_PORT", std::to_string(video_port));
+        // Netplay: both machines simulate the whole board from the same
+        // inputs, so no picture is sent. The video link stays in the tree
+        // for the streaming path but is not started here.
+        set_environment("WHITTY_NETPLAY", "1");
+        unset_environment("WHITTY_VIDEO_ROLE");
+        unset_environment("WHITTY_VIDEO_PORT");
     } else {
         unset_environment("WHITTY_INPUT_LINK");
         unset_environment("WHITTY_INPUT_LOCAL_PORT");
         unset_environment("WHITTY_INPUT_PEER_PORT");
+        unset_environment("WHITTY_NETPLAY");
         unset_environment("WHITTY_VIDEO_ROLE");
         unset_environment("WHITTY_VIDEO_PORT");
     }
@@ -522,9 +525,12 @@ int audit_roms(int argc, char* argv[]) {
     if (argc > 2) {
         for (int index = 2; index < argc; ++index) {
             const auto identity = identify_arcade_game(argv[index]);
-            choices.push_back({
-                argv[index], argv[index],
-                identity ? identity->board : arcade_board_type::system22});
+            rom_choice choice;
+            choice.path = argv[index];
+            choice.label = argv[index];
+            choice.board = identity ? identity->board
+                                    : arcade_board_type::system22;
+            choices.push_back(std::move(choice));
         }
     } else {
         choices = discover_library_roms({});
@@ -816,13 +822,10 @@ int main(int argc, char* argv[]) {
         // Player 2 contributes controls to Player 1 and presents Player 1's
         // authoritative picture. Silence the hidden local board so two
         // unsynchronised audio timelines can never be heard together.
-        if (cabinet_node == 2 &&
-            launch_mode == cabinet_launch_mode::linked_network &&
-            !native_hardware_link) {
-            session_settings.master_volume = 0;
-            session_settings.music_volume = 0;
-            session_settings.effects_volume = 0;
-        }
+        // Under netplay both cabinets run the whole board and are heard;
+        // silencing Player 2 belonged to the streaming era, when its local
+        // board was a puppet behind a received picture.
+
         std::unique_ptr<emulator_session> emu = create_emulator_session(
             identity->board, shared_video, cabinet_state);
         whitty_wall_log::note("initialising board for %s",
@@ -832,6 +835,18 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         whitty_wall_log::note("board running");
+        if (launch_mode == cabinet_launch_mode::linked_network &&
+            !native_hardware_link) {
+            // Netplay starts from identical memory or not at all. The 2D
+            // boards keep nothing between sessions and hash to zero, so
+            // Galaxian and its kin simply never disagree; the boards that do
+            // keep operator data (System 22, Model 1/2, System 246) report
+            // it here and a mismatch is named before the first frame.
+            const std::uint64_t persistent =
+                persistent_state_hash(identity->short_name);
+            if (persistent != 0)
+                arcade_input_netplay_publish_state(0, persistent);
+        }
         if (launch_mode == cabinet_launch_mode::independent_pair) {
             shared_video->set_cabinet_status(
                 "TWIN SCREEN  |  PLAYER 1 + PLAYER 2");
@@ -855,6 +870,8 @@ int main(int argc, char* argv[]) {
         record_play(current_game_short_name);
 
         long long wall_frames = 0;
+        std::string last_netplay_status;
+        bool netplay_muted = false;
         auto deadline = std::chrono::steady_clock::now();
         arcade_host_action host_action =
             arcade_host_action::continue_running;
@@ -907,6 +924,44 @@ int main(int argc, char* argv[]) {
                     shared_video->set_cabinet_status(std::move(status));
                 }
             }
+            // The two cabinets are one session: when the partner app closes,
+            // this one has nothing to play against and follows it out rather
+            // than sitting on a frozen board waiting for input.
+            if (arcade_input_netplay_active() &&
+                arcade_input_netplay_peer_lost()) {
+                std::printf("Netplay partner closed - closing this cabinet "
+                            "too\n");
+                arcade_audio_output::set_output_muted(true);
+                // The whole app closes, not just the game: the two cabinets
+                // are one session, and a launcher left open on the second
+                // machine is not "closed" in any sense the player means.
+                host_action = arcade_host_action::exit_application;
+                break;
+            }
+            if (arcade_input_netplay_active()) {
+                // One line that says whether the two machines are actually
+                // in step: a divergence is reported rather than left to look
+                // like two players seeing different games.
+                const uint32_t desync = arcade_input_netplay_desync_frame();
+                std::string netplay_status =
+                    "NETPLAY  |  PLAYER " + std::to_string(cabinet_node);
+                if (desync) {
+                    netplay_status += "  |  DESYNC AT FRAME " +
+                                      std::to_string(desync) +
+                                      " - RESTART THE SESSION";
+                } else if (arcade_input_netplay_stalled()) {
+                    netplay_status += "  |  WAITING FOR PEER";
+                } else {
+                    netplay_status += "  |  " +
+                        std::to_string(arcade_input_netplay_lead()) +
+                        " FRAMES BUFFERED";
+                }
+                if (netplay_status != last_netplay_status) {
+                    last_netplay_status = netplay_status;
+                    shared_video->set_cabinet_status(netplay_status);
+                }
+            }
+
             if (emu->take_operator_settings_request())
                 emu->open_operator_settings();
 
@@ -991,12 +1046,41 @@ int main(int argc, char* argv[]) {
 
             if (++wall_frames <= 3 || wall_frames % 600 == 0)
                 whitty_wall_log::note("frame %lld", wall_frames);
+            // Lockstep netplay: the board may only advance when the peer's
+            // input for the next frame has arrived. Running ahead on a guess
+            // is exactly the divergence the whole scheme exists to prevent,
+            // so a stalled frame redraws rather than simulates.
+            // A cabinet must not run a single frame before its partner is
+            // there. The two boards have to start from the same frame, and
+            // the app that opens first would otherwise run for however long
+            // it takes the second to appear - the drift that desynced every
+            // early session.
+            const bool netplay_waiting =
+                arcade_input_netplay_active() &&
+                (arcade_input_netplay_stalled() ||
+                 !arcade_input_network_peer_seen());
             const bool paused = emu->paused();
             emu->set_paused(paused);
-            if (paused)
+            if (paused || netplay_waiting) {
+                // A stalled cabinet still has to watch the link, or it can
+                // never notice its partner leaving and would wait for ever.
+                if (netplay_waiting) emu->pump_netplay_link();
+                // Silence while waiting. The board is not advancing, so the
+                // audio device would otherwise keep looping whatever it last
+                // held - the stuck note heard when a partner disappears.
+                if (netplay_waiting && !netplay_muted) {
+                    netplay_muted = true;
+                    arcade_audio_output::set_output_muted(true);
+                }
                 emu->refresh_output();
-            else
+            }
+            else {
+                if (netplay_muted) {
+                    netplay_muted = false;
+                    arcade_audio_output::set_output_muted(false);
+                }
                 emu->run_frame();
+            }
 
             // System 246 waits directly on Play!'s completed GS flips. A
             // second 60 Hz sleep here creates two free-running clocks; their
