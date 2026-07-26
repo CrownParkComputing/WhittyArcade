@@ -96,6 +96,12 @@ uint8_t board::mapper_read(uint32_t address) noexcept {
 void board::mapper_write(uint32_t address, uint8_t data) noexcept {
     if ((address & 1u) == 0) return;
     const unsigned reg = (address >> 1) & 0x1fu;
+    if (std::getenv("SHINOBI_TRACE_MAPPER")) {
+        static int reported = 0;
+        if (reported < 60)
+            std::fprintf(stderr, "mapper write #%d %06x reg %02x = %02x\n",
+                         ++reported, address, reg, data);
+    }
     mapper_regs_[reg] = data;
     if (reg == 0x03) {
         // Main -> sound command. PBF/INT remains asserted until the Z80
@@ -128,14 +134,68 @@ void board::mapper_write(uint32_t address, uint8_t data) noexcept {
 // Memory map - System 16-B Shinobi (68000 bus, big-endian 16-bit words)
 // =====================================================================
 
+// Resolve an address against the eight 315-5195 mapper regions the game
+// has programmed (registers 0x10-0x1f: control byte then base byte per
+// region). Lower regions win, exactly as MAME maps them last.
+bool board::mapper_region(uint32_t address, unsigned& region_out,
+                          uint32_t& offset_out) const noexcept {
+    static constexpr uint32_t size_masks[4] = {
+        0x00ffffu, 0x01ffffu, 0x07ffffu, 0x1fffffu};
+    for (unsigned region = 0; region < 8; ++region) {
+        const uint32_t mask =
+            size_masks[mapper_regs_[0x10 + 2 * region] & 3];
+        const uint32_t base =
+            (static_cast<uint32_t>(mapper_regs_[0x11 + 2 * region]) << 16) &
+            ~mask & 0xFFFFFFu;
+        if ((address & ~mask & 0xFFFFFFu) != base) continue;
+        region_out = region;
+        offset_out = address & mask;
+        return true;
+    }
+    return false;
+}
+
+// The standard_io_r decode, shared by the fixed Shinobi layout and the
+// mapper-decoded boards (the region base differs, the offsets do not).
+uint8_t board::io_region_read(uint32_t offset) noexcept {
+    const unsigned off = (offset & 0x3fffu) >> 1;
+    switch (off & 0x1800u) {
+    case 0x0800u:
+        switch (off & 3u) {
+        case 0u: return service_input_;
+        case 1u: return p1_input_;
+        case 2u: return 0xFF;
+        case 3u: return p2_input_;
+        }
+        return 0xFF;
+    case 0x1000u: return (off & 1u) ? dsw1_ : dsw2_;
+    default:      return 0xFF;
+    }
+}
+
 uint8_t board::byte_read(uint32_t address) noexcept {
     address &= 0xFFFFFFu;
+    if (mapper_decode_) {
+        unsigned region;
+        uint32_t offset;
+        if (mapper_region(address, region, offset)) {
+            switch (region) {
+            case 0: return program_[offset & 0x3ffffu];
+            case 1: return program_[0x40000u + (offset & 0x3ffffu)];
+            case 2: return 0xFF; // 5704 tile bank register, write-only
+            case 3: return work_ram_[offset & (kWorkRamBytes - 1)];
+            case 4: return sprite_ram_[offset & (kSpriteRamBytes - 1)];
+            case 5: return (offset & 0x10000u)
+                        ? text_ram_[offset & (kTextRamBytes - 1)]
+                        : tile_ram_[offset & (kTileRamBytes - 1)];
+            case 6: return palette_ram_[offset & (kPaletteBytes - 1)];
+            case 7: return io_region_read(offset);
+            }
+        }
+        return mapper_read(address);
+    }
     if (address < 0x040000u) {
         return program_[address];
-    }
-    if (rom_bank1_base_ && address >= rom_bank1_base_ &&
-        address < rom_bank1_base_ + 0x40000u) {
-        return program_[0x40000u + (address - rom_bank1_base_)];
     }
     if (address >= 0x3F0000u && address < 0x400000u) return 0xFF;
     if (address >= 0x400000u && address < 0x410000u) {
@@ -189,10 +249,51 @@ uint8_t board::byte_read(uint32_t address) noexcept {
 
 void board::byte_write(uint32_t address, uint8_t data) noexcept {
     address &= 0xFFFFFFu;
-    if (address < 0x040000u) return;
-    if (rom_bank1_base_ && address >= rom_bank1_base_ &&
-        address < rom_bank1_base_ + 0x40000u)
+    if (mapper_decode_) {
+        unsigned region;
+        uint32_t offset;
+        if (mapper_region(address, region, offset)) {
+            switch (region) {
+            case 0:
+            case 1: return; // ROM
+            case 2:
+                // 5704 tile bank register: word offset bit 0 picks the
+                // tilemap slot, the low three data bits pick which
+                // 4096-tile page it shows; only the odd byte carries
+                // data (MAME rom_5704_bank_w, ACCESSING_BITS_0_7).
+                if (address & 1u) {
+                    tile_banks_[(offset >> 1) & 1u] = data & 7u;
+                    if (std::getenv("SHINOBI_TRACE_BANK")) {
+                        static int reported = 0;
+                        if (reported < 64)
+                            std::fprintf(stderr,
+                                         "tile bank #%d %06x = %02x\n",
+                                         ++reported, address, data);
+                    }
+                }
+                return;
+            case 3:
+                work_ram_[offset & (kWorkRamBytes - 1)] = data;
+                return;
+            case 4:
+                sprite_ram_[offset & (kSpriteRamBytes - 1)] = data;
+                return;
+            case 5:
+                if (offset & 0x10000u)
+                    text_ram_[offset & (kTextRamBytes - 1)] = data;
+                else
+                    tile_ram_[offset & (kTileRamBytes - 1)] = data;
+                return;
+            case 6:
+                palette_ram_[offset & (kPaletteBytes - 1)] = data;
+                return;
+            case 7: return; // I/O writes (coin counters, lamps)
+            }
+        }
+        mapper_write(address, data);
         return;
+    }
+    if (address < 0x040000u) return;
     if (address >= 0x400000u && address < 0x410000u) {
         tile_ram_[(address - 0x400000u) & (kTileRamBytes - 1)] = data;
         return;
@@ -238,23 +339,6 @@ void board::byte_write(uint32_t address, uint8_t data) noexcept {
         return;
     }
     if (address >= 0xC60000u && address < 0xC60002u) return;
-    if (address >= 0xFC0000u && address < 0xFD0000u) {
-        // ROM board 171-5704 tile bank register: mapper region #2, which
-        // Aurail programs at 0xFC0000 (register 0x15 = 0xFC). Word offset
-        // bit 0 picks the tilemap slot, the low three data bits pick
-        // which 4096-tile page it shows; only the odd byte of the word
-        // carries data (MAME rom_5704_bank_w, ACCESSING_BITS_0_7).
-        if (tile_banking_ && (address & 1u)) {
-            tile_banks_[(address >> 1) & 1u] = data & 7u;
-            if (std::getenv("SHINOBI_TRACE_BANK")) {
-                static int reported = 0;
-                if (reported < 64)
-                    std::fprintf(stderr, "tile bank #%d %06x = %02x\n",
-                                 ++reported, address, data);
-            }
-        }
-        return;
-    }
     if (address >= 0xFE0000u && address < 0xFE0040u) {
         mapper_write(address, data);
         return;

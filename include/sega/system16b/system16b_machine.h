@@ -97,6 +97,9 @@ private:
 
     uint8_t mapper_read(uint32_t address) noexcept;
     void mapper_write(uint32_t address, uint8_t data) noexcept;
+    bool mapper_region(uint32_t address, unsigned& region_out,
+                       uint32_t& offset_out) const noexcept;
+    uint8_t io_region_read(uint32_t offset) noexcept;
 
     // Hex input -> 32-bit big-endian long (used for boot vectors).
     static uint32_t be_long(const uint8_t* p) noexcept {
@@ -183,31 +186,30 @@ public:
                 0, 255, 255, 255, 255, 255, 255, 3,
                 255, 255, 255, 2, 255, 1, 0, 255};
             sprite_banklist_ = alternate_banklist.data();
+        } else if (set == ::system16b::system16b_rom_set::riot_city) {
+            // 2 Credits to Start off, demo sounds on, 2 lives, normal.
+            dsw2_ = 0xf9;
+            sprite_bank_mod_ = 16;
+            mapper_decode_ = true;
         } else if (set == ::system16b::system16b_rom_set::aurail) {
             // Upright, demo sounds on, 3 lives, normal difficulty.
             dsw2_ = 0xfd;
-            // ROM board 171-5704: 512 KiB program, 8 identity-mapped
-            // sprite banks of 128 KiB, and bankable tiles - the register
-            // at 0x3f0000 maps each of the tilemap's two 4096-tile slots
-            // onto one of eight pages of tile ROM. The mapper places the
-            // second program ROM pair at 0x080000, not straight after the
-            // first: its own pointer tables say 0x0Axxxx, and jumping
-            // through them with the pair at 0x040000 lands in data.
-            rom_bank1_base_ = 0x80000;
+            // ROM board 171-5704: 512 KiB program in two pairs, eight
+            // identity-mapped sprite banks of 128 KiB, bankable tiles.
             sprite_bank_mod_ = 16;
-            tile_banking_ = true;
+            mapper_decode_ = true;
         }
     }
     // Sprite bank LUT for the current ROM board (identity for Shinobi's).
     const uint8_t* sprite_banklist_{nullptr};
-    // CPU address of the second 256 KiB program ROM pair (0 = none). The
-    // 315-5195 mapper decides where each pair appears; Aurail's shows up
-    // at 0x080000 while the buffer keeps it at offset 0x40000.
-    uint32_t rom_bank1_base_{0};
     // Physical 64K-word sprite banks on the board (bank field wraps here).
     unsigned sprite_bank_mod_{4};
-    // 171-5704 tile banking: two 4096-tile slots, each mapped to a page.
-    bool tile_banking_{false};
+    // 171-5704 boards decode the 68000 bus through the 315-5195 mapper
+    // registers the game programs, instead of Shinobi's fixed layout:
+    // every game on that board is free to place video RAM, I/O and the
+    // tile bank register wherever it likes, and Aurail and Riot City
+    // already disagree about all of them.
+    bool mapper_decode_{false};
     std::array<uint8_t, 2> tile_banks_{0, 1};
 };
 

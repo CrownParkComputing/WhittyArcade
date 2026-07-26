@@ -182,6 +182,10 @@ system16b_rom_set system16b_rom_loader::identify_set(const std::string& path) {
     if (read_entry(path, "epr-13577.a7", tmp) &&
         read_entry(path, "epr-13576.a5", tmp))
         return system16b_rom_set::aurail;
+    // Riot City (Japan, unprotected): identified by its 68000 pair.
+    if (read_entry(path, "epr-14612.a7", tmp) &&
+        read_entry(path, "epr-14610.a5", tmp))
+        return system16b_rom_set::riot_city;
     // A directory must contain either shinobi_main.bin (the staged
     // 256 KiB program image) OR the MAME file names. A ZIP must contain
     // at least one of shinobi_main.bin or mpr-11363.a14.
@@ -197,6 +201,7 @@ const char* system16b_rom_loader::set_short_name(system16b_rom_set set) {
     case system16b_rom_set::shinobi_us: return "shinobi4";
     case system16b_rom_set::alien_syndrome: return "aliensyn";
     case system16b_rom_set::aurail: return "aurail";
+    case system16b_rom_set::riot_city: return "riotcity";
     case system16b_rom_set::unknown: return "";
     }
     return "";
@@ -209,6 +214,8 @@ const char* system16b_rom_loader::set_display_name(system16b_rom_set set) {
         return "Alien Syndrome (Sega System 16B, unprotected)";
     case system16b_rom_set::aurail:
         return "Aurail (Sega System 16B, US, unprotected)";
+    case system16b_rom_set::riot_city:
+        return "Riot City (Sega System 16B, Japan)";
     case system16b_rom_set::unknown:    return "Unknown Shinobi-style set";
     }
     return "Unknown Shinobi-style set";
@@ -404,6 +411,102 @@ system16b_rom_load_result load_aurail(const std::string& path) {
     return r;
 }
 
+
+// Riot City (MAME `riotcity`, Japan, ROM board 171-5704, unprotected).
+// Same board as Aurail with two twists: the six 256 KiB sprite chips are
+// split-loaded (each chip's first half at its bank, second half at the
+// bank 0x100000 bytes further on), and the sound program chip is 64 KiB
+// of which the Z80 can only ever see the first 32 KiB.
+system16b_rom_load_result load_riot_city(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::riot_city;
+
+    struct pair_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<pair_spec, 2> program_pairs{{
+        {"epr-14612.a7", "epr-14610.a5", 0x00000},
+        {"epr-14613.a8", "epr-14611.a6", 0x40000},
+    }};
+    r.roms.program.fill(0xff);
+    for (const pair_spec& pair : program_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x20000 || odd.size() != 0x20000) {
+            r.error = std::string("missing program pair ") + pair.even +
+                      " + " + pair.odd;
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.program[pair.base + i * 2]     = even[i];
+            r.roms.program[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    struct tile_spec { const char* low; const char* high; };
+    static constexpr std::array<tile_spec, 3> tile_chips{{
+        {"epr-14616.a14", "epr-14625.b14"},
+        {"epr-14617.a15", "epr-14626.b15"},
+        {"epr-14618.a16", "epr-14627.b16"},
+    }};
+    const auto read_plane = [&](const tile_spec& spec, auto& plane) {
+        std::vector<uint8_t> low, high;
+        if (!read_game_entry(path, spec.low, low) ||
+            !read_game_entry(path, spec.high, high) ||
+            low.size() != 0x20000 || high.size() != 0x20000)
+            return false;
+        plane.fill(0);
+        std::memcpy(plane.data(), low.data(), low.size());
+        std::memcpy(plane.data() + 0x20000, high.data(), high.size());
+        return true;
+    };
+    if (!read_plane(tile_chips[0], r.roms.tile_plane0) ||
+        !read_plane(tile_chips[1], r.roms.tile_plane1) ||
+        !read_plane(tile_chips[2], r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (epr-14616/17/18/25/26/27)";
+        return r;
+    }
+
+    // Sprites: three word-interleaved pairs of 256 KiB chips, each chip
+    // split across two banks (MAME ROM_CONTINUE at +0x100000).
+    struct sprite_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<sprite_spec, 3> sprite_pairs{{
+        {"epr-14622.b5", "epr-14619.b1", 0x000000},
+        {"epr-14623.b6", "epr-14620.b2", 0x040000},
+        {"epr-14624.b7", "epr-14621.b3", 0x080000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x40000 || odd.size() != 0x40000)
+            continue;  // like Shinobi: missing sprites render silently
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+            r.roms.sprite_gfx[pair.base + 0x100000 + i * 2] =
+                even[0x20000 + i];
+            r.roms.sprite_gfx[pair.base + 0x100000 + i * 2 + 1] =
+                odd[0x20000 + i];
+        }
+    }
+
+    // Z80 program (first 32 KiB of the 64 KiB chip) + banked sample ROM.
+    {
+        std::vector<uint8_t> tmp;
+        if (read_game_entry(path, "epr-14614.a10", tmp) &&
+            tmp.size() >= r.roms.sound_prog.size())
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(),
+                        r.roms.sound_prog.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+        if (read_game_entry(path, "epr-14615.a11", tmp) &&
+            tmp.size() == 0x20000)
+            std::memcpy(r.roms.sound_data.data(), tmp.data(), tmp.size());
+    }
+    return r;
+}
+
 }  // namespace
 
 system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
@@ -417,6 +520,8 @@ system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
         return load_alien_syndrome(path);
     if (r.set == system16b_rom_set::aurail)
         return load_aurail(path);
+    if (r.set == system16b_rom_set::riot_city)
+        return load_riot_city(path);
 
     // 1) Program image (256 KiB - Shinobi's own size, half the shared
     //    buffer). Prefer the consolidated flat image; otherwise assemble
