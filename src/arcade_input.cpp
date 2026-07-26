@@ -224,6 +224,8 @@ bool arcade_input::initialize_network_link() {
     // same way the input link's ports do.
     if (const char* mode = std::getenv("WHITTY_NETPLAY"))
         m_netplay = *mode == '1';
+    if (const char* two = std::getenv("WHITTY_TWO_PLAYER"))
+        m_two_player_session = *two == '1';
     g_netplay_active.store(m_netplay, std::memory_order_release);
     std::fprintf(stderr, "Netplay link: %s (node %s)\n",
                  m_netplay ? "ON" : "off",
@@ -682,15 +684,23 @@ void arcade_input::exchange_network_input(const input_state& local_state) {
     combined.coin2 = combined.coin2 || player2.coin1 || player2.coin2;
     combined.p2_start =
         combined.p2_start || player2.start || player2.p2_start;
-    // A netplay session has two players by definition, so either cabinet's
-    // start button starts the two-player game. Without this a player has to
-    // know that the board's second-player start lives on another key - and
-    // pressing the obvious one silently begins a single-player game that
-    // the other cabinet can only watch.
-    if (m_netplay && combined.start) {
+    // A two-player session has two players by definition, so the start
+    // button starts the two-player game. Without this a player has to know
+    // that the board's second-player start lives on another key - and
+    // pressing the obvious one silently begins a single-player game, which
+    // on a split screen or a second machine leaves the other player with
+    // nothing to do but watch.
+    if ((m_netplay || m_two_player_session) && combined.start) {
         combined.p2_start = true;
         combined.start = false;
     }
+    // ...and a coin credits both slots. A board wants two credits before it
+    // will start a two-player game, so without this the start button appears
+    // to do nothing after the single coin a player naturally inserts. Both
+    // slots feed the same counter on these boards, so one press buys the two
+    // credits the session already knows it needs.
+    if ((m_netplay || m_two_player_session) && combined.coin1)
+        combined.coin2 = true;
     combined.p2_stick_x = player2.left_stick_x;
     combined.p2_stick_y = player2.left_stick_y;
     for (std::size_t button = 0; button < std::size(combined.p2_buttons);

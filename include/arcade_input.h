@@ -160,6 +160,10 @@ private:
     // machine waiting on the other in the common case.
     static constexpr int netplay_delay_frames = 3;
     static constexpr int netplay_ring = 64;
+    // The launch said this is a two-player session, so the start button is
+    // the board's two-player start. Set for a shared cabinet, a split
+    // screen, twin monitors and two machines alike.
+    bool m_two_player_session{false};
     bool m_netplay{false};
     uint32_t m_netplay_frame{0};
     std::array<input_state, netplay_ring> m_netplay_local{};

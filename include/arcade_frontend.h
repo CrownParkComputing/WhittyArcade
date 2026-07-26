@@ -34,6 +34,10 @@ struct rom_selection_result {
     bool twin_separate_monitors{false};
     // Linked pair sharing one display, half the desktop per cabinet.
     bool twin_one_screen{false};
+    // A session started as two-player. The board's second-player start is
+    // then what the start button presses, so choosing a two-player game
+    // begins a two-player game rather than a solo one on a shared screen.
+    bool two_player{false};
     // Arcade wall: one ROM per column, all running at once across the
     // primary display. Empty unless the wall was chosen; entry 0 is this
     // process's own game.

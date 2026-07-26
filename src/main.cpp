@@ -64,6 +64,7 @@ struct runtime_options {
     bool twin_screen{};
     bool network_pair{};
     bool twin_one_screen{};
+    bool two_player{};
     std::vector<std::string> positional;
 };
 
@@ -105,6 +106,8 @@ runtime_options parse_runtime_options(int argc, char* argv[]) {
             options.network_pair = true;
         } else if (argument == "--twin-one-screen") {
             options.twin_one_screen = true;
+        } else if (argument == "--two-player") {
+            options.two_player = true;
         } else {
             options.positional.emplace_back(argument);
         }
@@ -346,7 +349,7 @@ public:
     bool start(const std::string& executable, const std::string& rom_path,
                const std::string& bios_path, bool explicit_bios_path,
                uint16_t port_base, bool independent_pair,
-               bool one_screen = false) {
+               bool one_screen = false, bool two_player = false) {
         stop();
         std::vector<std::string> arguments{
             executable,
@@ -358,6 +361,7 @@ public:
         // The second cabinet loads settings.ini for itself, so the shared-
         // display choice has to travel on the command line.
         if (one_screen) arguments.emplace_back("--twin-one-screen");
+        if (two_player) arguments.emplace_back("--two-player");
         arguments.push_back(rom_path);
         if (explicit_bios_path) arguments.push_back(bios_path);
         m_process = spawn_child(executable, arguments);
@@ -604,6 +608,10 @@ int main(int argc, char* argv[]) {
             cabinet_launch_mode::single);
     int cabinet_node = runtime.cabinet_node;
     bool one_screen_pair = runtime.twin_one_screen;
+    // Set by the launch, not by the board: a session begun as two-player
+    // must begin a two-player game. The second cabinet process is told on
+    // its command line, so both halves of a pair agree.
+    bool two_player_session = runtime.two_player;
     wall_companions wall;
     int wall_audible_applied = -1;
     settings.wall_slot = runtime.wall_slot;
@@ -661,6 +669,7 @@ int main(int argc, char* argv[]) {
                 settings.twin_separate_monitors =
                     selection.twin_separate_monitors;
                 one_screen_pair = selection.twin_one_screen;
+                two_player_session = selection.two_player;
                 // An arcade wall runs a different game per column. This
                 // process takes column 0 and spawns one plain single-cabinet
                 // launch per remaining column; nothing is shared between
@@ -737,7 +746,7 @@ int main(int argc, char* argv[]) {
             pair_port_base = choose_pair_port_base();
             if (!companion.start(argv[0], rom_path, bios_path,
                                  explicit_bios_path, pair_port_base,
-                                 false, one_screen_pair)) {
+                                 false, one_screen_pair, true)) {
                 std::fprintf(stderr,
                              "Could not start the second cabinet process (execv"
                              "p failed). WhittyArcade was launched as \"%s\". "
@@ -750,6 +759,16 @@ int main(int argc, char* argv[]) {
                 cabinet_node = 1;
             }
         }
+        // Every launch that began as two-player says so, whether the two
+        // players share this cabinet, a split screen, two monitors or two
+        // machines. The board's start button then starts a two-player game.
+        if (two_player_session ||
+            launch_mode == cabinet_launch_mode::independent_pair ||
+            launch_mode == cabinet_launch_mode::linked_pair ||
+            launch_mode == cabinet_launch_mode::linked_network)
+            set_environment("WHITTY_TWO_PLAYER", "1");
+        else
+            unset_environment("WHITTY_TWO_PLAYER");
         configure_cabinet_environment(
             cabinet_node, pair_port_base,
             native_model2_link &&

@@ -149,6 +149,13 @@ struct launcher_menu::implementation {
     // game to find out that two-player across machines is unavailable.
     std::string status_text;
     bool status_good{};
+    // Rows the current list draws greyed out and refuses to open.
+    std::vector<int> unavailable_rows;
+
+    bool row_unavailable(int index) const {
+        return std::find(unavailable_rows.begin(), unavailable_rows.end(),
+                         index) != unavailable_rows.end();
+    }
     bool sdl_initialized{};
     bool ttf_initialized{};
     std::vector<SDL_Gamepad*> controllers;
@@ -910,16 +917,21 @@ struct launcher_menu::implementation {
         for (int index = first; index < end; ++index) {
             const int y = list_top + (index - first) * row_height;
             if (index == selected) {
-                SDL_SetRenderDrawColor(renderer, 19, 75, 101, 245);
+                if (row_unavailable(index))
+                    SDL_SetRenderDrawColor(renderer, 38, 46, 55, 245);
+                else
+                    SDL_SetRenderDrawColor(renderer, 19, 75, 101, 245);
                 const SDL_FRect highlight =
                     frect(horizontal_margin, y + 2,
                           logical_width - horizontal_margin * 2,
                           row_height - 4);
                 SDL_RenderFillRect(renderer, &highlight);
             }
+            const bool blocked = row_unavailable(index);
             rendered_text label = make_text(renderer, font,
                 (index == selected ? ">  " : "   ") + rows[index],
-                index == selected ? accent : white);
+                blocked ? SDL_Color{96, 110, 124, 255} :
+                    index == selected ? accent : white);
             draw_text(renderer, label, horizontal_margin + 12, y + 11,
                       &label_clip);
             destroy_text(label);
@@ -1007,7 +1019,14 @@ struct launcher_menu::implementation {
     int select(const std::string& title, const std::string& description,
                const std::vector<std::string>& items,
                const std::string& back_label, int initial_selection,
-               const std::function<bool()>& interrupt = {}) {
+               const std::function<bool()>& interrupt = {},
+               const std::vector<int>& unavailable = {}) {
+        // Scoped to this list: the next screen decides for itself.
+        unavailable_rows = unavailable;
+        struct clear_on_exit {
+            std::vector<int>& rows;
+            ~clear_on_exit() { rows.clear(); }
+        } clear{unavailable_rows};
         std::vector<std::string> rows = items;
         rows.push_back(back_label);
         const int total = static_cast<int>(rows.size());
@@ -1108,7 +1127,7 @@ struct launcher_menu::implementation {
                 if (selected < 0) selected += total;
                 redraw = true;
             }
-            if (activate)
+            if (activate && !row_unavailable(selected))
                 return selected < static_cast<int>(items.size()) ? selected : -1;
         }
     }
@@ -1812,14 +1831,15 @@ int launcher_menu::select(const std::string& title,
                           const std::string& description,
                           const std::vector<std::string>& items,
                           const std::string& back_label,
-                          int initial_selection) {
+                          int initial_selection,
+                          const std::vector<int>& unavailable) {
     if (!m_impl->ready())
         return fallback_select(title, description, items, back_label,
                                initial_selection);
     SDL_SetWindowTitle(m_impl->window, title.c_str());
     SDL_RaiseWindow(m_impl->window);
     return m_impl->select(title, description, items, back_label,
-                          initial_selection);
+                          initial_selection, {}, unavailable);
 }
 
 int launcher_menu::select_grid(
