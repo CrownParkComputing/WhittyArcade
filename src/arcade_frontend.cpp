@@ -749,7 +749,10 @@ int browse_library_grid(
         }
         // Decoded local artwork, keyed by index into choices.
     std::map<std::size_t, banner::banner_image> local_art;
-    int sort_mode = 0;         // 0 A-Z, 1 most played, 2 recently added
+    // 0 A-Z, 1 most played, 2 recently added, 3 last played. The browser
+    // opens on Last Played: the games from the previous session are the
+    // ones most likely wanted again.
+    int sort_mode = 3;
         // Paging: By Board / By Publisher turn the grid into a carousel - one
         // page per board or publisher, flipped with PgUp/PgDn or the shoulder
         // buttons, each page showing every game that belongs to it.
@@ -821,6 +824,9 @@ int browse_library_grid(
                             return a.last_played > b.last_played;
                     } else if (sort_mode == 2) {
                         if (a.added != b.added) return a.added > b.added;
+                    } else if (sort_mode == 3) {
+                        if (a.last_played != b.last_played)
+                            return a.last_played > b.last_played;
                     }
                     return choices[a.index].label < choices[b.index].label;
                 });
@@ -834,7 +840,8 @@ int browse_library_grid(
             }
             std::string view_name =
                 sort_mode == 1 ? "Most Played" :
-                sort_mode == 2 ? "Recently Added" : "A - Z";
+                sort_mode == 2 ? "Recently Added" :
+                sort_mode == 3 ? "Last Played" : "A - Z";
             if (play_style && *play_style > 0)
                 view_name = std::string(
                     play_style_names[static_cast<std::size_t>(*play_style)]) +
@@ -1017,6 +1024,7 @@ int browse_library_grid(
             }
             if (selected_game == launcher_menu::view_change) {
                 std::vector<std::string> view_items{
+                    "Last Played  |  pick up where you left off",
                     "All Games  |  A - Z",
                     "Most Played  |  your launch history",
                     "Recently Added  |  newest ROM files first",
@@ -1033,19 +1041,23 @@ int browse_library_grid(
                     "or filter by how many players a game supports.",
                     view_items, "Back");
                 if (view == 0) {
-                    sort_mode = 0;
+                    sort_mode = 3;
                     page_mode = 0;
                     page_index = 0;
                 } else if (view == 1) {
-                    sort_mode = 1;
+                    sort_mode = 0;
+                    page_mode = 0;
+                    page_index = 0;
                 } else if (view == 2) {
-                    sort_mode = 2;
+                    sort_mode = 1;
                 } else if (view == 3) {
+                    sort_mode = 2;
+                } else if (view == 4) {
                     // Straight into the pages: one per board, first board
                     // first, PgUp/PgDn or the shoulders flip between them.
                     page_mode = 1;
                     page_index = 0;
-                } else if (view == 5 && play_style) {
+                } else if (view == 6 && play_style) {
                     const int style = menu.select(
                         "Play Style",
                         "Alternating games take turns on one cabinet; "
@@ -1059,7 +1071,7 @@ int browse_library_grid(
                          "2P Linked Cabinets  |  twin-cabinet racing"},
                         "Back");
                     if (style >= 0 && style <= 4) *play_style = style;
-                } else if (view == 4) {
+                } else if (view == 5) {
                     // Straight into the pages: one per publisher, flipped
                     // with PgUp/PgDn or the shoulders.
                     page_mode = 2;

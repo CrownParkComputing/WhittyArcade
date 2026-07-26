@@ -844,6 +844,25 @@ int main(int argc, char* argv[]) {
         }
         const bool local_pair =
             launch_mode == cabinet_launch_mode::linked_pair;
+        // Check the machine before promising each cabinet a display: a
+        // two-screen linked launch on a one-monitor host would stack two
+        // fullscreen windows on top of each other. With fewer displays
+        // than cabinets, fall back to the shared-screen layout - windowed
+        // halves for a pair, compositor tiling beyond that. Decided before
+        // the spawn so both processes agree.
+        if (cabinet_node == 0 && !one_screen_pair &&
+            (local_pair ||
+             launch_mode == cabinet_launch_mode::linked_network)) {
+            int display_count = 0;
+            if (SDL_DisplayID* displays = SDL_GetDisplays(&display_count))
+                SDL_free(displays);
+            if (display_count > 0 && display_count < cabinet_count) {
+                whitty_wall_log::note(
+                    "only %d display(s) for %d cabinets: sharing one screen",
+                    display_count, cabinet_count);
+                one_screen_pair = true;
+            }
+        }
         if (cabinet_node == 0 && local_pair) {
             pair_port_base = choose_pair_port_base();
             // Opened before the spawn, not after it: a pair that fails to
