@@ -484,12 +484,22 @@ struct launcher_menu::implementation {
         int left;
         int top;
         int rows_visible;
+        int gap;
+        bool list;
     };
 
-    static grid_metrics measure_grid(int top) {
-        constexpr int gap = 18;
-        constexpr int preferred_card = 150;
+    static grid_metrics measure_grid(int top, bool list) {
+        const int gap = list ? 8 : 18;
         const int usable = logical_width - horizontal_margin * 2;
+        if (list) {
+            // One game per row: a small thumbnail and the title beside it.
+            constexpr int row_height = 48;
+            const int rows_visible = std::max(
+                1, (list_bottom - top + gap) / (row_height + gap));
+            return {1, usable, row_height, row_height,
+                    horizontal_margin, top, rows_visible, gap, true};
+        }
+        constexpr int preferred_card = 150;
         const int columns =
             std::max(1, (usable + gap) / (preferred_card + gap));
         const int card_width = (usable - gap * (columns - 1)) / columns;
@@ -502,7 +512,7 @@ struct launcher_menu::implementation {
         const int rows_visible =
             std::max(1, (list_bottom - top + gap) / (card_height + gap));
         return {columns, card_width, card_height, cover_height,
-                horizontal_margin, top, rows_visible};
+                horizontal_margin, top, rows_visible, gap, false};
     }
 
     // Uploaded cover textures, keyed by item index. The source pointer is kept
@@ -547,7 +557,8 @@ struct launcher_menu::implementation {
             const std::function<bool()>& interrupt = {},
             bool paging = false,
             const launcher_menu::cover* banner = nullptr,
-            bool info = false) {
+            bool info = false,
+            bool list = false) {
         const int total = static_cast<int>(items.size());
         std::vector<int> chosen;
         if (total == 0) return chosen;
@@ -570,7 +581,7 @@ struct launcher_menu::implementation {
         menu_stick sticks;
         bool redraw = true;
         for (;;) {
-            const grid_metrics metrics = measure_grid(grid_top);
+            const grid_metrics metrics = measure_grid(grid_top, list);
             const int row = selected / metrics.columns;
             if (row < first_row) first_row = row;
             if (row >= first_row + metrics.rows_visible)
@@ -724,7 +735,7 @@ struct launcher_menu::implementation {
                    bool paging = false,
                    const launcher_menu::cover* banner = nullptr,
                    bool info = false) {
-        constexpr int gap = 18;
+        const int gap = metrics.gap;
         SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
         SDL_RenderClear(renderer);
 
@@ -816,6 +827,96 @@ struct launcher_menu::implementation {
                 const auto held =
                     std::find(chosen.begin(), chosen.end(), index);
                 const bool taken = held != chosen.end();
+
+                if (metrics.list) {
+                    // A row: selection bar, a small thumbnail letterboxed
+                    // to its own aspect (title screens are 4:3, IGDB
+                    // covers 3:4), the name beside it, the player badge at
+                    // the right edge.
+                    if (active || taken) {
+                        if (active)
+                            SDL_SetRenderDrawColor(renderer, 19, 75, 101,
+                                                   245);
+                        else
+                            SDL_SetRenderDrawColor(renderer, 15, 52, 70,
+                                                   245);
+                        const SDL_FRect bar = frect(
+                            x - 6, y - 3, metrics.card_width + 12,
+                            metrics.card_height + 6);
+                        SDL_RenderFillRect(renderer, &bar);
+                    }
+                    constexpr int thumb_slot = 64;
+                    const launcher_menu::cover details =
+                        cover_for ? cover_for(index)
+                                  : launcher_menu::cover{};
+                    SDL_Texture* texture =
+                        grid_texture_for(textures, index, details);
+                    if (texture && details.width > 0 &&
+                        details.height > 0) {
+                        int thumb_w = metrics.cover_height *
+                                      details.width /
+                                      std::max(details.height, 1);
+                        thumb_w = std::min(thumb_w, thumb_slot);
+                        const int thumb_h = metrics.cover_height;
+                        const SDL_FRect art = frect(
+                            x + (thumb_slot - thumb_w) / 2, y,
+                            thumb_w, thumb_h);
+                        SDL_RenderTexture(renderer, texture, nullptr, &art);
+                    } else {
+                        SDL_SetRenderDrawColor(renderer, 19, 30, 41, 255);
+                        const SDL_FRect plate = frect(
+                            x, y, thumb_slot, metrics.cover_height);
+                        SDL_RenderFillRect(renderer, &plate);
+                    }
+                    rendered_text label = make_text(
+                        renderer, font,
+                        items[static_cast<std::size_t>(index)],
+                        active ? accent : white,
+                        metrics.card_width - thumb_slot - 140);
+                    draw_text(renderer, label, x + thumb_slot + 18,
+                              y + (metrics.card_height - label.height) / 2);
+                    destroy_text(label);
+                    if (taken) {
+                        const int slot = static_cast<int>(
+                            std::distance(chosen.begin(), held)) + 1;
+                        rendered_text badge = make_text(
+                            renderer, font, std::to_string(slot), white);
+                        const SDL_FRect plate = frect(
+                            x + metrics.card_width - 130, y + 8, 28, 28);
+                        SDL_SetRenderDrawColor(renderer, 8, 13, 20, 220);
+                        SDL_RenderFillRect(renderer, &plate);
+                        draw_text(renderer, badge,
+                                  x + metrics.card_width - 120, y + 10);
+                        destroy_text(badge);
+                    }
+                    if (details.badge && *details.badge) {
+                        TTF_Font* small = hint_font ? hint_font : font;
+                        rendered_text mark = make_text(
+                            renderer, small, details.badge,
+                            SDL_Color{12, 18, 26, 255});
+                        const SDL_Color tone =
+                            details.badge_tone == 1 ?
+                                SDL_Color{86, 206, 255, 255} :
+                            details.badge_tone == 2 ?
+                                SDL_Color{255, 190, 74, 255} :
+                                SDL_Color{124, 214, 128, 255};
+                        const int plate_w = mark.width + 12;
+                        const int plate_h = mark.height + 6;
+                        const int plate_x =
+                            x + metrics.card_width - plate_w - 6;
+                        const int plate_y =
+                            y + (metrics.card_height - plate_h) / 2;
+                        SDL_SetRenderDrawColor(renderer, tone.r, tone.g,
+                                               tone.b,
+                                               active ? 255 : 205);
+                        const SDL_FRect plate =
+                            frect(plate_x, plate_y, plate_w, plate_h);
+                        SDL_RenderFillRect(renderer, &plate);
+                        draw_text(renderer, mark, plate_x + 6, plate_y + 3);
+                        destroy_text(mark);
+                    }
+                    continue;
+                }
 
                 const SDL_FRect card{
                     static_cast<float>(x - 4), static_cast<float>(y - 4),
@@ -1876,7 +1977,7 @@ int launcher_menu::select_grid(
         const std::string& back_label, int initial_selection,
         std::function<cover(int)> cover_for, std::function<bool()> tick,
         std::function<bool()> interrupt, bool paging, const cover* banner,
-        bool info) {
+        bool info, bool list_view) {
     // No window means no artwork; the text selector is the honest fallback.
     if (!m_impl->ready())
         return fallback_select(title, description, items, back_label,
@@ -1885,7 +1986,7 @@ int launcher_menu::select_grid(
     const std::vector<int> chosen =
         m_impl->run_grid(title, description, items, back_label,
                          initial_selection, cover_for, tick, 0, interrupt,
-                         paging, banner, info);
+                         paging, banner, info, list_view);
     return chosen.empty() ? -1 : chosen.front();
 }
 

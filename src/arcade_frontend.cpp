@@ -1010,7 +1010,8 @@ int browse_library_grid(
                     return arrived;
                 },
                 interrupt, page_mode != 0, banner_ptr,
-                !board_info.empty());
+                !board_info.empty(),
+                /*list_view=*/true);
             if (selected_game == launcher_menu::interrupted)
                 return launcher_menu::interrupted;
             if (selected_game == launcher_menu::info_request) {
