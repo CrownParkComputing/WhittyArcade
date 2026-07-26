@@ -560,6 +560,20 @@ int main() {
         return 1;
     }
 
+    // WHITTY_TITLE_CAPTURE=<name>[:frames] arms the launcher-icon capture
+    // so the whole path - present counting, scene readback, BMP on disk -
+    // can be proven on the harness's real frames.
+    if (const char* capture = std::getenv("WHITTY_TITLE_CAPTURE")) {
+        std::string spec(capture);
+        int frames = 120;
+        const std::size_t colon = spec.find(':');
+        if (colon != std::string::npos) {
+            frames = std::atoi(spec.c_str() + colon + 1);
+            spec.resize(colon);
+        }
+        presenter.arm_title_capture(spec, frames > 0 ? frames : 120);
+    }
+
     if (replay_rom) {
         const int result = s22_replay::run(presenter, replay_rom);
         presenter.shutdown();
