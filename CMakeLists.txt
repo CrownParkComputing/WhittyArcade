@@ -1289,11 +1289,14 @@ add_executable(system16b_boot_test
     src/high_scores.cpp
     src/sega/system16b/system16b_rom.cpp
     src/sega/system16b/system16b_machine_shinobi.cpp
+    src/sega/system16b/system16b_audio.cpp
 )
 target_include_directories(system16b_boot_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
-target_link_libraries(system16b_boot_test PRIVATE m68000_cpu PkgConfig::MINIZIP)
+target_link_libraries(system16b_boot_test PRIVATE m68000_cpu chips_z80
+    arcade_audio_output ymfm segapcm OpenAL::OpenAL Threads::Threads
+    PkgConfig::MINIZIP)
 add_test(NAME system16b_input_test COMMAND system16b_boot_test --input-test)
 
 add_executable(system16b_audio_test

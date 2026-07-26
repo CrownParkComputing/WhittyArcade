@@ -20,7 +20,7 @@ class m68000_cpu;
 
 namespace system16b {
 
-constexpr std::size_t kRomBytes          = 0x40000;   // 256 KiB program image
+constexpr std::size_t kRomBytes          = kProgramRomBytes;
 constexpr std::size_t kTileRamBytes      = 0x10000;
 constexpr std::size_t kTextRamBytes      = 0x01000;
 constexpr std::size_t kSpriteRamBytes    = 0x00800;
@@ -32,7 +32,7 @@ constexpr std::size_t kWorkRamBytes      = 0x10000;
 // on the buffer size. Reference them as system16b::kSoundProgRomBytes /
 // ::kSoundDataRomBytes at the use site.
 
-constexpr std::size_t kTileGfxBytes      = 0x20000;   // per plane, 3 planes
+constexpr std::size_t kTileGfxBytes      = kGfxFileBytes; // per plane, 3 planes
 
 constexpr int kScreenW         = 320;
 constexpr int kScreenH         = 224;
@@ -167,6 +167,48 @@ public:
 
     std::array<uint32_t, kScreenPixels> frame_buffer_{};
     high_score_runtime high_scores_{"shinobi4"};
+
+public:
+    // Selects the per-game bits the shared board carries: the high-score
+    // table key and the cabinet's factory DIP defaults.
+    void set_game(::system16b::system16b_rom_set set) {
+        high_scores_ = high_score_runtime(
+            ::system16b::system16b_rom_loader::set_short_name(set));
+        if (set == ::system16b::system16b_rom_set::alien_syndrome) {
+            // Demo sounds on, 3 lives, 150-second timer, normal difficulty.
+            dsw2_ = 0xfd;
+            // ROM board 171-5358 wires the sprite bank lines differently:
+            // MAME segas16b.cpp alternate_banklist. 255 = no ROM there.
+            static constexpr std::array<uint8_t, 16> alternate_banklist{
+                0, 255, 255, 255, 255, 255, 255, 3,
+                255, 255, 255, 2, 255, 1, 0, 255};
+            sprite_banklist_ = alternate_banklist.data();
+        } else if (set == ::system16b::system16b_rom_set::aurail) {
+            // Upright, demo sounds on, 3 lives, normal difficulty.
+            dsw2_ = 0xfd;
+            // ROM board 171-5704: 512 KiB program, 8 identity-mapped
+            // sprite banks of 128 KiB, and bankable tiles - the register
+            // at 0x3f0000 maps each of the tilemap's two 4096-tile slots
+            // onto one of eight pages of tile ROM. The mapper places the
+            // second program ROM pair at 0x080000, not straight after the
+            // first: its own pointer tables say 0x0Axxxx, and jumping
+            // through them with the pair at 0x040000 lands in data.
+            rom_bank1_base_ = 0x80000;
+            sprite_bank_mod_ = 16;
+            tile_banking_ = true;
+        }
+    }
+    // Sprite bank LUT for the current ROM board (identity for Shinobi's).
+    const uint8_t* sprite_banklist_{nullptr};
+    // CPU address of the second 256 KiB program ROM pair (0 = none). The
+    // 315-5195 mapper decides where each pair appears; Aurail's shows up
+    // at 0x080000 while the buffer keeps it at offset 0x40000.
+    uint32_t rom_bank1_base_{0};
+    // Physical 64K-word sprite banks on the board (bank field wraps here).
+    unsigned sprite_bank_mod_{4};
+    // 171-5704 tile banking: two 4096-tile slots, each mapped to a page.
+    bool tile_banking_{false};
+    std::array<uint8_t, 2> tile_banks_{0, 1};
 };
 
 // =====================================================================

@@ -23,23 +23,31 @@
 
 namespace system16b {
 
-constexpr std::size_t kProgramRomBytes = 0x40000;   // 256 KiB
-
-constexpr std::size_t kGfxFileBytes    = 0x20000;    // each GFX ROM
-constexpr std::size_t kSpriteGfxBytes  = 0x80000;    // assembled region
+// Region sizes fit the largest supported set (Aurail); smaller games fill
+// the front of each buffer and leave the tail clear, and every consumer
+// masks with its own game's window, so growth here changes nothing for
+// them.
+constexpr std::size_t kProgramRomBytes = 0x80000;    // 512 KiB
+constexpr std::size_t kGfxFileBytes    = 0x40000;    // per tile plane
+constexpr std::size_t kSpriteGfxBytes  = 0x200000;   // assembled region
 
 // Sound CPU program (Z80): `epr-11361.a10` is 32 KiB and occupies the
 // complete 0x0000-0x7fff program window. Truncating this to 8 KiB mirrors
 // the reset/initialisation code four times and prevents the sound driver
 // from ever reaching its sequencer.
 constexpr std::size_t kSoundProgRomBytes = 0x08000;
-// mpr-11362.a11 sound data bank region is 128 KiB (banked through the
-// Z80 0x8000-0xdfff window by the uPD7759 control port).
-constexpr std::size_t kSoundDataRomBytes = 0x20000;
+// Sound data bank region (banked through the Z80 0x8000-0xdfff window by
+// the uPD7759 control port). Sized for the largest supported layout: the
+// bank offset formula reaches 0x3c000, and Alien Syndrome scatters three
+// 32 KiB sample ROMs across it. Shinobi's single 128 KiB ROM is mirrored
+// into the upper half so its historical modulo addressing is unchanged.
+constexpr std::size_t kSoundDataRomBytes = 0x40000;
 
 enum class system16b_rom_set : uint8_t {
     unknown,
     shinobi_us,
+    alien_syndrome,
+    aurail,
 };
 
 struct system16b_roms {

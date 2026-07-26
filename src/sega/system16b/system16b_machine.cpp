@@ -112,6 +112,7 @@ bool system16b_machine_t::load_roms(const std::string& path) {
         m_board->have_sound_rom_ = false;
     }
 
+    m_board->set_game(result.set);
     m_board->reset_extras();
     m_ready = true;
     return true;
