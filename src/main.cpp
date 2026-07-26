@@ -87,6 +87,25 @@ struct runtime_options {
     std::vector<std::string> positional;
 };
 
+// This process and the one that started it. Windows has no getppid, and a
+// wall column there has no parent to name in its log - the diagnostic still
+// works, it just cannot say who spawned it.
+int whitty_process_id() {
+#if defined(_WIN32)
+    return static_cast<int>(GetCurrentProcessId());
+#else
+    return static_cast<int>(getpid());
+#endif
+}
+
+int whitty_parent_process_id() {
+#if defined(_WIN32)
+    return 0;
+#else
+    return static_cast<int>(getppid());
+#endif
+}
+
 bool set_environment(const char* name, const std::string& value) {
 #if defined(_WIN32)
     return _putenv_s(name, value.c_str()) == 0;
@@ -231,7 +250,9 @@ public:
         // Before any column exists, so the first one is never tiled even
         // briefly.
         whitty_window::register_wall_window_rules();
+#if defined(__linux__)
         m_workspace = whitty_window::find_spare_workspace();
+#endif
         if (m_workspace > 0)
             set_environment("WHITTY_WALL_WORKSPACE",
                             std::to_string(m_workspace));
@@ -269,7 +290,11 @@ public:
 
     // Brings the user to the wall once every column has been sent there, so
     // the desktop does not flick between workspaces as each one starts.
-    void show() const { whitty_window::show_workspace(m_workspace); }
+    void show() const {
+#if defined(__linux__)
+        whitty_window::show_workspace(m_workspace);
+#endif
+    }
 
 private:
     std::vector<child_handle> m_children;
@@ -497,8 +522,8 @@ int run_c139_link_test() {
     // conflict with a real Ridge Racer 2 cabinet link that the user
     // might be running. 17512 / 17513 are well above the 1024 floor
     // and unlikely to collide with anything else.
-    ::setenv("SYSTEM22_C139_LOCAL_PORT", "17512", 1);
-    ::setenv("SYSTEM22_C139_PEER_PORT",  "17513", 1);
+    set_environment("SYSTEM22_C139_LOCAL_PORT", "17512");
+    set_environment("SYSTEM22_C139_PEER_PORT",  "17513");
     // Cabinet 1 sits on 17512, sends to 17513. We re-set the env for
     // cabinet 2 so the local/peer roles swap.
     system22_c139_transport a;
@@ -506,8 +531,8 @@ int run_c139_link_test() {
         std::fprintf(stderr, "c139 link test: transport a init failed\n");
         return 1;
     }
-    ::setenv("SYSTEM22_C139_LOCAL_PORT", "17513", 1);
-    ::setenv("SYSTEM22_C139_PEER_PORT",  "17512", 1);
+    set_environment("SYSTEM22_C139_LOCAL_PORT", "17513");
+    set_environment("SYSTEM22_C139_PEER_PORT",  "17512");
     system22_c139_transport b;
     if (!b.initialize(cabinet2, nullptr, /*forced_node=*/2)) {
         std::fprintf(stderr, "c139 link test: transport b init failed\n");
@@ -659,8 +684,8 @@ int main(int argc, char* argv[]) {
                               runtime.positional.empty()
                                   ? "(none)"
                                   : runtime.positional.front().c_str(),
-                              static_cast<int>(getpid()),
-                              static_cast<int>(getppid()));
+                              static_cast<int>(whitty_process_id()),
+                              static_cast<int>(whitty_parent_process_id()));
 #if defined(__linux__)
     // SDL turns SIGINT/SIGTERM into SDL_EVENT_QUIT, which is how a wall
     // column that is signalled looks exactly like one the user closed. Taking
