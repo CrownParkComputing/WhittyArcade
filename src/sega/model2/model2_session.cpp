@@ -47,12 +47,18 @@ public:
         if (!m_machine->initialize(rom_path)) return false;
         if (const char* node = std::getenv("MODEL2_COMM_NODE")) {
             const int cabinet = std::atoi(node);
-            if (cabinet == 1 || cabinet == 2) {
+            if (cabinet >= 1 && cabinet <= 8) {
                 m_link_cabinet = cabinet;
+                const char* count_text =
+                    std::getenv("MODEL2_COMM_COUNT");
+                const int ring = count_text ? std::atoi(count_text) : 2;
                 m_gpu_renderer->set_cabinet_status(
-                    "CABINET " + std::to_string(cabinet) +
-                    "  |  WAITING FOR CABINET " +
-                    std::to_string(cabinet == 1 ? 2 : 1) + "...");
+                    ring > 2 ?
+                        "CABINET " + std::to_string(cabinet) +
+                            "  |  WAITING FOR THE RING..." :
+                        "CABINET " + std::to_string(cabinet) +
+                            "  |  WAITING FOR CABINET " +
+                            std::to_string(cabinet == 1 ? 2 : 1) + "...");
             }
         }
         // Resolve game identity once, here at the composition root; the board
@@ -354,10 +360,15 @@ private:
             if (m_link_cabinet &&
                 m_machine->communication_linked() != m_link_connected) {
                 m_link_connected = m_machine->communication_linked();
+                const char* count_text =
+                    std::getenv("MODEL2_COMM_COUNT");
+                const int ring = count_text ? std::atoi(count_text) : 2;
                 m_gpu_renderer->set_cabinet_status(
                     "CABINET " + std::to_string(m_link_cabinet) +
                     (m_link_connected ?
-                        "  |  LINKED: 2 CABINETS" :
+                        "  |  LINKED: " +
+                            std::to_string(ring > 2 ? ring : 2) +
+                            " CABINETS" :
                         "  |  WAITING FOR PEER..."));
             }
             m_machine->render_video_layers();
