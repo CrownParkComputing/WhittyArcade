@@ -1148,6 +1148,16 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                         cabinet_launch_mode::single, 0, false, false, {}};
             }
             if (play_style == 3) {
+                // One monitor and nothing to decide: split it. The question
+                // is only worth asking when a second display exists.
+                int display_count = 0;
+                if (SDL_DisplayID* displays = SDL_GetDisplays(&display_count))
+                    SDL_free(displays);
+                if (display_count <= 1) {
+                    return {rom_selection_action::selected, choice.path,
+                            cabinet_launch_mode::independent_pair, 0, false,
+                            false, {}};
+                }
                 const int mode = menu.select(
                     "Start " + choice.label + " - Twin Screens",
                     "Each player gets an aspect-correct view of the same "
@@ -1160,6 +1170,14 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 return {rom_selection_action::selected, choice.path,
                         cabinet_launch_mode::independent_pair, 0, mode == 1,
                         false, {}};
+            }
+            int link_displays = 0;
+            if (SDL_DisplayID* displays = SDL_GetDisplays(&link_displays))
+                SDL_free(displays);
+            if (link_displays <= 1) {
+                // Two linked cabinets on the one screen, half each.
+                return {rom_selection_action::selected, choice.path,
+                        cabinet_launch_mode::linked_pair, 0, false, true, {}};
             }
             const int mode = menu.select(
                 "Start " + choice.label + " - Linked Cabinets",
@@ -1241,20 +1259,29 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     continue;
                 }
 
+                // Both machines are here, so the styles are offered
+                // directly rather than behind a generic "network play"
+                // entry: each one lists only the games that support it and
+                // launches both cabinets itself.
                 const int multiplayer_kind = menu.select_interruptible(
-                    "Multiplayer - Network - Player 2 Connected",
-                    "Network Two Player shares one supported game's controls "
-                    "and picture between the apps. System Link uses original "
-                    "arcade cabinet communication for Sega Rally, "
-                    "Ridge Racer 2, and Rave Racer.",
-                    {"Network Two Player",
-                     "Arcade System Link  |  Sega Rally + System 22 racing"},
+                    "Two Machines Connected - Choose How To Play",
+                    "Both players run the whole game on their own machine "
+                    "and only controls travel between them, so each screen "
+                    "is full speed with its own sound. Pick a style and the "
+                    "second machine launches automatically.",
+                    {"2P Alternating  |  take turns, a screen each",
+                     "2P Simultaneous  |  both players at once",
+                     "Arcade System Link  |  original cabinet link"},
                     "Back to Main Menu", 0,
                     [lobby] { return !lobby->connected(); });
                 if (multiplayer_kind == launcher_menu::interrupted) continue;
                 if (multiplayer_kind < 0) break;
 
-                const bool system_link = multiplayer_kind == 1;
+                const bool system_link = multiplayer_kind == 2;
+                const arcade_multiplayer_mode wanted_mode =
+                    multiplayer_kind == 0 ?
+                        arcade_multiplayer_mode::alternating :
+                        arcade_multiplayer_mode::simultaneous;
                 std::vector<std::size_t> linked_indices;
                 std::vector<std::string> linked_labels;
                 for (std::size_t index = 0; index < choices.size(); ++index) {
@@ -1265,24 +1292,30 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     if (!identity || !manifest ||
                         (system_link ?
                             !supports_native_system_link(*manifest) :
-                            !supports_network_two_player(*manifest)) ||
+                            (!supports_network_two_player(*manifest) ||
+                             manifest->multiplayer != wanted_mode)) ||
                         !lobby->peer_has_game(identity->short_name))
                         continue;
                     linked_indices.push_back(index);
                     linked_labels.push_back(
                         std::string(system_link ? "SYSTEM LINK  |  " :
-                                                  "NETWORK 2P  |  ") +
+                            wanted_mode ==
+                                    arcade_multiplayer_mode::alternating ?
+                                "ALTERNATING  |  " : "SIMULTANEOUS  |  ") +
                         choices[index].label);
                 }
                 const int selected = menu.select_interruptible(
                     system_link ? "Arcade System Link" :
-                                  "Network Two Player",
+                        wanted_mode == arcade_multiplayer_mode::alternating ?
+                            "Two Machines - Alternating" :
+                            "Two Machines - Simultaneous",
                     linked_labels.empty() ?
                         (system_link ?
-                            "No supported System Link ROM is installed on "
-                            "both systems." :
-                            "No supported two-player ROM is installed on both "
-                            "systems.") :
+                            "No System Link game is installed on both "
+                            "machines." :
+                            "No game of this style is installed on both "
+                            "machines. Try the other style, or check the "
+                            "same game is present on each.") :
                         "Choose once here. Player 2 will launch the same game "
                         "automatically.",
                     linked_labels, "Back to Network Multiplayer", 0,
