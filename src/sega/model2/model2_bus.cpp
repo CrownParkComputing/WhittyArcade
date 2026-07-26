@@ -2,6 +2,7 @@
 #include "sega/model1/model1_io_board.h"
 #include "mb86233_native.h"
 #include "platform_paths.h"
+#include "wall_log.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -412,6 +413,8 @@ void model2_bus::tick_comm_peer() {
         m_communication_ram[0x00] = 0x01;
         m_communication_ram[0x02] = m_comm_node_id;
         m_communication_ram[0x03] = 0x02;
+        whitty_wall_log::note("comm: linked, local port %u peer port %u",
+                              m_comm_local_port, m_comm_peer_port);
         std::printf("Model 2 cabinet %u: linked as node %u of 2\n",
                     m_comm_node_id, m_comm_node_id);
     } else if (!m_comm_link_alive) {
@@ -1839,6 +1842,9 @@ void model2_bus::vblank() {
                              "run alone (peer port %u)\n",
                              m_comm_node_id, m_comm_local_port,
                              m_comm_peer_port);
+                whitty_wall_log::note(
+                    "comm: no peer on local port %u (peer port %u) after 4s",
+                    m_comm_local_port, m_comm_peer_port);
             }
             if (m_comm_fg && m_comm_link_timer == 0) {
                 m_comm_link_alive = true;
