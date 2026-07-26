@@ -850,7 +850,7 @@ int main(int argc, char* argv[]) {
         // than cabinets, fall back to the shared-screen layout - windowed
         // halves for a pair, compositor tiling beyond that. Decided before
         // the spawn so both processes agree.
-        if (cabinet_node == 0 && !one_screen_pair &&
+        if (cabinet_node == 0 && !one_screen_pair && cabinet_count <= 2 &&
             (local_pair ||
              launch_mode == cabinet_launch_mode::linked_network)) {
             int display_count = 0;
@@ -925,11 +925,15 @@ int main(int argc, char* argv[]) {
         // it like any single game. Forcing the value here also stops a
         // fullscreen=0 left behind by the in-game toggle from carrying
         // into the next launch.
+        // Only a one-screen PAIR keeps windowed halves - that layout is
+        // the point of choosing One Screen for two cabinets. A bigger
+        // ring runs every cabinet fullscreen; on one monitor they stack
+        // and the player alt-tabs to the cabinet they are riding, while
+        // the rest keep simulating behind it.
         const bool cabinets_share_display =
-            cabinet_node != 0 &&
+            cabinet_node != 0 && cabinet_count <= 2 && one_screen_pair &&
             (launch_mode == cabinet_launch_mode::linked_pair ||
-             launch_mode == cabinet_launch_mode::linked_network) &&
-            (one_screen_pair || cabinet_count > 2);
+             launch_mode == cabinet_launch_mode::linked_network);
         settings.fullscreen =
             settings.wall_count <= 1 && !cabinets_share_display;
         // Escape hatch for bring-up: a windowed presenter window starts
@@ -959,14 +963,18 @@ int main(int argc, char* argv[]) {
             // One Screen instead keeps both cabinets on display 0 and lets
             // the half-desktop placement separate them.
             //
-            // A ring bigger than a pair must NOT follow the one-display-per-
-            // cabinet rule: cabinet N would target display N-1, and a window
-            // sent to a display that does not exist stalls that cabinet -
-            // which cuts the comm ring, leaving only the adjacent survivors
-            // linked to each other.
-            settings.display_index =
-                (settings.twin_one_screen || cabinet_count > 2) ?
-                    0 : cabinet_node - 1;
+            // A cabinet must never target a display that does not exist:
+            // a window sent there stalls that cabinet, which cuts the comm
+            // ring, leaving only the adjacent survivors linked. Cabinets
+            // spread across the displays the machine actually has and wrap
+            // beyond that - on one monitor a ring simply stacks its
+            // fullscreen cabinets.
+            int display_count = 0;
+            if (SDL_DisplayID* displays = SDL_GetDisplays(&display_count))
+                SDL_free(displays);
+            if (display_count < 1) display_count = 1;
+            settings.display_index = settings.twin_one_screen ?
+                0 : (cabinet_node - 1) % display_count;
             if (settings.twin_one_screen) {
                 std::printf("Starting cabinet %d on the %s half of display 1\n",
                             cabinet_node,
