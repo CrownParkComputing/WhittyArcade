@@ -2,8 +2,10 @@ name: Windows x86-64 build
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

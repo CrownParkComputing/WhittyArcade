@@ -1,0 +1,121 @@
+name: Release
+
+# Builds every platform from the tagged commit and publishes them as one
+# GitHub release on this repository. Push a tag to run it:
+#
+#     git tag -a v0.3.0 -m "WhittyArcade v0.3.0"
+#     git push origin v0.3.0
+#
+# It can also be started by hand from the Actions tab - choose the tag, not a
+# branch, in "Use workflow from", so what ships is what the tag names.
+#
+# The three build workflows are called rather than copied, so a release is
+# built by the same jobs that already guard every push, tests included. Each
+# uploads its finished archive; nothing here repacks them.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    uses: ./.github/workflows/windows.yml
+
+  cachyos:
+    uses: ./.github/workflows/linux.yml
+
+  distributions:
+    uses: ./.github/workflows/linux-portability.yml
+
+  publish:
+    needs: [windows, cachyos, distributions]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Refuse anything that is not a tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "This workflow publishes a tagged build; run it from a tag."
+            exit 1
+          fi
+
+      - name: Check out the tagged source
+        uses: actions/checkout@v7
+
+      - name: Collect every platform's archive
+        uses: actions/download-artifact@v7
+        with:
+          path: downloads
+          merge-multiple: true
+
+      - name: List what will be published
+        run: |
+          set -euo pipefail
+          cmake -E make_directory release
+          # Only the shippable archives: the Windows debug symbols travel in
+          # an artifact of their own and are deliberately left behind.
+          find downloads -type f \
+            \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \
+               -o -name '*.zip' -o -name '*.zip.sha256' \) \
+            -exec cp {} release/ \;
+          ls -l release
+          # A release missing a platform is worse than no release: it looks
+          # complete and quietly leaves someone with nothing to download.
+          for expected in \
+              WhittyArcade-windows-x86_64.zip \
+              WhittyArcade-cachyos-x86_64.tar.gz \
+              WhittyArcade-ubuntu-26.04-x86_64.tar.gz \
+              WhittyArcade-debian-13-x86_64.tar.gz \
+              WhittyArcade-fedora-43-x86_64.tar.gz \
+              WhittyArcade-opensuse-tumbleweed-x86_64.tar.gz; do
+            if [ ! -f "release/$expected" ]; then
+              echo "missing from this build: $expected"
+              exit 1
+            fi
+          done
+
+      - name: Verify every checksum before anything is published
+        run: |
+          set -euo pipefail
+          cd release
+          for sum in *.sha256; do
+            sha256sum -c "$sum"
+          done
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # A tag carrying a suffix - v0.3.0-preview.1, -rc.2 - is not a
+          # finished release, and saying so is what keeps "latest" honest.
+          prerelease=""
+          case "$TAG" in
+            *-*) prerelease="--prerelease" ;;
+          esac
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Re-running a tag replaces its files rather than failing, so a
+            # single platform can be rebuilt without remaking the release.
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" \
+              --title "WhittyArcade $TAG" \
+              --generate-notes \
+              $prerelease \
+              release/*
+          fi
+          gh release view "$TAG" --json assets \
+            --jq '.assets[] | "\(.name)  \(.size) bytes"'

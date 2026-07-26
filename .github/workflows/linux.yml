@@ -1,9 +1,13 @@
 name: CachyOS build
 
 on:
+  # Branch pushes only: a tag push is the release workflow's business, and it
+  # calls this one itself rather than letting two builds race.
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -57,21 +61,29 @@ jobs:
 
       - name: Stage Linux executable
         run: |
-          cmake -E make_directory artifact
-          cmake -E copy build/WhittyArcade artifact/WhittyArcade
-          cmake -E copy RELEASE_README.md artifact/README.md
-          cmake -E copy LICENSE artifact/LICENSE.txt
-          cmake -E copy THIRD_PARTY_NOTICES.md artifact/THIRD_PARTY_NOTICES.md
-          strip --strip-unneeded artifact/WhittyArcade
-          chmod +x artifact/WhittyArcade
-          artifact/WhittyArcade --list-roms > /dev/null
-          cd artifact
-          sha256sum WhittyArcade > WhittyArcade.sha256
+          package=WhittyArcade-cachyos-x86_64
+          cmake -E make_directory "$package"
+          cmake -E copy build/WhittyArcade "$package/WhittyArcade"
+          cmake -E copy RELEASE_README.md "$package/README.md"
+          cmake -E copy LICENSE "$package/LICENSE.txt"
+          cmake -E copy THIRD_PARTY_NOTICES.md \
+            "$package/THIRD_PARTY_NOTICES.md"
+          strip --strip-unneeded "$package/WhittyArcade"
+          chmod +x "$package/WhittyArcade"
+          "$package/WhittyArcade" --list-roms > /dev/null
+          (cd "$package" && sha256sum WhittyArcade > WhittyArcade.sha256)
+          # Tarred here rather than in the release job: an uploaded artifact
+          # is a zip, which loses the executable bit, so what ships has to be
+          # the archive this job built and not a repack of its contents.
+          tar -czf "$package.tar.gz" "$package"
+          sha256sum "$package.tar.gz" > "$package.tar.gz.sha256"
 
       - name: Upload CachyOS x86_64 build
         uses: actions/upload-artifact@v7
         with:
           name: WhittyArcade-cachyos-x86_64
-          path: artifact/
+          path: |
+            WhittyArcade-cachyos-x86_64.tar.gz
+            WhittyArcade-cachyos-x86_64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30
