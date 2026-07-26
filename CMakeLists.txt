@@ -224,6 +224,12 @@ add_library(chips_z80 STATIC third_party/chips/z80_impl.cpp)
 target_include_directories(chips_z80 SYSTEM PUBLIC third_party/chips)
 target_compile_options(chips_z80 PRIVATE -w)
 
+# Intel MCS-51 microcontroller core (MAME BSD-3-Clause, standalone
+# adaptation) - the i8751 protection MCU on several System 16B boards.
+add_library(mcs51 STATIC third_party/mcs51/mcs51.cpp)
+target_include_directories(mcs51 SYSTEM PUBLIC third_party/mcs51)
+target_compile_options(mcs51 PRIVATE -w)
+
 # Portable Namco System 1 core, adapted from the user's Galaga '88 host port.
 add_library(namcos1_core STATIC
     third_party/namcos1/namcos1_machine.c
@@ -445,6 +451,7 @@ target_link_libraries(WhittyArcade
     SDL3::SDL3
     ${OPENAL_LIBRARY}
     ${WHITTY_GLEW_TARGET}
+    mcs51
     musashi
     m37710
     v60
@@ -1284,6 +1291,10 @@ endif()
 # image, runs N virtual frames, and dumps the rendered RGBA frame to
 # /tmp/system16b_frame.rgba. Used to verify the board's renderer and
 # memory map end-to-end without needing display capture.
+add_executable(mcs51_core_test tests/mcs51_core_test.cpp)
+target_link_libraries(mcs51_core_test PRIVATE mcs51)
+add_test(NAME mcs51_core_test COMMAND mcs51_core_test)
+
 add_executable(system16b_boot_test
     tests/system16b_boot_test.cpp
     src/high_scores.cpp
@@ -1295,7 +1306,7 @@ target_include_directories(system16b_boot_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 target_link_libraries(system16b_boot_test PRIVATE m68000_cpu chips_z80
-    arcade_audio_output ymfm segapcm OpenAL::OpenAL Threads::Threads
+    mcs51 arcade_audio_output ymfm segapcm OpenAL::OpenAL Threads::Threads
     PkgConfig::MINIZIP)
 add_test(NAME system16b_input_test COMMAND system16b_boot_test --input-test)
 
@@ -1322,8 +1333,8 @@ target_include_directories(system16b_audio_integration_test PRIVATE
 target_include_directories(system16b_audio_integration_test SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/chips)
 target_link_libraries(system16b_audio_integration_test PRIVATE
-    arcade_audio_output m68000_cpu chips_z80 ymfm segapcm OpenAL::OpenAL
-    Threads::Threads PkgConfig::MINIZIP)
+    arcade_audio_output m68000_cpu chips_z80 mcs51 ymfm segapcm
+    OpenAL::OpenAL Threads::Threads PkgConfig::MINIZIP)
 
 set(SHINOBI_TEST_ROM "" CACHE FILEPATH
     "Optional Shinobi archive used by the native sound integration test")

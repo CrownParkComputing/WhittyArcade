@@ -29,6 +29,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <fstream>
 #include <memory>
 #include <vector>
@@ -181,6 +182,8 @@ int main(int argc, char** argv) {
                     rl.roms.sound_data.size());
         board->have_sound_rom_ = true;
     }
+    if (!rl.roms.mcu.empty())
+        board->install_mcu(rl.roms.mcu.data(), rl.roms.mcu.size());
     z80_t z80{};
     uint64_t z80_pins = z80_init(&z80);
     // The Z80 sound drivers pace their sequencers on the YM2151's timer
@@ -221,8 +224,59 @@ int main(int argc, char** argv) {
     bool boot_counter_advanced = false;
     uint32_t last_pc = 0;
     unsigned unchanged_pc_frames = 0;
+    // Runs a main-CPU slice honouring the mapper's 68000 controls: the
+    // i8751 can hold the CPU in reset (register 2) and raise its
+    // interrupts (register 4).
+    const auto run_main_mcu = [&](int cycles) {
+        if (board->cpu_reset_hold_) return;
+        if (board->main_spin_cycles_ > 0) {
+            const int spun = cycles < board->main_spin_cycles_
+                                 ? cycles
+                                 : board->main_spin_cycles_;
+            board->main_spin_cycles_ -= spun;
+            cycles -= spun;
+            if (cycles <= 0) return;
+        }
+        if (board->cpu_reset_release_) {
+            board->cpu_reset_release_ = false;
+            cpu.reset();
+        }
+        if (board->mapper_irq_pending_ >= 0) {
+            cpu.set_irq(board->mapper_irq_pending_);
+            board->mapper_irq_pending_ = -1;
+            run_main(*board, bus, cpu, 4000);
+            cpu.set_irq(0);
+        }
+        run_main(*board, bus, cpu, cycles);
+    };
+
     for (int f = 0; f < n_frames; ++f) {
-        run_main(*board, bus, cpu, kCyclesPerFrame);
+        if (board->has_mcu()) {
+            const auto t0 = std::chrono::steady_clock::now();
+            double main_ms = 0.0, mcu_ms = 0.0;
+            int rem = kCyclesPerFrame;
+            while (rem > 0) {
+                const int chunk = rem > 2000 ? 2000 : rem;
+                const auto a = std::chrono::steady_clock::now();
+                run_main_mcu(chunk);
+                const auto b = std::chrono::steady_clock::now();
+                rem -= chunk;
+                board->mcu_execute(chunk / 15);
+                const auto c = std::chrono::steady_clock::now();
+                main_ms += std::chrono::duration<double, std::milli>(b - a).count();
+                mcu_ms += std::chrono::duration<double, std::milli>(c - b).count();
+            }
+            if (std::getenv("SHINOBI_TRACE_TIME"))
+                std::fprintf(stderr,
+                             "frame %d: main=%.1fms mcu=%.1fms pc=%06x "
+                             "hold=%d irq=%d\n", f, main_ms, mcu_ms,
+                             cpu.program_counter(),
+                             board->cpu_reset_hold_ ? 1 : 0,
+                             board->mapper_irq_pending_);
+            (void)t0;
+        } else {
+            run_main(*board, bus, cpu, kCyclesPerFrame);
+        }
         {
             static bool crash_reported = false;
             const uint32_t pc_now = cpu.program_counter();
@@ -327,9 +381,21 @@ int main(int argc, char** argv) {
         // run to its RTE -- exception entry alone costs ~44 cycles, so a
         // token slice would leave the handler body (including the game's
         // vblank bookkeeping) permanently unexecuted.
-        cpu.set_irq(4);
-        run_main(*board, bus, cpu, 4000);
-        cpu.set_irq(0);
+        if (board->has_mcu()) {
+            // The vblank line lands on the MCU's INT0; the 68000 only
+            // hears about it if the MCU relays it via mapper register 4.
+            board->mcu_vblank(true);
+            board->mcu_execute(500);
+            board->mcu_vblank(false);
+            for (int slice = 0; slice < 4; ++slice) {
+                run_main_mcu(1000);
+                board->mcu_execute(70);
+            }
+        } else {
+            cpu.set_irq(4);
+            run_main(*board, bus, cpu, 4000);
+            cpu.set_irq(0);
+        }
         const uint8_t vblank = board->work_ram()[kVblankCounterOff];
         if (vblank != last_vblank) {
             boot_counter_advanced = true;

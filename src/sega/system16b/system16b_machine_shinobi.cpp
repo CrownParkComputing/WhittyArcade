@@ -12,6 +12,8 @@
 // MAME's BSD-3-Clause `segas16b_v.cpp / segaic16.cpp / sega16sp.cpp` drivers.
 
 #include "sega/system16b/system16b_machine.h"
+
+#include "mcs51.h"
 #include "namco/galaxian/galaxian_machine.h"
 
 #include <algorithm>
@@ -75,12 +77,55 @@ constexpr int kSpritePalBase = 0x400;
 
 }  // namespace
 
+board::board() = default;
+board::~board() = default;
+
+void board::install_mcu(const uint8_t* rom, std::size_t size) {
+    mcu_ = std::make_unique<i8751_cpu>();
+    mcu_->load_rom(rom, static_cast<uint32_t>(size));
+    // The MCU's MOVX space is the 315-5195 register file (MAME
+    // mcu_data_map: 0x00-0x1f, mirrored across the byte). Everything it
+    // does to the 68000's world - reading inputs it relays, poking work
+    // RAM, programming the memory map at boot - goes through the
+    // mapper's read/write ops.
+    mcu_->set_external_memory(
+        [this](uint32_t address) -> uint8_t {
+            return mapper_reg_read(address & 0x1fu);
+        },
+        [this](uint32_t address, uint8_t data) {
+            mapper_reg_write(address & 0x1fu, data);
+        });
+    // Port 1 reads the SERVICE port: coins, service, test, both starts.
+    mcu_->set_port_in(1, [this]() -> uint8_t { return service_input_; });
+    // Port 1 writes: MAME spins the 68000 for 20000 cycles here, or the
+    // two processors fight over the mapper's read/write-op registers and
+    // Golden Axe eventually wedges. Same remedy.
+    mcu_->set_port_out(1, [this](uint8_t) { main_spin_cycles_ = 20000; });
+    mcu_->reset();
+}
+
+void board::mcu_execute(int cycles) {
+    if (mcu_) mcu_->execute(cycles);
+}
+
+void board::mcu_vblank(bool state) {
+    if (mcu_)
+        mcu_->set_input_line(0 /* MCS51_INT0_LINE */,
+                             state ? 1 /* ASSERT */ : 0 /* CLEAR */);
+}
+
 uint8_t board::mapper_read(uint32_t address) noexcept {
     // The 315-5195 is byte-wide on the low lane of the 68000 bus. Its
     // 32-byte register file is the fallback mapping at every address not
     // claimed by a configured region.
     if ((address & 1u) == 0) return 0xff;
-    const unsigned reg = (address >> 1) & 0x1fu;
+    return mapper_reg_read((address >> 1) & 0x1fu);
+}
+
+// Register-level access: the 68000 reaches these through odd bus bytes,
+// the i8751 protection MCU reaches the same file directly through its
+// MOVX external-data space.
+uint8_t board::mapper_reg_read(unsigned reg) noexcept {
     switch (reg) {
     case 0x00:
     case 0x01: return mapper_regs_[reg];
@@ -95,20 +140,52 @@ uint8_t board::mapper_read(uint32_t address) noexcept {
 
 void board::mapper_write(uint32_t address, uint8_t data) noexcept {
     if ((address & 1u) == 0) return;
-    const unsigned reg = (address >> 1) & 0x1fu;
-    if (std::getenv("SHINOBI_TRACE_MAPPER")) {
+    mapper_reg_write((address >> 1) & 0x1fu, data);
+}
+
+void board::mapper_reg_write(unsigned reg, uint8_t data) noexcept {
+    static const bool trace_mapper =
+        std::getenv("SHINOBI_TRACE_MAPPER") != nullptr;
+    if (trace_mapper) {
         static int reported = 0;
         if (reported < 60)
-            std::fprintf(stderr, "mapper write #%d %06x reg %02x = %02x\n",
-                         ++reported, address, reg, data);
+            std::fprintf(stderr, "mapper write #%d reg %02x = %02x\n",
+                         ++reported, reg, data);
     }
     mapper_regs_[reg] = data;
-    if (reg == 0x03) {
+    if (reg == 0x02) {
+        // Halt/reset control for the 68000 (MAME: writing 3 asserts the
+        // CPU's reset line, 0 releases it). The i8751 games hold the
+        // 68000 here while the MCU programs the memory map at power-on.
+        // Entering reset also drops any pending interrupt request: the
+        // 68000 scribbles across this register file while it executes
+        // its pre-configuration garbage, and servicing a stale level-7
+        // from that phase after release put the core in an NMI storm.
+        const bool hold = (data & 3u) == 3u;
+        if (hold != cpu_reset_hold_) {
+            cpu_reset_hold_ = hold;
+            if (hold)
+                mapper_irq_pending_ = -1;
+            else
+                cpu_reset_release_ = true;
+        }
+    } else if (reg == 0x04) {
+        // IRQ lines to the 68000, negative logic: write 0x0B for IRQ4.
+        // On the i8751 boards the vblank interrupt reaches the main CPU
+        // only through here - the MCU takes INT0 and relays it. Level 7
+        // (the NMI) is refused: no 16B program raises it on purpose, and
+        // a held NMI line retriggers the core on every instruction.
+        const int level = static_cast<int>(~data & 7u);
+        if ((data & 7u) != 7u && level != 7)
+            mapper_irq_pending_ = level;
+    } else if (reg == 0x03) {
         // Main -> sound command. PBF/INT remains asserted until the Z80
         // consumes the mapper port, rather than being dropped at frame end.
         sound_latch_ = data;
         sound_irq_pending_ = true;
-        if (std::getenv("SHINOBI_TRACE_SOUND"))
+        static const bool trace_sound =
+            std::getenv("SHINOBI_TRACE_SOUND") != nullptr;
+        if (trace_sound)
             std::fprintf(stderr, "shinobi sound command %02x\n", data);
     } else if (reg == 0x05) {
         if (data == 0x02) {
@@ -263,7 +340,9 @@ void board::byte_write(uint32_t address, uint8_t data) noexcept {
                 // data (MAME rom_5704_bank_w, ACCESSING_BITS_0_7).
                 if (address & 1u) {
                     tile_banks_[(offset >> 1) & 1u] = data & 7u;
-                    if (std::getenv("SHINOBI_TRACE_BANK")) {
+                    static const bool trace_bank =
+                        std::getenv("SHINOBI_TRACE_BANK") != nullptr;
+                    if (trace_bank) {
                         static int reported = 0;
                         if (reported < 64)
                             std::fprintf(stderr,

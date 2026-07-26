@@ -113,6 +113,9 @@ bool system16b_machine_t::load_roms(const std::string& path) {
     }
 
     m_board->set_game(result.set);
+    if (!result.roms.mcu.empty())
+        m_board->install_mcu(result.roms.mcu.data(),
+                             result.roms.mcu.size());
     m_board->reset_extras();
     m_ready = true;
     return true;
@@ -135,10 +138,44 @@ void system16b_machine_t::reset() {
 void system16b_machine_t::run_frame() {
     if (!m_ready || !m_main_cpu) return;
 
+    // With an i8751 on the board the two processors interleave finely:
+    // the MCU boots the machine (holding the 68000 in reset through
+    // mapper register 2), relays inputs, and raises the 68000's vblank
+    // interrupt itself through mapper register 4.
+    const bool mcu = m_board->has_mcu();
+    const auto service_main = [this](int chunk) -> int {
+        if (m_board->cpu_reset_hold_) return chunk;
+        if (m_board->main_spin_cycles_ > 0) {
+            const int spun = chunk < m_board->main_spin_cycles_
+                                 ? chunk
+                                 : m_board->main_spin_cycles_;
+            m_board->main_spin_cycles_ -= spun;
+            if (spun == chunk) return chunk;
+            chunk -= spun;
+        }
+        if (m_board->cpu_reset_release_) {
+            m_board->cpu_reset_release_ = false;
+            m_main_cpu->reset();
+        }
+        if (m_board->mapper_irq_pending_ >= 0) {
+            m_main_cpu->set_irq(m_board->mapper_irq_pending_);
+            m_board->mapper_irq_pending_ = -1;
+            const int used = m_main_cpu->execute(4000);
+            m_main_cpu->set_irq(0);
+            return used + m_main_cpu->execute(chunk > used ? chunk - used
+                                                           : 1);
+        }
+        return m_main_cpu->execute(chunk);
+    };
+
     int remaining = kMainCyclesPerFrame;
     while (remaining > 0) {
-        const int chunk = remaining > 20000 ? 20000 : remaining;
-        remaining -= m_main_cpu->execute(chunk);
+        const int chunk = remaining > (mcu ? 2000 : 20000)
+                              ? (mcu ? 2000 : 20000)
+                              : remaining;
+        remaining -= service_main(chunk);
+        // 8 MHz / 12 clocks per machine cycle against the 10 MHz 68000.
+        if (mcu) m_board->mcu_execute(chunk / 15);
     }
     // Render BEFORE the vblank handler runs: the visible frame was
     // scanned out with the scroll/page register values held during the
@@ -147,13 +184,26 @@ void system16b_machine_t::run_frame() {
     // (and expose not-yet-filled tile pages at scene boundaries).
     m_board->render_frame(const_cast<uint32_t*>(frame_buffer()));
 
-    // VBLANK: assert level-4 long enough for the handler to run to its
-    // RTE. Exception entry alone costs ~44 cycles, and Shinobi's handler
-    // does the per-frame vblank bookkeeping the main loop waits on, so a
-    // token slice would leave the game stuck in its boot wait.
-    m_main_cpu->set_irq(4);
-    m_main_cpu->execute(4000);
-    m_main_cpu->set_irq(0);
+    if (mcu) {
+        // The vblank line lands on the MCU's INT0; its handler decides
+        // what the 68000 hears about it (mapper register 4).
+        m_board->mcu_vblank(true);
+        m_board->mcu_execute(500);
+        m_board->mcu_vblank(false);
+        for (int slice = 0; slice < 4; ++slice) {
+            service_main(1000);
+            m_board->mcu_execute(70);
+        }
+    } else {
+        // VBLANK: assert level-4 long enough for the handler to run to
+        // its RTE. Exception entry alone costs ~44 cycles, and Shinobi's
+        // handler does the per-frame vblank bookkeeping the main loop
+        // waits on, so a token slice would leave the game stuck in its
+        // boot wait.
+        m_main_cpu->set_irq(4);
+        m_main_cpu->execute(4000);
+        m_main_cpu->set_irq(0);
+    }
 
     // Z80 sound CPU @ 5 MHz (main 68000 is 10 MHz, so half the cycles).
     // Same chips/z80.h pin loop as galaxian_machine, plus IORQ handling

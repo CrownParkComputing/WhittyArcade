@@ -139,7 +139,8 @@ std::vector<input_action> relevant_actions(std::string_view short_name) {
              input_action::p2_right, input_action::p2_action1});
     } else if (short_name == "shinobi4" || short_name == "aliensyn" ||
                short_name == "aurail" ||
-               short_name == "riotcity") {
+               short_name == "riotcity" ||
+               short_name == "goldnaxe2") {
         add({input_action::p1_left, input_action::p1_right,
              input_action::p1_up, input_action::p1_down,
              input_action::p1_action1, input_action::p1_action2,
