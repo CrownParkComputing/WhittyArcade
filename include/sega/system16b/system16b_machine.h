@@ -5,6 +5,7 @@
 
 class m68000_bus;
 class m68000_cpu;
+class mcs51_cpu_device;
 
 #include "arcade_types.h"
 #include "high_scores.h"
@@ -46,8 +47,16 @@ constexpr int kSoundCyclesPerFrame = 5'000'000  / 60;
 // decode, and input translation live here.
 class board final {
 public:
-    board() = default;
-    ~board() = default;
+    board();
+    ~board();
+
+    // i8751 protection MCU (Golden Axe, Altered Beast, ...): its whole
+    // outside world is the 315-5195 mapper register file, the SERVICE
+    // input port and the vblank line on INT0.
+    void install_mcu(const uint8_t* rom, std::size_t size);
+    bool has_mcu() const noexcept { return mcu_ != nullptr; }
+    void mcu_execute(int cycles);
+    void mcu_vblank(bool state);
 
     unsigned cpu_read_16(unsigned address);
     void cpu_write_16(unsigned address, unsigned data);
@@ -97,9 +106,13 @@ private:
 
     uint8_t mapper_read(uint32_t address) noexcept;
     void mapper_write(uint32_t address, uint8_t data) noexcept;
+    uint8_t mapper_reg_read(unsigned reg) noexcept;
+    void mapper_reg_write(unsigned reg, uint8_t data) noexcept;
     bool mapper_region(uint32_t address, unsigned& region_out,
                        uint32_t& offset_out) const noexcept;
     uint8_t io_region_read(uint32_t offset) noexcept;
+
+    std::unique_ptr<mcs51_cpu_device> mcu_;
 
     // Hex input -> 32-bit big-endian long (used for boot vectors).
     static uint32_t be_long(const uint8_t* p) noexcept {
@@ -186,6 +199,11 @@ public:
                 0, 255, 255, 255, 255, 255, 255, 3,
                 255, 255, 255, 2, 255, 1, 0, 255};
             sprite_banklist_ = alternate_banklist.data();
+        } else if (set == ::system16b::system16b_rom_set::golden_axe) {
+            // 1 credit to start, demo sounds on, normal difficulty.
+            dsw2_ = 0xfd;
+            sprite_bank_mod_ = 16;
+            mapper_decode_ = true;
         } else if (set == ::system16b::system16b_rom_set::riot_city) {
             // 2 Credits to Start off, demo sounds on, 2 lives, normal.
             dsw2_ = 0xf9;
@@ -202,6 +220,18 @@ public:
     }
     // Sprite bank LUT for the current ROM board (identity for Shinobi's).
     const uint8_t* sprite_banklist_{nullptr};
+    // Mapper register 2: while 3, the 68000 sits on its reset line (the
+    // i8751 boots first and configures the board). The runner honours
+    // these; the board cannot reach the CPU object itself.
+    bool cpu_reset_hold_{false};
+    bool cpu_reset_release_{false};
+    // Mapper register 4: pending 68000 IRQ level requested by the MCU
+    // (-1 = none). Consumed by the runner as a held-then-cleared pulse.
+    int mapper_irq_pending_{-1};
+    // MCU port 1 write: MAME's goldnaxe hack spins the 68000 for 20000
+    // cycles so the MCU's multi-register mapper transactions are not
+    // torn by interleaved 68000 accesses. Consumed by the runner.
+    int main_spin_cycles_{0};
     // Physical 64K-word sprite banks on the board (bank field wraps here).
     unsigned sprite_bank_mod_{4};
     // 171-5704 boards decode the 68000 bus through the 315-5195 mapper

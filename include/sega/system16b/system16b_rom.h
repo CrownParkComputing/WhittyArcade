@@ -49,6 +49,7 @@ enum class system16b_rom_set : uint8_t {
     alien_syndrome,
     aurail,
     riot_city,
+    golden_axe,
 };
 
 struct system16b_roms {
@@ -59,6 +60,8 @@ struct system16b_roms {
     std::array<uint8_t, kSpriteGfxBytes>    sprite_gfx{};
     std::array<uint8_t, kSoundProgRomBytes> sound_prog{};
     std::array<uint8_t, kSoundDataRomBytes> sound_data{};
+    // i8751 protection MCU program (empty when the set has none).
+    std::vector<uint8_t> mcu{};
 
     bool complete() const;
 };

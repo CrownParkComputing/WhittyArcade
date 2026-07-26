@@ -186,6 +186,10 @@ system16b_rom_set system16b_rom_loader::identify_set(const std::string& path) {
     if (read_entry(path, "epr-14612.a7", tmp) &&
         read_entry(path, "epr-14610.a5", tmp))
         return system16b_rom_set::riot_city;
+    // Golden Axe (set 2, US, i8751 317-0112): 68000 pair + MCU dump.
+    if (read_entry(path, "epr-12523.a7", tmp) &&
+        read_entry(path, "317-0112.c2", tmp))
+        return system16b_rom_set::golden_axe;
     // A directory must contain either shinobi_main.bin (the staged
     // 256 KiB program image) OR the MAME file names. A ZIP must contain
     // at least one of shinobi_main.bin or mpr-11363.a14.
@@ -202,6 +206,7 @@ const char* system16b_rom_loader::set_short_name(system16b_rom_set set) {
     case system16b_rom_set::alien_syndrome: return "aliensyn";
     case system16b_rom_set::aurail: return "aurail";
     case system16b_rom_set::riot_city: return "riotcity";
+    case system16b_rom_set::golden_axe: return "goldnaxe2";
     case system16b_rom_set::unknown: return "";
     }
     return "";
@@ -216,6 +221,8 @@ const char* system16b_rom_loader::set_display_name(system16b_rom_set set) {
         return "Aurail (Sega System 16B, US, unprotected)";
     case system16b_rom_set::riot_city:
         return "Riot City (Sega System 16B, Japan)";
+    case system16b_rom_set::golden_axe:
+        return "Golden Axe (Sega System 16B, set 2, i8751)";
     case system16b_rom_set::unknown:    return "Unknown Shinobi-style set";
     }
     return "Unknown Shinobi-style set";
@@ -507,6 +514,113 @@ system16b_rom_load_result load_riot_city(const std::string& path) {
     return r;
 }
 
+
+// Golden Axe (MAME `goldnaxe2`, set 2 US, ROM board 171-5704, i8751
+// 317-0112). The set-2 program pairs and MCU live in the goldnaxe2
+// subdirectory of the merged archive; the shared tile/sprite/sound chips
+// sit in the parent under their 171-5797 socket names (.icN), so every
+// shared chip is looked up under both names. Sprites are three pairs of
+// 256 KiB chips split-loaded 0x100000 apart, like Riot City's.
+system16b_rom_load_result load_golden_axe(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::golden_axe;
+
+    const auto read_any = [&](std::initializer_list<const char*> names,
+                              std::vector<uint8_t>& bytes) {
+        for (const char* name : names)
+            if (read_game_entry(path, name, bytes)) return true;
+        return false;
+    };
+
+    struct pair_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<pair_spec, 2> program_pairs{{
+        {"epr-12523.a7", "epr-12522.a5", 0x00000},
+        {"epr-12521.a8", "epr-12519.a6", 0x40000},
+    }};
+    r.roms.program.fill(0xff);
+    for (const pair_spec& pair : program_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x20000 || odd.size() != 0x20000) {
+            r.error = std::string("missing program pair ") + pair.even +
+                      " + " + pair.odd;
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.program[pair.base + i * 2]     = even[i];
+            r.roms.program[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Tiles: one 128 KiB chip per plane.
+    const auto read_plane = [&](std::initializer_list<const char*> names,
+                                auto& plane) {
+        std::vector<uint8_t> tmp;
+        if (!read_any(names, tmp) || tmp.size() != 0x20000) return false;
+        plane.fill(0);
+        std::memcpy(plane.data(), tmp.data(), tmp.size());
+        return true;
+    };
+    if (!read_plane({"epr-12385.a14", "epr-12385.ic19"},
+                    r.roms.tile_plane0) ||
+        !read_plane({"epr-12386.a15", "epr-12386.ic20"},
+                    r.roms.tile_plane1) ||
+        !read_plane({"epr-12387.a16", "epr-12387.ic21"},
+                    r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (epr-12385/86/87)";
+        return r;
+    }
+
+    struct sprite_spec {
+        const char* even_a; const char* even_b;
+        const char* odd_a;  const char* odd_b;
+        std::size_t base;
+    };
+    static constexpr std::array<sprite_spec, 3> sprite_pairs{{
+        {"mpr-12379.b5", "mpr-12379.ic12",
+         "mpr-12378.b1", "mpr-12378.ic9",  0x000000},
+        {"mpr-12381.b6", "mpr-12381.ic13",
+         "mpr-12380.b2", "mpr-12380.ic10", 0x040000},
+        {"mpr-12383.b7", "mpr-12383.ic14",
+         "mpr-12382.b3", "mpr-12382.ic11", 0x080000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_any({pair.even_a, pair.even_b}, even) ||
+            !read_any({pair.odd_a, pair.odd_b}, odd) ||
+            even.size() != 0x40000 || odd.size() != 0x40000)
+            continue;  // like Shinobi: missing sprites render silently
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+            r.roms.sprite_gfx[pair.base + 0x100000 + i * 2] =
+                even[0x20000 + i];
+            r.roms.sprite_gfx[pair.base + 0x100000 + i * 2 + 1] =
+                odd[0x20000 + i];
+        }
+    }
+
+    // Z80 program + banked sample ROM + the i8751 MCU program.
+    {
+        std::vector<uint8_t> tmp;
+        if (read_any({"epr-12390.a10", "epr-12390.ic8"}, tmp) &&
+            tmp.size() == r.roms.sound_prog.size())
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(), tmp.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+        if (read_any({"mpr-12384.a11", "mpr-12384.ic6"}, tmp) &&
+            tmp.size() == 0x20000)
+            std::memcpy(r.roms.sound_data.data(), tmp.data(), tmp.size());
+        if (read_game_entry(path, "317-0112.c2", tmp) &&
+            tmp.size() == 0x1000)
+            r.roms.mcu = tmp;
+        else
+            r.error = "missing i8751 MCU program 317-0112.c2";
+    }
+    return r;
+}
 }  // namespace
 
 system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
@@ -522,6 +636,8 @@ system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
         return load_aurail(path);
     if (r.set == system16b_rom_set::riot_city)
         return load_riot_city(path);
+    if (r.set == system16b_rom_set::golden_axe)
+        return load_golden_axe(path);
 
     // 1) Program image (256 KiB - Shinobi's own size, half the shared
     //    buffer). Prefer the consolidated flat image; otherwise assemble
