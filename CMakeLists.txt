@@ -526,6 +526,11 @@ set_tests_properties(video_session_lifecycle_test PROPERTIES
 
 add_test(NAME arcade_session_factory_test
     COMMAND WhittyArcade --session-factory-test)
+# Constructs and destroys every board in turn, which reaches the video layer.
+# On a build machine there is no display to reach, so it runs headless like
+# video_session_lifecycle_test above rather than failing for want of a screen.
+set_tests_properties(arcade_session_factory_test PROPERTIES
+    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;WHITTYARCADE_HEADLESS=1")
 add_test(NAME c139_link_test
     COMMAND WhittyArcade --c139-link-test)
 set_tests_properties(c139_link_test PROPERTIES TIMEOUT 60)

@@ -104,6 +104,8 @@ inline std::string run_hyprctl_query(const char* subcommand) {
     return output;
 }
 
+#endif  // __linux__
+
 // The lowest workspace with nothing on it, for an arcade wall to occupy so
 // its columns do not land on top of whatever the user was doing. Hyprland
 // creates workspaces on demand, so an id it has never heard of is by
@@ -141,6 +143,7 @@ inline int spare_workspace_from(const std::string& report,
     return 0;
 }
 
+#if defined(__linux__)
 inline int find_spare_workspace(int highest = 10) {
     return spare_workspace_from(run_hyprctl_query("workspaces"), highest);
 }
@@ -250,12 +253,20 @@ inline bool compositor_geometry_of(const std::string& report, int pid, int& x,
     return false;
 }
 
+#if defined(__linux__)
 inline bool compositor_window_geometry(int& x, int& y, int& width,
                                        int& height) {
     return compositor_geometry_of(run_hyprctl_query("clients"),
                                   static_cast<int>(getpid()), x, y, width,
                                   height);
 }
+#else
+// No compositor to ask. Callers treat this exactly as they treat a window the
+// compositor has not heard of yet, which is the honest answer here.
+inline bool compositor_window_geometry(int&, int&, int&, int&) {
+    return false;
+}
+#endif
 
 // Where the wall's columns agree on which of them is being played.
 //
