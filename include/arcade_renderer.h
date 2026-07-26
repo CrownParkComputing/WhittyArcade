@@ -108,6 +108,7 @@ private:
     int m_fps_texture_width{0};
     int m_fps_texture_height{0};
     std::string m_cabinet_status;
+    bool m_raised_when_linked{false};
     // Player 1/2 corner labels for dual output (built once, drawn per pane).
     uint32_t m_player_label_texture[2]{0, 0};
     int m_player_label_w[2]{0, 0};
