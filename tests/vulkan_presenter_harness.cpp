@@ -316,7 +316,15 @@ int main() {
     }
     // Turn the layers on before the loader builds an instance. Doing it here
     // rather than relying on the caller means the harness always validates.
-    setenv("VK_LOADER_LAYERS_ENABLE", "*validation*", 0);
+    // Only if the caller has not chosen for itself - hence the lookup first,
+    // which is also the whole of what setenv's overwrite flag does.
+    if (!std::getenv("VK_LOADER_LAYERS_ENABLE")) {
+#if defined(_WIN32)
+        _putenv_s("VK_LOADER_LAYERS_ENABLE", "*validation*");
+#else
+        setenv("VK_LOADER_LAYERS_ENABLE", "*validation*", 1);
+#endif
+    }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
