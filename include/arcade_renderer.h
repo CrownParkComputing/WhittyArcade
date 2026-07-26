@@ -109,6 +109,10 @@ private:
     int m_fps_texture_height{0};
     std::string m_cabinet_status;
     bool m_raised_when_linked{false};
+    // One-shot launcher-icon capture: after this many presented frames,
+    // the next CPU-visible frame is saved as titles/<short_name>.bmp.
+    std::string m_title_capture_name;
+    int m_title_capture_countdown{-1};
     // Player 1/2 corner labels for dual output (built once, drawn per pane).
     uint32_t m_player_label_texture[2]{0, 0};
     int m_player_label_w[2]{0, 0};
@@ -260,6 +264,9 @@ public:
     void reset_session_ui();
     void set_single_screen_only(bool enabled);
     void set_cabinet_status(std::string status);
+    // Arms the one-shot title capture for this session's game. Does
+    // nothing when an icon for the game already exists.
+    void arm_title_capture(const std::string& short_name);
     // Names the running board so its cabinet bezel can be
     // fetched. Safe to call on every launch; a name already
     // looked up costs nothing.

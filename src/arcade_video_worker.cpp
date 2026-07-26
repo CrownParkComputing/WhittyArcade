@@ -203,6 +203,13 @@ void arcade_video_worker::set_cabinet_status(std::string status) {
     });
 }
 
+void arcade_video_worker::arm_title_capture(std::string short_name) {
+    enqueue([short_name =
+                 std::move(short_name)](polygon_renderer_gpu& renderer) {
+        renderer.arm_title_capture(short_name);
+    });
+}
+
 void arcade_video_worker::set_board_name(std::string short_name) {
     enqueue([short_name = std::move(short_name)](
                 polygon_renderer_gpu& renderer) mutable {
