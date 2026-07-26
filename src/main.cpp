@@ -774,19 +774,25 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        const bool native_model2_link =
-            std::string_view(identity->short_name) == "srallyc";
-        // System 22 racing titles (Ridge Racer 1/2, Rave Racer, Ace Driver,
-        // Victory Lap) all share the same Namco C139 SCI cabinet-to-cabinet
-        // link cable; the per-game firmware just sets the role / heartbeat
-        // pattern. Drive the predicate from the catalog's multiplayer mode so
-        // adding a new linked System 22 title is a one-line change there.
+        // Which cabinet link a game uses is decided by its board, not by its
+        // name: System 22 racers share Namco's C139 SCI cable, Model 2 games
+        // use Sega's comm board. The catalog says a game is linkable; the
+        // board says which cable that means.
+        //
+        // Both were previously derived independently - one from a hardcoded
+        // short name, the other from the catalog flag alone - so Sega Rally
+        // matched both and every linked launch configured the C139 as well as
+        // the comm board, on the same pair of UDP ports.
         const rom_set_manifest* launch_manifest =
             find_supported_rom_set(identity->short_name);
-        const bool native_system22_link =
+        const bool catalog_linkable =
             launch_manifest &&
             launch_manifest->multiplayer ==
                 arcade_multiplayer_mode::native_link;
+        const bool native_model2_link =
+            catalog_linkable && identity->board == arcade_board_type::model2;
+        const bool native_system22_link =
+            catalog_linkable && identity->board == arcade_board_type::system22;
         const bool native_hardware_link =
             native_model2_link || native_system22_link;
         // launch_manifest is also used below for the two-player input check;

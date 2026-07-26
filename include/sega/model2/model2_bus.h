@@ -197,6 +197,8 @@ private:
     bool m_comm_loopback{};
     bool m_comm_peer_mode{};
     bool m_comm_network{};
+    // Said once, not every frame: a cabinet that never found its partner.
+    bool m_comm_link_reported{false};
     bool m_comm_peer_seen{};
     bool m_comm_link_alive{};
     uint16_t m_comm_link_timer{};

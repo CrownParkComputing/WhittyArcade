@@ -322,6 +322,7 @@ void model2_bus::initialize_comm_board() {
         (!link || std::strcmp(link, "0") != 0);
     m_comm_peer_seen = false;
     m_comm_link_alive = false;
+    m_comm_link_reported = false;
     m_comm_link_timer = 0x00e8; // 58 Hz * 4 seconds in EPR-16726
     m_comm_loopback_frame_valid = false;
     m_communication_ram[0x00] = 0x00;
@@ -1829,6 +1830,16 @@ void model2_bus::vblank() {
             m_comm_zfg ^= 1;
             if (m_comm_fg && m_comm_link_timer != 0)
                 --m_comm_link_timer;
+            if (m_comm_fg && m_comm_link_timer == 0 && m_comm_peer_mode &&
+                !m_comm_peer_seen && !m_comm_link_reported) {
+                m_comm_link_reported = true;
+                std::fprintf(stderr,
+                             "Model 2 cabinet %u: no other cabinet answered "
+                             "on port %u in four seconds - this cabinet will "
+                             "run alone (peer port %u)\n",
+                             m_comm_node_id, m_comm_local_port,
+                             m_comm_peer_port);
+            }
             if (m_comm_fg && m_comm_link_timer == 0) {
                 m_comm_link_alive = true;
                 m_communication_ram[0x00] = 0x01;
