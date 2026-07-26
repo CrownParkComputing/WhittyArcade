@@ -48,6 +48,7 @@ enum class system16b_rom_set : uint8_t {
     shinobi_us,
     alien_syndrome,
     aurail,
+    riot_city,
 };
 
 struct system16b_roms {
