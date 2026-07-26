@@ -1141,9 +1141,94 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         if (picked >= 0) {
             const rom_choice& choice =
                 choices[static_cast<std::size_t>(picked)];
-            if (play_style == 0 || play_style == 1 || play_style == 2) {
-                // One cabinet: a single player, or both players sharing it
-                // exactly as the original game was played.
+            if (play_style == 0) {
+                // No style chosen, so ask - but only when there is something
+                // to ask. A game with no second-player path just starts,
+                // which is what makes the grid feel like a shelf rather than
+                // a form; anything else would put a menu in front of every
+                // launch to serve the few that need one.
+                const launch_capabilities caps = probe_choice(choice);
+                const bool shared_cabinet =
+                    caps.multiplayer != arcade_multiplayer_mode::none;
+                if (!shared_cabinet && !caps.system_link &&
+                    !caps.network_two_player) {
+                    // Genuinely a one-player board: nothing to ask about.
+                    return {rom_selection_action::selected, choice.path,
+                            cabinet_launch_mode::single, 0, false, false, {}};
+                }
+                int wanted = -1;
+                while (wanted < 0) {
+                    const bool peer_ready = lobby && lobby->connected();
+                    std::vector<std::string> how;
+                    std::vector<int> how_style;
+                    how.push_back("Single Player");
+                    how_style.push_back(0);
+                    if (caps.multiplayer ==
+                            arcade_multiplayer_mode::alternating) {
+                        how.push_back(
+                            "2 Players  |  take turns on this cabinet");
+                        how_style.push_back(1);
+                    } else if (caps.multiplayer ==
+                                   arcade_multiplayer_mode::simultaneous) {
+                        how.push_back("2 Players  |  both at once on this "
+                                      "cabinet");
+                        how_style.push_back(2);
+                    }
+                    if (caps.network_two_player) {
+                        how.push_back("2 Players  |  a screen each");
+                        how_style.push_back(3);
+                    }
+                    if (caps.system_link) {
+                        how.push_back(
+                            "Linked Cabinets  |  two machines, linked");
+                        how_style.push_back(4);
+                    }
+                    if (peer_ready) {
+                        how.push_back("2 Players  |  the other computer");
+                        how_style.push_back(5);
+                    }
+                    // Say why the across-computers option is missing rather
+                    // than leaving a player to wonder. The menu is rebuilt if
+                    // a machine turns up while it is open, so the option
+                    // appears the moment it becomes true - no backing out and
+                    // coming in again to find it.
+                    const std::string why =
+                        peer_ready ?
+                            "Another machine is connected, so this game can "
+                            "also be played across both computers." :
+                            "Waiting for another machine on the network - "
+                            "until one appears, only what this cabinet can "
+                            "do on its own is available.";
+                    const int how_chosen = menu.select_interruptible(
+                        choice.label, why, how, "Back", 0,
+                        [lobby, peer_ready] {
+                            return (lobby && lobby->connected()) != peer_ready;
+                        });
+                    if (how_chosen == launcher_menu::interrupted)
+                        continue;   // a machine arrived, or left
+                    if (how_chosen < 0 ||
+                        how_chosen >= static_cast<int>(how_style.size()))
+                        break;
+                    wanted = how_style[static_cast<std::size_t>(how_chosen)];
+                }
+                if (wanted < 0) continue;   // backed out
+                if (wanted == 5) {
+                    // Across two computers: the partner launches itself.
+                    const auto identity = identify_arcade_game(choice.path);
+                    if (identity) lobby->launch_game(identity->short_name);
+                    return {rom_selection_action::selected, choice.path,
+                            cabinet_launch_mode::linked_network, 1, false,
+                            false, {}};
+                }
+                if (wanted == 0 || wanted == 1 || wanted == 2) {
+                    return {rom_selection_action::selected, choice.path,
+                            cabinet_launch_mode::single, 0, false, false, {}};
+                }
+                play_style = wanted;   // twin screens or linked cabinets
+            }
+            if (play_style == 1 || play_style == 2) {
+                // One cabinet, both players sharing it exactly as the
+                // original game was played.
                 return {rom_selection_action::selected, choice.path,
                         cabinet_launch_mode::single, 0, false, false, {}};
             }
