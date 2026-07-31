@@ -263,37 +263,45 @@ target_include_directories(model1_io SYSTEM PUBLIC
 target_compile_options(model1_io PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(model1_io PUBLIC chips_z80)
 
-# Burnout 3: Takedown — Xbox kernel replacement layer (static recompilation).
-# Provides the 64 MB Xbox memory layout, kernel thunk table, path translation,
-# and I/O stubs that the recompiled game code runs against.
-set(BURNOUT3_KERNEL_DIR "/home/jon/Burnout3Recomp/src/kernel")
-add_library(burnout3_recomp STATIC
-    ${BURNOUT3_KERNEL_DIR}/xbox_memory_layout.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_bridge.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_thunks.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_path.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_memory.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_file.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_thread.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_sync.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_hal.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_xbox.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_ob.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_io.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_crypto.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_rtl.c
-    ${BURNOUT3_KERNEL_DIR}/kernel_pool.c
-)
-target_include_directories(burnout3_recomp PUBLIC
-    ${BURNOUT3_KERNEL_DIR}
-)
-target_include_directories(burnout3_recomp BEFORE PRIVATE
-    ${BURNOUT3_KERNEL_DIR}
-)
-target_compile_definitions(burnout3_recomp PRIVATE
-    _GNU_SOURCE
-    WIN32_LEAN_AND_MEAN
-)
+# Burnout 3: Takedown — Xbox kernel (minimal shim or full port)
+#
+# Default: burnout3_kernel_shim.c — a lightweight Linux-native kernel
+# providing mmap-based 64 MB memory, stubbed thunks, and path translation.
+# This is sufficient for bootable bring-up.
+#
+# For the full kernel port (15 Windows-dependent files from
+# Burnout3Recomp/src/kernel/), enable: -DBURNOUT3_KERNEL_PORT=ON
+option(BURNOUT3_KERNEL_PORT "Build the full Xbox kernel port from Burnout3Recomp" OFF)
+
+if(BURNOUT3_KERNEL_PORT)
+    set(BURNOUT3_KERNEL_DIR "/home/jon/Burnout3Recomp/src/kernel")
+    add_library(burnout3_recomp STATIC
+        ${BURNOUT3_KERNEL_DIR}/xbox_memory_layout.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_bridge.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_thunks.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_path.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_memory.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_file.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_thread.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_sync.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_hal.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_xbox.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_ob.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_io.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_crypto.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_rtl.c
+        ${BURNOUT3_KERNEL_DIR}/kernel_pool.c
+    )
+    target_include_directories(burnout3_recomp PUBLIC ${BURNOUT3_KERNEL_DIR})
+    target_include_directories(burnout3_recomp BEFORE PRIVATE ${BURNOUT3_KERNEL_DIR})
+    target_compile_definitions(burnout3_recomp PRIVATE _GNU_SOURCE WIN32_LEAN_AND_MEAN)
+    set(BURNOUT3_KERNEL_LIB burnout3_recomp)
+else()
+    # Minimal shim — compiles everywhere, no Windows dependency
+    add_library(burnout3_recomp STATIC src/xbox/burnout3_kernel_shim.c)
+    target_include_directories(burnout3_recomp PUBLIC src/xbox)
+    set(BURNOUT3_KERNEL_LIB burnout3_recomp)
+endif()
 
 # Model 1 sound devices. YM3438 synthesis uses the BSD-3-Clause ymfm library;
 # the standalone MultiPCM core is adapted from MAME's BSD-3-Clause source.
@@ -497,7 +505,10 @@ target_link_libraries(WhittyArcade
     mb86233
     model1_video
     model1_io
-    burnout3_recomp
+    ${BURNOUT3_KERNEL_LIB}
+    # model1_audio calls into the DSB directly, so the binary needs it even
+    # though no other library pulls it in.
+    model1_dsb
     model1_multipcm
     arcade_audio_output
     m68000_cpu

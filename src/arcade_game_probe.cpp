@@ -2,6 +2,7 @@
 // menus and persistence tools do not depend on every board's ROM loader.
 
 #include "arcade_catalog.h"
+#include "game_plugin_host.h"
 
 #include "namco/galaxian/galaxian_rom.h"
 #include "capcom/gng/gng_rom.h"
@@ -58,6 +59,14 @@ std::optional<arcade_game_identity> identify_arcade_game(
         return arcade_game_identity{
             arcade_board_type::system246,
             system246_rom_loader::set_short_name(system246)};
+
+    // An installed game plugin. Checked before the ROM loaders because a
+    // plugin's bundle is a plain directory that none of them would claim, and
+    // because discovery has already decided which library owns that folder -
+    // asking the loaders first would only waste the work.
+    if (const discovered_game* plugin = find_plugin_game(path))
+        return arcade_game_identity{arcade_board_type::game_plugin,
+                                    plugin->short_name};
 
     // Any other ".acgame" manifest is still a System 246/256 game -- the board
     // boots any manifest directly, so a collection title with no built-in enum

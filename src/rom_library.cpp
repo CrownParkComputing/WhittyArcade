@@ -1,4 +1,5 @@
 #include "rom_library.h"
+#include "game_plugin_host.h"
 
 #include "arcade_catalog.h"
 #include "arcade_settings.h"
@@ -524,6 +525,13 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
         if (!identified) return false;
         const std::string identity =
             xbox360_rom_loader::set_short_name(identified.set);
+        // A title that now ships as a native plugin is no longer offered as an
+        // Xbox 360 ROM set: the loader still RECOGNISES its package, which is
+        // what an import reads, but the plugin owns the game. Offering both
+        // would put two entries with one short name in front of the player and
+        // leave the audit disagreeing with itself about which board it is.
+        if (const rom_set_manifest* owner = find_supported_rom_set(identity))
+            if (owner->board == arcade_board_type::game_plugin) return false;
         const std::string normalized = normalized_path(candidate);
         if (!seen_paths.insert(normalized).second) return true;
         const xbox360_content_shape preferred =
@@ -619,6 +627,24 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
             offer_xbox360(candidate, "  [incomplete package]");
     }
 
+    // Installed game plugins. They are not archives and no loader would claim
+    // them, so they are offered directly from what discovery already found -
+    // their bundle folder is the path, which is what identify_arcade_game
+    // resolves back to a game.
+    for (const rom_set_manifest& manifest : supported_rom_sets()) {
+        if (manifest.board != arcade_board_type::game_plugin) continue;
+        const discovered_game* plugin = find_plugin_game(manifest.short_name);
+        if (plugin == nullptr) continue;
+        const std::string normalized = normalized_path(plugin->bundle_path);
+        if (!seen_paths.insert(normalized).second) continue;
+        std::string label = manifest.display_name;
+        label += "  (installed)";
+        if (normalized == normalized_current) label += "  [current]";
+        choices.push_back({normalized, std::move(label),
+                           arcade_board_type::game_plugin,
+                           plugin->publisher});
+    }
+
     std::sort(choices.begin(), choices.end(),
               [](const rom_choice& left, const rom_choice& right) {
                   if (left.board != right.board) return left.board < right.board;
@@ -628,6 +654,13 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
 }
 
 rom_audit_result audit_rom_path(const std::string& path) {
+    // A game plugin has no ROM set to audit. Discovery already opened its
+    // library, checked the ABI and asked it to describe itself, so reaching
+    // here at all means it is ready - reporting "audit failed" would mark a
+    // working game as broken purely because it has no archive.
+    if (const discovered_game* plugin = find_plugin_game(path))
+        return {true, plugin->short_name, "Installed game plugin."};
+
     // System 246/256 collection games are ".acgame" manifests with no catalog
     // entry -- the board boots any of them, so there is nothing per-title to
     // look up. Audit them against the manifest's own file list instead of
