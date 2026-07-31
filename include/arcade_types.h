@@ -17,6 +17,9 @@ enum class arcade_board_type : uint8_t {
     capcom_gng,
     namco_galaga,
     namco_system1,
+    // Not a machine: a game that ships as a plugin and is discovered beside its
+    // data rather than compiled in.
+    game_plugin,
 };
 
 // Host-window policy is explicit so closing the application cannot be

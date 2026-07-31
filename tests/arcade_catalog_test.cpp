@@ -60,7 +60,14 @@ int main() {
         assert(board_index < arcade_board_count);
         ++games_per_board[board_index];
     }
-    for (std::size_t count : games_per_board) assert(count != 0);
+    // Every board that emulates hardware ships with games. The plugin shelf
+    // does not: the games that appear on it are discovered on disk at start-up,
+    // so an empty built-in count there is the correct state, not a gap.
+    for (std::size_t board = 0; board < arcade_board_count; ++board) {
+        if (arcade_boards()[board].type == arcade_board_type::game_plugin)
+            continue;
+        assert(games_per_board[board] != 0);
+    }
 
     // Native arcade System Link is deliberately opt-in. Only titles whose
     // cabinet communications path is currently enabled (Ridge Racer 2, Rave
@@ -103,8 +110,11 @@ int main() {
                       arcade_board_type::system246);
     for (xbox360_rom_set set : {
              xbox360_rom_set::robotron_2084,
-             xbox360_rom_set::geometry_wars,
-             xbox360_rom_set::geometry_wars_2,
+             // Both Geometry Wars titles are native game plugins now,
+             // discovered on disk rather than carried in the catalogue as Xbox
+             // 360 ROM sets. The loader below still recognises their packages -
+             // that is what the import path reads - but nothing offers them as
+             // a board game, so they are deliberately absent here.
              xbox360_rom_set::space_giraffe})
         assert_registered(xbox360_rom_loader::set_short_name(set),
                           arcade_board_type::xbox360);

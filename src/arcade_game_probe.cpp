@@ -24,10 +24,17 @@ std::optional<arcade_game_identity> identify_arcade_game(
         fs::path p(path);
         if (fs::is_regular_file(p)) {
             std::string ext = p.extension().string();
-            // Detect .iso (Xbox DVD) or .rar (scene release) archives
-            if (ext == ".iso" || ext == ".rar")
-                return arcade_game_identity{
-                    arcade_board_type::xbox, "burnout3"};
+            // Detect .iso (Xbox DVD) or .rar (scene release) archives.
+            // Require the filename to contain "burnout" (case-insensitive)
+            // to avoid false-positives on unrelated ISOs/RARs.
+            if (ext == ".iso" || ext == ".rar") {
+                std::string stem = p.stem().string();
+                std::string lower;
+                for (char c : stem) lower += (char)tolower((unsigned char)c);
+                if (lower.find("burnout") != std::string::npos)
+                    return arcade_game_identity{
+                        arcade_board_type::xbox, "burnout3"};
+            }
             // Otherwise, it might be a path to default.xbe inside an
             // already-extracted directory — check parent.
             p = p.parent_path();

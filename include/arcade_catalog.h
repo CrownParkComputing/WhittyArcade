@@ -4,6 +4,7 @@
 #include "arcade_types.h"
 
 #include <array>
+#include <vector>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -50,12 +51,15 @@ struct rom_set_manifest {
     const char* publisher{""};
 };
 
-constexpr std::size_t arcade_board_count = 12;
+constexpr std::size_t arcade_board_count = 13;
 using arcade_board_list =
     std::array<arcade_board_descriptor, arcade_board_count>;
-constexpr std::size_t arcade_game_count = 43;
-using arcade_game_list =
-    std::array<rom_set_manifest, arcade_game_count>;
+// The built-in games are a fixed table; the list as a whole is not, because
+// games also arrive as plugins discovered on disk at start-up. A std::array
+// sized by a constant would mean a game could only ever be added by rebuilding
+// the arcade, which is exactly what the plugin path exists to avoid.
+constexpr std::size_t arcade_builtin_game_count = 41;
+using arcade_game_list = std::vector<rom_set_manifest>;
 
 // This is the only board-name/order/directory table in the application.
 const arcade_board_list& arcade_boards();
@@ -65,6 +69,17 @@ std::size_t arcade_board_index(arcade_board_type type);
 // Canonical game metadata, shared by ROM import, menus and persistent-data
 // tooling without loading or probing an archive.
 const arcade_game_list& supported_rom_sets();
+
+// Adds games found on disk to the catalogue. Called once, after discovery and
+// before the launcher reads the list. The records are kept alive here because
+// rom_set_manifest holds borrowed `const char*`, so whatever owns those strings
+// has to outlive the catalogue - passing by value and storing is deliberate.
+struct discovered_game;
+void register_plugin_games(std::vector<discovered_game> games);
+
+// The game a bundle path names, or null. The launcher hands a session the path
+// it selected, which for a plugin is its folder - that is what identifies it.
+const discovered_game* find_plugin_game(std::string_view bundle_path);
 const rom_set_manifest* find_supported_rom_set(std::string_view short_name);
 bool supports_network_two_player(const rom_set_manifest& manifest);
 bool supports_native_system_link(const rom_set_manifest& manifest);

@@ -3,6 +3,8 @@
 
 #include "arcade_audio_output.h"
 #include "arcade_catalog.h"
+#include "game_plugin_host.h"
+#include "platform_paths.h"
 #include "arcade_frontend.h"
 #include "arcade_input.h"
 #include "arcade_session.h"
@@ -689,6 +691,25 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Games that ship as plugins are found on disk before anything reads the
+    // catalogue, so they appear in the launcher beside the built-in boards.
+    // Rejections are printed rather than swallowed: a game that silently fails
+    // to appear cannot be told from one that was never installed.
+    {
+        game_plugin_library plugins;
+        const std::filesystem::path root =
+            whitty_platform::data_root() / "WhittyArcade" / "games";
+        plugins.scan(root.string());
+        for (const rejected_plugin& rejected : plugins.rejected())
+            std::fprintf(stderr, "game plugin ignored: %s\n  %s\n",
+                         rejected.library_path.c_str(),
+                         rejected.reason.c_str());
+        if (!plugins.games().empty())
+            std::printf("%zu game plugin(s) installed in %s\n",
+                        plugins.games().size(), root.string().c_str());
+        register_plugin_games(plugins.games());
+    }
+
     if (const std::optional<int> result = run_tool_command(argc, argv))
         return *result;
 

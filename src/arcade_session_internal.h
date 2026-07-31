@@ -139,3 +139,8 @@ std::unique_ptr<emulator_session> make_namco_galaga_session(
 std::unique_ptr<emulator_session> make_namco_system1_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);
+// A game plugin. Which game is decided by the bundle path the launcher passes
+// to initialize(), the same way a board is given its ROM.
+std::unique_ptr<emulator_session> make_plugin_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);

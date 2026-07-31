@@ -182,13 +182,18 @@ int main() {
             return rom_choice{};
         };
 
+        // Space Giraffe rather than Geometry Wars: both Geometry Wars titles
+        // are now native game plugins, discovered on disk rather than carried
+        // as Xbox 360 ROM sets, so a package of one is deliberately no longer
+        // recognised here. Space Giraffe still ships as a package and exercises
+        // exactly the same path.
         const fs::path whole_root = root / "downloads";
-        const fs::path whole = whole_root / "Geometry Wars Evolved 2" /
-                               "584108FF" / "000D0000" /
+        const fs::path whole = whole_root / "Space Giraffe" /
+                               "5841080C" / "000D0000" /
                                "834312072F4985F9D33D0B9549FFAA32C505FDAD58";
-        // A real Geometry Wars 2 package declares a 0xad0e-byte header, which
-        // STFS rounds up to 0xb000.
-        make_package(whole, 0x584108ff, 0xad0e, 0xb000);
+        // A real package declares a 0xad0e-byte header, which STFS rounds up
+        // to 0xb000.
+        make_package(whole, 0x5841080c, 0xad0e, 0xb000);
         const rom_choice sequel = discover_package(whole_root, whole);
         assert(sequel.board == arcade_board_type::xbox360);
         assert(sequel.label.find("[ready]") != std::string::npos);
@@ -196,16 +201,16 @@ int main() {
                "the console's layout puts spaces in the path");
         const rom_audit_result audited = audit_rom_path(sequel.path);
         assert(audited.success);
-        assert(audited.set_name == "geometrywars2");
+        assert(audited.set_name == "spacegiraffe");
 
         // A part-downloaded package is still listed, so the game is visible
         // rather than silently absent, but it is not ready and the audit says
         // which file fell short.
         const fs::path partial_root = root / "interrupted";
-        const fs::path partial = partial_root / "Geometry Wars Evolved 2" /
-                                 "584108FF" / "000D0000" /
+        const fs::path partial = partial_root / "Space Giraffe" /
+                                 "5841080C" / "000D0000" /
                                  "834312072F4985F9D33D0B9549FFAA32C505FDAD58";
-        make_package(partial, 0x584108ff, 0xad0e, 0x1000);
+        make_package(partial, 0x5841080c, 0xad0e, 0x1000);
         const rom_choice incomplete = discover_package(partial_root, partial);
         assert(incomplete.label.find("[ready]") == std::string::npos);
         const rom_audit_result failed = audit_rom_path(incomplete.path);

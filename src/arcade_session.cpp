@@ -49,6 +49,9 @@ std::unique_ptr<emulator_session> create_emulator_session(
     case arcade_board_type::namco_system1:
         return make_namco_system1_session(std::move(video),
                                           std::move(cabinet_state));
+    case arcade_board_type::game_plugin:
+        return make_plugin_session(std::move(video),
+                                   std::move(cabinet_state));
     }
     throw std::invalid_argument("Unknown arcade board type");
 }

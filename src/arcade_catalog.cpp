@@ -1,4 +1,5 @@
 #include "arcade_catalog.h"
+#include "game_plugin_host.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -6,6 +7,11 @@
 namespace {
 
 constexpr arcade_board_list boards{{
+    // Not a board at all: the shelf that games shipping as plugins appear on.
+    // Its "rom directory" is where installed games live, which is the folder
+    // discovery scans.
+    {arcade_board_type::game_plugin, "games", "Native Games",
+     "NATIVE GAMES", "games"},
     {arcade_board_type::system22, "system22", "Namco System 22",
      "NAMCO SYSTEM 22", "system22"},
     {arcade_board_type::system246, "system246", "Namco System 246/256",
@@ -33,7 +39,7 @@ constexpr arcade_board_list boards{{
      "Namco System 1", "NAMCO SYSTEM 1", "namco_system1"},
 }};
 
-constexpr arcade_game_list manifests{{
+constexpr std::array<rom_set_manifest, arcade_builtin_game_count> builtin_manifests{{
     {"ridgerac", "Ridge Racer (World, RR2 Ver.B)",
      arcade_board_type::system22, "", "namcoc71.zip + namcoc74.zip", true,
      arcade_multiplayer_mode::none, "Namco"},
@@ -76,17 +82,6 @@ constexpr arcade_game_list manifests{{
      arcade_board_type::xbox360, "",
      "Extracted default.xex with classic/ and media/ data", true,
      arcade_multiplayer_mode::none, "Williams"},
-    {"geometrywars", "Geometry Wars: Retro Evolved (Xbox 360)",
-     arcade_board_type::xbox360, "",
-     "Extracted default.xex with GeometryWars1.dat and GW1.xwb", true,
-     arcade_multiplayer_mode::none, "Microsoft"},
-    // Played straight out of the package it was downloaded as: everything the
-    // title reads is sealed inside that one file, so there is nothing to
-    // extract and nothing to put beside it.
-    {"geometrywars2", "Geometry Wars: Retro Evolved 2 (Xbox 360)",
-     arcade_board_type::xbox360, "",
-     "Signed STFS package (LIVE, CON or PIRS) holding the whole title", true,
-     arcade_multiplayer_mode::none, "Microsoft"},
     // Dumped both ways, and either plays. The package is preferred, so that is
     // what the requirement names first.
     {"spacegiraffe", "Space Giraffe (Xbox 360)",
@@ -214,11 +209,55 @@ const arcade_board_descriptor& arcade_board(arcade_board_type type) {
     return boards[index];
 }
 
+// Built-ins plus whatever discovery added, rebuilt whenever plugins are
+// registered. The plugin records are kept alongside because each manifest row
+// borrows their strings.
+std::vector<discovered_game>& plugin_records() {
+    static std::vector<discovered_game> records;
+    return records;
+}
+
+arcade_game_list& catalogue() {
+    static arcade_game_list all(builtin_manifests.begin(),
+                                builtin_manifests.end());
+    return all;
+}
+
 const arcade_game_list& supported_rom_sets() {
-    return manifests;
+    return catalogue();
+}
+
+void register_plugin_games(std::vector<discovered_game> games) {
+    plugin_records() = std::move(games);
+    arcade_game_list& all = catalogue();
+    all.assign(builtin_manifests.begin(), builtin_manifests.end());
+    for (const discovered_game& game : plugin_records()) {
+        rom_set_manifest row{};
+        row.short_name = game.short_name.c_str();
+        row.display_name = game.display_name.c_str();
+        row.board = arcade_board_type::game_plugin;
+        row.split_parent = "";
+        // What the launcher tells the player they need. A plugin brings its own
+        // data in its folder, so there is nothing for them to supply.
+        row.extra_archives = "Installed game plugin; no ROM set required";
+        row.working = true;
+        row.multiplayer = game.max_players > 1
+                              ? arcade_multiplayer_mode::simultaneous
+                              : arcade_multiplayer_mode::none;
+        row.publisher = game.publisher.c_str();
+        all.push_back(row);
+    }
+}
+
+const discovered_game* find_plugin_game(std::string_view bundle_path) {
+    for (const discovered_game& game : plugin_records())
+        if (game.bundle_path == bundle_path || game.short_name == bundle_path)
+            return &game;
+    return nullptr;
 }
 
 const rom_set_manifest* find_supported_rom_set(std::string_view short_name) {
+    const arcade_game_list& manifests = catalogue();
     const auto found = std::find_if(
         manifests.begin(), manifests.end(),
         [short_name](const rom_set_manifest& item) {

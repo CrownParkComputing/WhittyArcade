@@ -263,6 +263,34 @@ target_include_directories(model1_io SYSTEM PUBLIC
 target_compile_options(model1_io PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(model1_io PUBLIC chips_z80)
 
+# Burnout 3: Takedown — Xbox kernel replacement layer (static recompilation).
+# Provides the 64 MB Xbox memory layout, kernel thunk table, path translation,
+# and I/O stubs that the recompiled game code runs against.
+set(BURNOUT3_KERNEL_DIR "/home/jon/Burnout3Recomp/src/kernel")
+add_library(burnout3_recomp STATIC
+    ${BURNOUT3_KERNEL_DIR}/xbox_memory_layout.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_bridge.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_thunks.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_path.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_memory.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_file.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_thread.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_sync.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_hal.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_xbox.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_ob.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_io.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_crypto.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_rtl.c
+    ${BURNOUT3_KERNEL_DIR}/kernel_pool.c
+)
+target_include_directories(burnout3_recomp PUBLIC
+    ${BURNOUT3_KERNEL_DIR}
+)
+target_compile_definitions(burnout3_recomp PRIVATE
+    _GNU_SOURCE
+)
+
 # Model 1 sound devices. YM3438 synthesis uses the BSD-3-Clause ymfm library;
 # the standalone MultiPCM core is adapted from MAME's BSD-3-Clause source.
 add_library(model1_multipcm STATIC
@@ -307,6 +335,8 @@ set(SOURCES
     src/namco/galaxian/galaxian_session.cpp
     src/sega/system16b/system16b_session.cpp
     src/capcom/gng/gng_session.cpp
+    src/game_plugin_host.cpp
+    src/plugin_session.cpp
     src/namco/namco_session.cpp
     src/arcade_renderer.cpp
     src/arcade_input.cpp
@@ -343,6 +373,7 @@ set(SOURCES
     src/xbox360_native_session.cpp
     src/xbox/burnout3_session.cpp
     src/xbox/burnout3_bridge.c
+    src/xbox/burnout3_importer.c
     src/sega/model1/model1_rom.cpp
     src/sega/model1/model1_machine.cpp
     src/sega/model1/model1_audio.cpp
@@ -462,7 +493,7 @@ target_link_libraries(WhittyArcade
     mb86233
     model1_video
     model1_io
-    model1_dsb
+    burnout3_recomp
     model1_multipcm
     arcade_audio_output
     m68000_cpu
