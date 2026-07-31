@@ -287,8 +287,12 @@ add_library(burnout3_recomp STATIC
 target_include_directories(burnout3_recomp PUBLIC
     ${BURNOUT3_KERNEL_DIR}
 )
+target_include_directories(burnout3_recomp BEFORE PRIVATE
+    ${BURNOUT3_KERNEL_DIR}
+)
 target_compile_definitions(burnout3_recomp PRIVATE
     _GNU_SOURCE
+    WIN32_LEAN_AND_MEAN
 )
 
 # Model 1 sound devices. YM3438 synthesis uses the BSD-3-Clause ymfm library;
@@ -696,6 +700,33 @@ target_compile_options(input_mapping_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 target_compile_definitions(input_mapping_test PRIVATE SDL_MAIN_HANDLED)
 add_test(NAME input_mapping_test COMMAND input_mapping_test)
+
+add_executable(game_plugin_test
+    tests/game_plugin_test.cpp
+    src/game_plugin_host.cpp
+    src/arcade_catalog.cpp
+    src/arcade_game_probe.cpp
+    src/namco/system22/system22_rom.cpp
+    src/system246_rom.cpp
+    src/xbox360_rom.cpp
+    src/sega/model1/model1_rom.cpp
+    src/sega/model2/model2_rom.cpp
+    src/namco/galaxian/galaxian_rom.cpp
+    src/sega/system16b/system16b_rom.cpp
+    src/capcom/gng/gng_rom.cpp
+    src/namco/namco_rom.cpp
+)
+target_include_directories(game_plugin_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+# The test builds its own plugins, so it needs to tell the compiler it invokes
+# where the ABI header lives.
+target_compile_definitions(game_plugin_test PRIVATE
+    INCLUDE_DIR="${CMAKE_SOURCE_DIR}/include")
+target_link_libraries(game_plugin_test PRIVATE
+    PkgConfig::MINIZIP ZLIB::ZLIB ${CMAKE_DL_LIBS})
+target_compile_options(game_plugin_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+add_test(NAME game_plugin_test COMMAND game_plugin_test)
 
 add_executable(arcade_catalog_test
     tests/arcade_catalog_test.cpp
