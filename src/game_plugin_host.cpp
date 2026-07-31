@@ -55,7 +55,7 @@ bool loaded_plugin::open(const std::string& library_path, std::string& error) {
     if (api->describe == nullptr || api->create == nullptr ||
         api->destroy == nullptr || api->run_frame == nullptr ||
         api->reset == nullptr || api->set_paused == nullptr ||
-        api->score == nullptr) {
+        api->score == nullptr || api->state_checksum == nullptr) {
         error = "plugin table has a null entry";
         dlclose(m_handle);
         m_handle = nullptr;
