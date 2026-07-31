@@ -24,6 +24,9 @@ std::unique_ptr<emulator_session> create_emulator_session(
     case arcade_board_type::xbox360:
         return make_xbox360_session(std::move(video),
                                     std::move(cabinet_state));
+    case arcade_board_type::xbox:
+        return make_xbox_burnout3_session(std::move(video),
+                                          std::move(cabinet_state));
     case arcade_board_type::model1:
         return make_model1_session(std::move(video),
                                    std::move(cabinet_state));

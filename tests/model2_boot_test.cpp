@@ -71,6 +71,10 @@ int main(int argc, char** argv) {
     }
     model2_machine machine;
     if (!machine.initialize(argv[1])) return 1;
+    // The application session assigns Sega Rally's LINK ID (CAR1..CAR4)
+    // from the cabinet node; ring tests opt into the same assignment here.
+    if (const char* link = std::getenv("MODEL2_SRALLY_LINK"))
+        machine.set_srally_link_type(static_cast<uint8_t>(std::atoi(link)));
     std::vector<uint8_t> midi;
     machine.set_sound_uart_callback(
         [&midi](uint8_t data) { midi.push_back(data); });

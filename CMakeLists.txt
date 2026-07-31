@@ -341,6 +341,8 @@ set(SOURCES
     src/xbox360_session.cpp
     src/xbox360_native_runtime.cpp
     src/xbox360_native_session.cpp
+    src/xbox/burnout3_session.cpp
+    src/xbox/burnout3_bridge.c
     src/sega/model1/model1_rom.cpp
     src/sega/model1/model1_machine.cpp
     src/sega/model1/model1_audio.cpp
@@ -1632,3 +1634,24 @@ if(NOT WHITTY_SYSTEM246_PCSX2_LINKED)
     target_compile_definitions(WhittyArcade PRIVATE
         WHITTY_SYSTEM246_STUBBED=1)
 endif()
+
+add_executable(title_frame_dump
+    tests/title_frame_dump.cpp
+    src/namco/system1/system1_ym2151.cpp
+    src/namco/galaxian/galaxian_machine.cpp
+    src/namco/galaxian/galaxian_machine_mooncrst.cpp
+    src/namco/galaxian/galaxian_machine_phoenix.cpp
+    src/namco/galaga/galaga_machine.cpp
+    src/namco/system1/system1_machine.cpp
+    src/namco/namco_rom.cpp
+    src/high_scores.cpp)
+target_include_directories(title_frame_dump PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(title_frame_dump SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/chips
+    ${CMAKE_SOURCE_DIR}/third_party/namcos1
+    ${CMAKE_SOURCE_DIR}/third_party/ymfm/src)
+target_link_libraries(title_frame_dump PRIVATE
+    chips_z80 m6809f namcos1_core ymfm PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(title_frame_dump PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)

@@ -8,6 +8,7 @@ enum class arcade_board_type : uint8_t {
     system22,
     system246,
     xbox360,
+    xbox,
     model1,
     model2,
     phoenix,

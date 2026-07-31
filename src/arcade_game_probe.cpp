@@ -13,8 +13,33 @@
 #include "system246_rom.h"
 #include "xbox360_rom.h"
 
+#include <filesystem>
+namespace fs = std::filesystem;
+
 std::optional<arcade_game_identity> identify_arcade_game(
         const std::string& path) {
+    // Burnout 3: Takedown (Xbox) — extracted directory or archive (ISO/RAR).
+    // Archives are auto-imported by the session on first launch.
+    {
+        fs::path p(path);
+        if (fs::is_regular_file(p)) {
+            std::string ext = p.extension().string();
+            // Detect .iso (Xbox DVD) or .rar (scene release) archives
+            if (ext == ".iso" || ext == ".rar")
+                return arcade_game_identity{
+                    arcade_board_type::xbox, "burnout3"};
+            // Otherwise, it might be a path to default.xbe inside an
+            // already-extracted directory — check parent.
+            p = p.parent_path();
+        }
+        if (fs::exists(p / "default.xbe") &&
+            fs::exists(p / "Tracks") &&
+            fs::exists(p / "sound")) {
+            return arcade_game_identity{
+                arcade_board_type::xbox, "burnout3"};
+        }
+    }
+
     const ridge_racer_rom_set system22 = rom_loader::identify_set(path);
     if (system22 != ridge_racer_rom_set::unknown)
         return arcade_game_identity{arcade_board_type::system22,

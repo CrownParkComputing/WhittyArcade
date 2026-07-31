@@ -174,9 +174,18 @@ bool write_exact(const fs::path& path, const uint8_t* data,
     return !error;
 }
 
+// Sega Rally's 0x24-byte operator record with COUNTRY (byte 0x09) set to
+// EXPORT and COIN/CREDIT SETTING #1 (1 coin 1 credit on both chutes; the
+// Japanese factory record runs setting #12, 2 coins 1 credit). The game
+// wrote this record through its own GAME/COIN ASSIGNMENTS menus - its
+// EXPORT save also retunes the game-parameter float at 0x10 from 1.0 to
+// 1.2 - and reads it back with COUNTRY EXPORT and setting #1 displayed,
+// so the whole record is applied rather than patching single bytes. A
+// stored record whose country disagrees is corrected on the next launch,
+// like Daytona.
 constexpr std::array<uint16_t, 64> srally_factory_eeprom{{
-    0xeada, 0x0024, 0x0001, 0x0000, 0x0001, 0x0001, 0x0000, 0x0401,
-    0x0000, 0x3f80, 0xfff2, 0xffff, 0x0001, 0x0002, 0x0000, 0x000b,
+    0xc894, 0x0024, 0x0003, 0x0000, 0x0201, 0x0001, 0x0000, 0x0401,
+    0x999a, 0x3f99, 0xfff2, 0xffff, 0x0001, 0x0001, 0x0000, 0x0000,
     0x0001, 0x0001, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
     0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
     0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
@@ -1050,6 +1059,20 @@ void model2_bus::load_nvram() {
                 (m_roms->default_eeprom[word * 2 + 1] << 8));
     }
 
+    if (m_roms && m_roms->set == model2_rom_set::sega_rally_revision_c) {
+        // A record saved as JPN before this build keeps Japanese attract
+        // and coin behaviour forever, so it is corrected like Daytona's:
+        // the stored operator record is replaced with the game-written
+        // EXPORT one when its COUNTRY byte (0x09) disagrees. The session
+        // reasserts LINK TYPE afterwards.
+        const uint8_t country =
+            static_cast<uint8_t>(m_eeprom_words[0x09 / 2] >> 8);
+        if (country != 0x02) {
+            m_eeprom_words = srally_factory_eeprom;
+            m_nvram_dirty = true;
+        }
+    }
+
     if (m_profile.io == model2_game_profile::io_kind::crx_fighter &&
         std::strcmp(m_profile.nvram_leaf, "vf2") == 0 && !backup_loaded &&
         m_backup_ram.size() >= vf2_factory_backup_size) {
@@ -1092,21 +1115,43 @@ void model2_bus::load_nvram() {
     if (m_profile.io == model2_game_profile::io_kind::crx_bike &&
         std::strcmp(m_profile.nvram_leaf, "motoraid") == 0 &&
         m_backup_ram.size() >= motoraid_factory_backup_size) {
-        // A single cabinet runs NETWORK TYPE Stand Alone; a linked pair
-        // needs cabinet 1 as Master with CABINET ID 1 and cabinet 2 as
-        // Slave with ID 2, or the game never runs its network check and
-        // no cabinet invites the other.
+        // A single cabinet runs NETWORK TYPE Stand Alone; cabinet 1 of a
+        // ring is Master with CABINET ID 1 and every later cabinet Slave
+        // with its own id - the game's menu cycles IDs 1 through 4, its
+        // four-cabinet maximum (LIVE is the non-playing spectator type),
+        // or the game never runs its network check and no cabinet
+        // invites the other. Roles beyond the captured Slave/ID2 pair
+        // patch the id into that record; the S32A checksum is not the
+        // standard Sega record CRC, so each id's checksum bytes were
+        // captured from a record the game itself wrote (both copies of
+        // the record carry the same values). Slave backups written under
+        // different ids are byte-identical, so the one slave backup
+        // image serves every id.
         const int node = environment_comm_node();
-        const uint8_t* wanted_eeprom = motoraid_factory_eeprom.data();
+        std::array<uint8_t, 0x50> wanted_eeprom = motoraid_factory_eeprom;
         const uint8_t* wanted_backup =
             motoraid_factory_backup_deflate.data();
         uLong wanted_backup_size = motoraid_factory_backup_deflate.size();
         if (node == 1) {
-            wanted_eeprom = motoraid_master_eeprom.data();
+            wanted_eeprom = motoraid_master_eeprom;
             wanted_backup = motoraid_master_backup_deflate.data();
             wanted_backup_size = motoraid_master_backup_deflate.size();
         } else if (node >= 2) {
-            wanted_eeprom = motoraid_slave_eeprom.data();
+            struct slave_patch { uint8_t sum0, sum1, id; };
+            constexpr std::array<slave_patch, 3> patches{{
+                {0x8f, 0xb9, 0x01}, // CABINET ID 2
+                {0xed, 0xc4, 0x02}, // CABINET ID 3
+                {0xeb, 0x20, 0x03}, // CABINET ID 4
+            }};
+            const slave_patch& patch =
+                patches[static_cast<std::size_t>(std::min(node, 4) - 2)];
+            wanted_eeprom = motoraid_slave_eeprom;
+            for (const std::size_t record : {std::size_t{0x08},
+                                             std::size_t{0x2c}}) {
+                wanted_eeprom[record] = patch.sum0;
+                wanted_eeprom[record + 1] = patch.sum1;
+                wanted_eeprom[record + 0x17] = patch.id;
+            }
             wanted_backup = motoraid_slave_backup_deflate.data();
             wanted_backup_size = motoraid_slave_backup_deflate.size();
         }
@@ -1143,21 +1188,37 @@ void model2_bus::load_nvram() {
         std::strcmp(m_profile.nvram_leaf, "manxttc") == 0 &&
         m_backup_ram.size() >= manxtt_factory_backup_size) {
         // The launch decides the wanted assignments: a single cabinet runs
-        // Not Link, a linked pair needs cabinet 1 as ring Master with bike
-        // RED (No.1) and cabinet 2 as Slave with BLUE (No.2), or the game
-        // never runs its network check and no cabinet invites the other.
-        // COUNTRY (0x09, 2 = EXPORT), LINK TYPE (0x0b) and BIKE COLOR
+        // Not Link, cabinet 1 of a ring is Master with bike RED (No.1),
+        // ring middles are Relay and the final cabinet Slave, each with
+        // the bike number of its ring position (the game's own menu
+        // cycles bikes No.1 through No.8, so Manx TT rings match
+        // Daytona's eight-cabinet maximum). COUNTRY (0x09, 2 = EXPORT),
+        // LINK TYPE (0x0b, 1 Master / 2 Slave / 3 Relay) and BIKE COLOR
         // (0x0c) in the 93C46 record identify the stored configuration.
+        // Only the eeprom record stores those assignments - backups
+        // written under different roles are byte-identical - so records
+        // beyond the captured Master/Slave pair are synthesized with the
+        // standard Sega record CRC, byte-identical to what the game's
+        // test menu writes (verified against game-written Relay/No.3
+        // and Slave/No.4 records).
         const int node = environment_comm_node();
-        const uint8_t* wanted_eeprom = manxtt_factory_eeprom.data();
+        std::array<uint8_t, 0x80> wanted_eeprom = manxtt_factory_eeprom;
         const uint8_t* wanted_backup = manxtt_factory_backup_deflate.data();
         uLong wanted_backup_size = manxtt_factory_backup_deflate.size();
         if (node == 1) {
-            wanted_eeprom = manxtt_master_eeprom.data();
+            wanted_eeprom = manxtt_master_eeprom;
             wanted_backup = manxtt_master_backup_deflate.data();
             wanted_backup_size = manxtt_master_backup_deflate.size();
         } else if (node >= 2) {
-            wanted_eeprom = manxtt_slave_eeprom.data();
+            const int count = environment_comm_count();
+            wanted_eeprom = manxtt_slave_eeprom;
+            wanted_eeprom[0x0b] = node >= count ? 0x02 : 0x03;
+            wanted_eeprom[0x0c] = static_cast<uint8_t>(node - 1);
+            const std::size_t record_size = wanted_eeprom[2];
+            const uint16_t checksum = sega_record_crc(
+                wanted_eeprom.data() + 2, record_size - 2);
+            wanted_eeprom[0] = static_cast<uint8_t>(checksum);
+            wanted_eeprom[1] = static_cast<uint8_t>(checksum >> 8);
             wanted_backup = manxtt_slave_backup_deflate.data();
             wanted_backup_size = manxtt_slave_backup_deflate.size();
         }
@@ -1255,17 +1316,18 @@ bool model2_bus::save_nvram() {
 
 uint8_t model2_bus::srally_link_type() const {
     // Sega Rally's 0x24-byte operator-settings record begins at EEPROM word
-    // zero. Byte 0x0b is LINK TYPE: 0=NOTLINK, 1=CAR1, 2=CAR2 (then
-    // CAR3/CAR4/RELAY, which WhittyArcade's two-cabinet UI does not expose).
+    // zero. Byte 0x0b is LINK TYPE: 0=NOTLINK, then CAR1 through CAR4 -
+    // the game's own link menu stops at four cars (5=RELAY, a non-playing
+    // pass-through unit, stays unexposed).
     constexpr std::size_t link_type_offset = 0x0b;
     const std::size_t word = link_type_offset / 2;
     const uint8_t value = static_cast<uint8_t>(
         m_eeprom_words[word] >> ((link_type_offset & 1) * 8));
-    return value <= 2 ? value : 0;
+    return value <= 4 ? value : 0;
 }
 
 bool model2_bus::set_srally_link_type(uint8_t type) {
-    if (type > 2 ||
+    if (type > 4 ||
         !m_roms ||
         m_roms->set != model2_rom_set::sega_rally_revision_c)
         return false;

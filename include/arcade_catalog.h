@@ -50,10 +50,10 @@ struct rom_set_manifest {
     const char* publisher{""};
 };
 
-constexpr std::size_t arcade_board_count = 11;
+constexpr std::size_t arcade_board_count = 12;
 using arcade_board_list =
     std::array<arcade_board_descriptor, arcade_board_count>;
-constexpr std::size_t arcade_game_count = 42;
+constexpr std::size_t arcade_game_count = 43;
 using arcade_game_list =
     std::array<rom_set_manifest, arcade_game_count>;
 

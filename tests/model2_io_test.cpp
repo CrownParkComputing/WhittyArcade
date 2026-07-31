@@ -448,12 +448,21 @@ int main() {
         return result;
     };
     const uint16_t factory = read_eeprom_word(bus, 0);
-    assert(factory == 0xeada);
+    // Checksum word of the game-written EXPORT + 1-coin-1-credit operator
+    // record the board now seeds and enforces (was 0xeada for the
+    // Japanese factory record).
+    assert(factory == 0xc894);
     assert(bus.srally_link_type() == 0);
     assert(bus.set_srally_link_type(1));
     assert(bus.srally_link_type() == 1);
     assert(bus.set_srally_link_type(2));
     assert(bus.srally_link_type() == 2);
+    assert(bus.set_srally_link_type(3));
+    assert(bus.srally_link_type() == 3);
+    assert(bus.set_srally_link_type(4));
+    assert(bus.srally_link_type() == 4);
+    assert(!bus.set_srally_link_type(5));
+    assert(bus.srally_link_type() == 4);
     assert(bus.set_srally_link_type(0));
     assert(bus.srally_link_type() == 0);
 

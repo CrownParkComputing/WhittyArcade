@@ -114,6 +114,9 @@ std::unique_ptr<emulator_session> make_xbox360_session(
 std::unique_ptr<emulator_session> make_xbox360_native_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);
+std::unique_ptr<emulator_session> make_xbox_burnout3_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);
 std::unique_ptr<emulator_session> make_model1_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);

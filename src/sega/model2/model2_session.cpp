@@ -67,8 +67,11 @@ public:
             model2_rom_loader::profile_for(m_machine->rom_set());
         if (m_machine->rom_set() ==
             model2_rom_set::sega_rally_revision_c) {
-            const uint8_t role = m_link_cabinet == 1 ? 1 :
-                                 m_link_cabinet == 2 ? 2 : 0;
+            // LINK ID follows the ring position: CAR1 through CAR4, the
+            // game's own four-car maximum. A standalone launch runs NOTLINK.
+            const uint8_t role =
+                m_link_cabinet >= 1 && m_link_cabinet <= 4 ?
+                    static_cast<uint8_t>(m_link_cabinet) : 0;
             if (!m_machine->set_srally_link_type(role))
                 std::fprintf(stderr,
                              "Could not save Sega Rally LINK TYPE\n");

@@ -1108,9 +1108,14 @@ int linked_cabinet_maximum(const std::string& short_name) {
     // Daytona's ring hardware takes 8 cabinets; per-car operator records
     // for all 8 are in place and 3- and 4-cabinet rings race on host (the
     // ring ids number DOWNWARDS from the master - the fact that unblocked
-    // everything past a twin). Sega Rally's own link menu stops at 4 but
-    // its 3+ ring has not been exercised, so it stays a twin for now.
+    // everything past a twin). Manx TT's bike numbers likewise run No.1
+    // to No.8 (Master, Relay middles, Slave tail, records synthesized
+    // with the Sega record CRC). Sega Rally's own link menu stops at
+    // four cars.
     if (short_name == "daytona") return 8;
+    if (short_name == "manxttc") return 8;
+    if (short_name == "srallyc") return 4;
+    if (short_name == "motoraid") return 4;
     return 2;
 }
 
