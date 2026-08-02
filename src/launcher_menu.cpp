@@ -6,6 +6,14 @@
 #include <SDL3_ttf/SDL_ttf.h>
 
 #include <cmath>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#ifndef M_PI_2
+#define M_PI_2 1.57079632679489661923
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -161,9 +169,9 @@ struct launcher_menu::implementation {
     std::vector<SDL_Gamepad*> controllers;
 
     explicit implementation(bool compact_utility_window) {
-        SDL_SetHint("SDL_APP_ID", "WhittyArcade");
-        SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "WhittyArcade");
-        SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "WhittyArcade");
+        SDL_SetHint("SDL_APP_ID", "MANX");
+        SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "MANX");
+        SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "MANX");
         if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS |
                                SDL_INIT_GAMEPAD)) {
             std::fprintf(stderr, "Launcher SDL initialization failed: %s\n",
@@ -202,7 +210,7 @@ struct launcher_menu::implementation {
             (compact_utility_window ?
                  (SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_UTILITY) : 0);
         window = SDL_CreateWindow(
-            "WhittyArcade",
+            "MANX",
             compact_utility_window ? compact_window_width : logical_width,
             compact_utility_window ? compact_window_height : logical_height,
             window_flags);
@@ -1145,6 +1153,233 @@ struct launcher_menu::implementation {
         while (SDL_PollEvent(&event)) {}
     }
 
+    // Per-game loading screen. The fade-in is short (200ms) so the screen
+    // is readable even if the loader returns in 100ms total; the fade-out
+    // is the same so a fast loader does not produce a jarring snap.
+    //
+    // The screen itself is centred text + a rotating arc "spinner" on the
+    // left, plus a progress bar at the bottom. The arc is drawn as three
+    // concentric rings: an outline ring (track), an active ring (progress),
+    // and a small wedge rotating in the centre as the spinner.
+    void loading_screen(const std::string& title,
+                        const std::string& subtitle,
+                        const std::function<bool(float&)>& step_for) {
+        // Fade in from black. 200ms at 60fps = 12 frames.
+        constexpr int FADE_FRAMES = 12;
+        for (int i = 1; i <= FADE_FRAMES; ++i) {
+            SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
+            SDL_RenderClear(renderer);
+            draw_loading_text_only(title, subtitle, "", 0.0f,
+                                  i / static_cast<float>(FADE_FRAMES));
+            SDL_RenderPresent(renderer);
+            SDL_Delay(1000 / 60);
+            SDL_Event event{};
+            while (SDL_PollEvent(&event)) {}
+        }
+
+        // Drive the loader. Each call to step_for receives a fresh
+        // progress value; the caller can update both the step text and the
+        // progress number together. The function returns false to fade out
+        // and finish.
+        float progress = 0.0f;
+        std::string step_text;
+        Uint64 last_present = SDL_GetTicks();
+        while (true) {
+            step_text.clear();
+            const bool keep_going = step_for ? step_for(progress) : false;
+            if (!keep_going) break;
+
+            // Cap the framerate so a slow loader still has time to work.
+            const Uint64 now = SDL_GetTicks();
+            const Uint64 elapsed = now - last_present;
+            constexpr Uint64 FRAME_MS = 1000 / 60;
+            if (elapsed < FRAME_MS) SDL_Delay(static_cast<Uint32>(FRAME_MS - elapsed));
+            last_present = SDL_GetTicks();
+
+            // Render the loading frame, animating the spinner as time advances.
+            const float spinner = (now % 1500ULL) / 1500.0f;
+            SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
+            SDL_RenderClear(renderer);
+            draw_loading_screen(title, subtitle, step_text,
+                                std::clamp(progress, 0.0f, 1.0f), spinner, 1.0f);
+            SDL_RenderPresent(renderer);
+            SDL_Event event{};
+            while (SDL_PollEvent(&event)) {}
+        }
+
+        // Fade out.
+        for (int i = FADE_FRAMES - 1; i >= 0; --i) {
+            SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
+            SDL_RenderClear(renderer);
+            draw_loading_screen(title, subtitle, "", 1.0f, 0.0f,
+                                i / static_cast<float>(FADE_FRAMES));
+            SDL_RenderPresent(renderer);
+            SDL_Delay(1000 / 60);
+            SDL_Event event{};
+            while (SDL_PollEvent(&event)) {}
+        }
+        SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
+        SDL_RenderClear(renderer);
+        SDL_RenderPresent(renderer);
+    }
+
+    // Text-only render used during fade-in / fade-out (no spinner, dimmed).
+    void draw_loading_text_only(const std::string& title,
+                                const std::string& subtitle,
+                                const std::string& step,
+                                float progress,
+                                float overlay_alpha) {
+        // Same layout as draw_loading_screen but the spinner is hidden and
+        // everything is darkened by overlay_alpha.
+        const int cx = logical_width / 2;
+        const int cy = logical_height / 2;
+        const SDL_Color title_col = {
+            static_cast<Uint8>(205 * overlay_alpha),
+            static_cast<Uint8>(214 * overlay_alpha),
+            static_cast<Uint8>(244 * overlay_alpha), 255};
+        const SDL_Color sub_col = {
+            static_cast<Uint8>(137 * overlay_alpha),
+            static_cast<Uint8>(180 * overlay_alpha),
+            static_cast<Uint8>(250 * overlay_alpha), 255};
+        const SDL_Color muted_col = {
+            static_cast<Uint8>(166 * overlay_alpha),
+            static_cast<Uint8>(173 * overlay_alpha),
+            static_cast<Uint8>(200 * overlay_alpha), 255};
+
+        rendered_text t = make_text(renderer, title_font ? title_font : font,
+                                   title.c_str(), title_col);
+        draw_text(renderer, t, cx - t.width / 2, cy - 64);
+        destroy_text(t);
+        if (!subtitle.empty()) {
+            rendered_text s = make_text(renderer, font, subtitle.c_str(),
+                                       sub_col);
+            draw_text(renderer, s, cx - s.width / 2, cy - 18);
+            destroy_text(s);
+        }
+        if (!step.empty()) {
+            rendered_text what = make_text(renderer, hint_font ? hint_font : font,
+                                         step.c_str(), muted_col);
+            draw_text(renderer, what, cx - what.width / 2, cy + 96);
+            destroy_text(what);
+        }
+        const int bar_width = std::min(560, logical_width - 120);
+        const int bar_x = (logical_width - bar_width) / 2;
+        const int bar_y = cy + 124;
+        SDL_SetRenderDrawColor(renderer, 26, 40, 54,
+                               static_cast<Uint8>(255 * overlay_alpha));
+        const SDL_FRect trough = frect(bar_x, bar_y, bar_width, 14);
+        SDL_RenderFillRect(renderer, &trough);
+        SDL_SetRenderDrawColor(renderer, 56, 198, 255,
+                               static_cast<Uint8>(255 * overlay_alpha));
+        const SDL_FRect fill = frect(bar_x, bar_y,
+                                     bar_width * std::clamp(progress, 0.0f, 1.0f),
+                                     14);
+        SDL_RenderFillRect(renderer, &fill);
+    }
+
+    // Full render of the loading screen, with spinner.
+    void draw_loading_screen(const std::string& title,
+                             const std::string& subtitle,
+                             const std::string& step,
+                             float progress,
+                             float spinner_phase,
+                             float alpha) {
+        draw_loading_text_only(title, subtitle, step, progress, alpha);
+        const int cx = logical_width / 2;
+        const int cy = logical_height / 2;
+        // Spinner: three concentric rings + a wedge that rotates around
+        // the centre. Positioned to the left of the title.
+        const float ring_radius = 36.0f;
+        const float cx_spin = cx - 240.0f;
+        const float cy_spin = static_cast<float>(cy) - 30.0f;
+        const Uint8 a = static_cast<Uint8>(255 * alpha);
+
+        // Track ring.
+        SDL_SetRenderDrawColor(renderer, 56, 198, 255,
+                               static_cast<Uint8>(48 * alpha));
+        draw_circle_outline(renderer, cx_spin, cy_spin, ring_radius, a);
+
+        // Progress ring: an arc from 12 o'clock to (progress * 2*PI).
+        SDL_SetRenderDrawColor(renderer, 56, 198, 255, a);
+        draw_arc(renderer, cx_spin, cy_spin, ring_radius,
+                 -static_cast<float>(M_PI_2),
+                 -static_cast<float>(M_PI_2) +
+                     2.0f * static_cast<float>(M_PI) * progress, a);
+
+        // Spinner wedge: a small filled wedge that rotates every 1.5s.
+        const float wedge_angle =
+            -static_cast<float>(M_PI_2) +
+            2.0f * static_cast<float>(M_PI) * spinner_phase;
+        SDL_SetRenderDrawColor(renderer, 205, 214, 244, a);
+        const float wedge_inner = ring_radius - 8.0f;
+        const float wedge_outer = ring_radius - 1.0f;
+        draw_arc_filled(renderer, cx_spin, cy_spin,
+                         wedge_inner, wedge_outer,
+                         wedge_angle - 0.5f, wedge_angle + 0.5f, a);
+
+        // Centre dot.
+        SDL_SetRenderDrawColor(renderer, 137, 180, 250, a);
+        const SDL_FRect dot = frect(cx_spin - 4, cy_spin - 4, 8, 8);
+        SDL_RenderFillRect(renderer, &dot);
+    }
+
+    // Helper: draw a circle outline by tracing pixels.
+    void draw_circle_outline(SDL_Renderer* renderer, float cx, float cy,
+                             float radius, Uint8 a) {
+        const int steps = static_cast<int>(radius * 12);
+        for (int i = 0; i < steps; ++i) {
+            const float t0 = (static_cast<float>(i)     / steps) * 2.0f *
+                              static_cast<float>(M_PI);
+            const float t1 = (static_cast<float>(i + 1) / steps) * 2.0f *
+                              static_cast<float>(M_PI);
+            const float x0 = cx + radius * std::cos(t0);
+            const float y0 = cy + radius * std::sin(t0);
+            const float x1 = cx + radius * std::cos(t1);
+            const float y1 = cy + radius * std::sin(t1);
+            SDL_RenderLine(renderer, x0, y0, x1, y1);
+        }
+    }
+
+    // Helper: draw an arc from angle a0 to a1 (radians, 0 = +x, increases
+    // counter-clockwise).
+    void draw_arc(SDL_Renderer* r, float cx, float cy, float radius,
+                  float a0, float a1, Uint8 a) {
+        if (a1 < a0) std::swap(a0, a1);
+        const int steps = std::max(2, static_cast<int>(radius * (a1 - a0) * 6));
+        for (int i = 0; i < steps; ++i) {
+            const float t0 = a0 + (a1 - a0) *
+                              (static_cast<float>(i)     / steps);
+            const float t1 = a0 + (a1 - a0) *
+                              (static_cast<float>(i + 1) / steps);
+            const float x0 = cx + radius * std::cos(t0);
+            const float y0 = cy + radius * std::sin(t0);
+            const float x1 = cx + radius * std::cos(t1);
+            const float y1 = cy + radius * std::sin(t1);
+            SDL_RenderLine(r, x0, y0, x1, y1);
+        }
+    }
+
+    // Helper: draw a filled ring segment between inner and outer radii.
+    void draw_arc_filled(SDL_Renderer* r, float cx, float cy,
+                         float inner, float outer, float a0, float a1,
+                         Uint8 a) {
+        if (a1 < a0) std::swap(a0, a1);
+        const int steps = std::max(2, static_cast<int>(outer * (a1 - a0) * 6));
+        for (int i = 0; i < steps; ++i) {
+            const float t0 = a0 + (a1 - a0) *
+                              (static_cast<float>(i)     / steps);
+            const float t1 = a0 + (a1 - a0) *
+                              (static_cast<float>(i + 1) / steps);
+            for (float radius = inner; radius <= outer; radius += 1.5f) {
+                const float x0 = cx + radius * std::cos(t0);
+                const float y0 = cy + radius * std::sin(t0);
+                const float x1 = cx + radius * std::cos(t1);
+                const float y1 = cy + radius * std::sin(t1);
+                SDL_RenderLine(r, x0, y0, x1, y1);
+            }
+        }
+    }
+
     int select(const std::string& title, const std::string& description,
                const std::vector<std::string>& items,
                const std::string& back_label, int initial_selection,
@@ -2016,8 +2251,17 @@ int launcher_menu::select_interruptible(
 
 void launcher_menu::show_splash(const std::string& step, float progress) {
     if (!m_impl || !m_impl->ready()) return;
-    SDL_SetWindowTitle(m_impl->window, "WhittyArcade");
+    SDL_SetWindowTitle(m_impl->window, "MANX");
     m_impl->splash(step, progress);
+}
+
+void launcher_menu::show_loading_screen(
+    const std::string& title,
+    const std::string& subtitle,
+    const std::function<bool(float&)>& step_for) {
+    if (!m_impl || !m_impl->ready()) return;
+    SDL_SetWindowTitle(m_impl->window, "MANX");
+    m_impl->loading_screen(title, subtitle, step_for);
 }
 
 void launcher_menu::set_status(const std::string& text, bool good) {
@@ -2050,7 +2294,7 @@ std::optional<input_binding> launcher_menu::capture_binding(
     if (!m_impl->ready()) {
         SDL_ShowSimpleMessageBox(
             SDL_MESSAGEBOX_INFORMATION, title.c_str(),
-            "Interactive input capture requires the WhittyArcade launcher "
+            "Interactive input capture requires the MANX launcher "
             "window.", nullptr);
         return std::nullopt;
     }

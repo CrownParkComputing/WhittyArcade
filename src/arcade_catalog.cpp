@@ -1,7 +1,10 @@
 #include "arcade_catalog.h"
+
+#include "native_title_library.h"
 #include "game_plugin_host.h"
 
 #include <algorithm>
+#include <cstring>
 #include <stdexcept>
 
 namespace {
@@ -227,8 +230,74 @@ const arcade_game_list& supported_rom_sets() {
     return catalogue();
 }
 
-void register_plugin_games(std::vector<discovered_game> games) {
-    plugin_records() = std::move(games);
+// Single-cabinet twin is the Model 2 Galaga twin / Shinobi twin /
+// Manx TT Twin / Motor Raid Twin lineage: two cabinets, one ROM, each
+// is half of a single game. They share a board type (model2), and the
+// distinguishing signal is the short name. Twin Galaxy/Sega
+// nomenclature for this is "TWIN".
+bool short_name_is_model2_twin(const char* short_name) {
+    if (!short_name) return false;
+    static const char* const twins[] = {
+        "galagat",   // Galaga twin
+        "shinobia",  // Shinobi twin
+        "manxttc",   // Manx TT Twin
+        "motoraid",  // Motor Raid Twin
+    };
+    for (const char* t : twins) {
+        if (std::strcmp(short_name, t) == 0) return true;
+    }
+    return false;
+}
+
+arcade_cabinet_form classify_cabinet_form(const rom_set_manifest& manifest) {
+    switch (manifest.multiplayer) {
+    case arcade_multiplayer_mode::none:
+        return arcade_cabinet_form::single_cabinet_single_screen;
+    case arcade_multiplayer_mode::alternating:
+        // Galaxian-class uprights take turns. One screen, two seats.
+        return arcade_cabinet_form::single_cabinet_dual_seat;
+    case arcade_multiplayer_mode::simultaneous:
+        // Virtua Cop / VF2 — two seats sharing one screen.
+        return arcade_cabinet_form::single_cabinet_shared;
+    case arcade_multiplayer_mode::native_link:
+        // System 22 (C139 link), Model 2 "TWIN" sets, and System 246 walls
+        // are all genuinely multi-screen / multi-cabinet. The Model 2 TWIN
+        // line uses a single ROM set served to two cabinets; System 22 / 246
+        // networks one cabinet per game slot.
+        if (manifest.board == arcade_board_type::model2 &&
+            short_name_is_model2_twin(manifest.short_name)) {
+            return arcade_cabinet_form::twin_cabinet;
+        }
+        return arcade_cabinet_form::linked_network;
+    }
+    return arcade_cabinet_form::single_cabinet_single_screen;
+}
+
+const char* cabinet_form_label(arcade_cabinet_form form) {
+    switch (form) {
+    case arcade_cabinet_form::single_cabinet_single_screen:
+        return "Single-screen cabinet";
+    case arcade_cabinet_form::single_cabinet_dual_seat:
+        return "Single-cabinet, two seats";
+    case arcade_cabinet_form::single_cabinet_shared:
+        return "Single-cabinet, shared screen";
+    case arcade_cabinet_form::twin_cabinet:
+        return "Twin cabinet";
+    case arcade_cabinet_form::linked_network:
+        return "Linked cabinet network";
+    }
+    return "Single-screen cabinet";
+}
+
+std::vector<native_title>& native_records() {
+    static std::vector<native_title> records;
+    return records;
+}
+
+// One rebuild for both kinds of discovered game. They share the catalogue, so
+// registering either from its own function would drop whatever the other had
+// added - and the symptom is a game that vanishes depending on start-up order.
+void rebuild_catalogue() {
     arcade_game_list& all = catalogue();
     all.assign(builtin_manifests.begin(), builtin_manifests.end());
     for (const discovered_game& game : plugin_records()) {
@@ -247,6 +316,66 @@ void register_plugin_games(std::vector<discovered_game> games) {
         row.publisher = game.publisher.c_str();
         all.push_back(row);
     }
+    for (const native_title& title : native_records()) {
+        rom_set_manifest row{};
+        row.short_name = title.short_name.c_str();
+        row.display_name = title.display_name.c_str();
+        row.board = arcade_board_type::xbox360;
+        row.split_parent = "";
+        // The player supplies nothing: the workbench already recorded which
+        // owned game this was converted from, and the library refused the title
+        // outright if that game was not still on the machine.
+        row.extra_archives =
+            "Recompiled native port; plays from your own copy of the game";
+        row.working = true;
+        // Local multiplayer is the title's own business - it is a whole game in
+        // its own process, so WhittyArcade cannot wire a second seat into it.
+        row.multiplayer = arcade_multiplayer_mode::none;
+        row.publisher = "";
+
+        // A converted title REPLACES any row of the same name rather than
+        // joining it. Space Giraffe already had a built-in entry describing the
+        // same game, and a plugin may carry the same short name too - and the
+        // catalogue keys scores, artwork and bundles on that name, so two rows
+        // sharing one is not a duplicate listing but an ambiguous key.
+        // The converted title wins because it is the most specific: it knows
+        // which binary to run and which owned game to run it against.
+        const auto existing = std::find_if(
+            all.begin(), all.end(), [&](const rom_set_manifest& row_in) {
+                return row_in.short_name != nullptr &&
+                       title.short_name == row_in.short_name;
+            });
+        if (existing != all.end())
+            *existing = row;
+        else
+            all.push_back(row);
+    }
+}
+
+void register_plugin_games(std::vector<discovered_game> games) {
+    plugin_records() = std::move(games);
+    rebuild_catalogue();
+}
+
+void register_native_titles(std::vector<native_title> titles) {
+    native_records() = std::move(titles);
+    rebuild_catalogue();
+}
+
+const native_title* find_native_title(std::string_view key) {
+    for (const native_title& title : native_records())
+        if (title.short_name == key || title.binary_path == key) return &title;
+    return nullptr;
+}
+
+const native_title* find_native_title_for_game(std::string_view game_path) {
+    if (game_path.empty()) return nullptr;
+    for (const native_title& title : native_records()) {
+        if (title.package_path == game_path || title.xex_path == game_path ||
+            title.game_root == game_path)
+            return &title;
+    }
+    return nullptr;
 }
 
 const discovered_game* find_plugin_game(std::string_view bundle_path) {

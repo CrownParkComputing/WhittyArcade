@@ -118,6 +118,26 @@ public:
     // step begins; `progress` is 0..1 and drives the loading bar.
     void show_splash(const std::string& step, float progress);
 
+    // Per-game loading screen, shown between the launcher picking a game and
+    // the emulator window taking over. `title` is the game's display name
+    // (large, centred), `subtitle` is the cabinet form (smaller, e.g. "Twin
+    // cabinet"), and `step` is the current asset-warm message. A spinner
+    // rotates beside the title; the progress bar fills as `progress` advances
+    // from 0 to 1. The screen fades in from black on entry and fades out on
+    // exit.
+    //
+    // `step_for(progress)` lets the caller drive both the step text and the
+    // progress number from a single callback. It is called repeatedly while
+    // loading; when it returns false the screen fades out and returns.
+    //
+    // Designed for the brief 100ms - 2s window during which the emulator is
+    // spinning up its renderer and audio thread, so the screen is short-lived
+    // but visible.
+    void show_loading_screen(
+        const std::string& title,
+        const std::string& subtitle,
+        const std::function<bool(float&)>& step_for);
+
     // A short line about the machine's network state, drawn in the corner of
     // every browsing screen ("Waiting for another machine", "2 machines
     // connected"). Empty hides it.

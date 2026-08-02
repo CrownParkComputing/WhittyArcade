@@ -259,7 +259,7 @@ bool save_library_folders(launcher_menu& menu, emulator_settings& settings) {
     if (!save_settings(settings)) {
         menu.show_text(
             "Folder settings - Error",
-            "WhittyArcade could not save the selected folders to:\n\n" +
+            "MANX could not save the selected folders to:\n\n" +
                 settings_path());
         return false;
     }
@@ -279,16 +279,16 @@ bool choose_library_folders(launcher_menu& menu, bool first_run) {
     emulator_settings settings = load_settings();
     for (;;) {
         const int selected = menu.select(
-            first_run ? "Welcome to WhittyArcade" : "ROM and CHD folders",
+            first_run ? "Welcome to MANX" : "ROM and CHD folders",
             first_run ?
-                "Choose where WhittyArcade should look for your existing MAME "
+                "Choose where MANX should look for your existing MAME "
                 "ROM archives and disc images. Files stay in place and are "
                 "never imported, copied or repacked." :
-                "Choose both library locations again, or use WhittyArcade's "
+                "Choose both library locations again, or use MANX's "
                 "recommended per-user folders.",
             {"Choose my library folders",
              "Use recommended per-user folders"},
-            first_run ? "Exit WhittyArcade" : "Cancel");
+            first_run ? "Exit MANX" : "Cancel");
         if (selected < 0) return false;
         if (selected == 1) {
             settings.rom_directory.clear();
@@ -369,7 +369,7 @@ void show_rom_library_manager(launcher_menu& menu) {
         };
         const int selected = menu.select(
             "Settings",
-            "Manage the folders WhittyArcade reads directly. Your ROM and CHD "
+            "Manage the folders MANX reads directly. Your ROM and CHD "
             "files remain where they are.",
             items, "Back to Main Menu");
         if (selected < 0) return;
@@ -384,9 +384,9 @@ void show_rom_library_manager(launcher_menu& menu) {
                 "MAME archive layouts",
                 "Non-merged: each game ZIP contains every ROM it needs.\n\n"
                 "Split: clone ZIPs omit shared parent ROMs. Keep the named "
-                "parent ZIP beside the game; WhittyArcade searches both.\n\n"
+                "parent ZIP beside the game; MANX searches both.\n\n"
                 "Merged: a parent ZIP contains parent and clone subfolders. "
-                "WhittyArcade searches entries by basename, so the merged "
+                "MANX searches entries by basename, so the merged "
                 "parent archive can be selected directly.\n\n"
                 "System 22 C71/C74 device firmware remains in its two small "
                 "MAME device archives for every layout.");
@@ -513,7 +513,7 @@ void show_high_score_viewer(launcher_menu& menu) {
             "High Scores",
             "No verified high-score decoders are available yet.\n\n"
             "Each game's binary memory layout and checksums must be\n"
-            "independently verified before WhittyArcade will decode its\n"
+            "independently verified before MANX will decode its\n"
             "score table.",
             "Back to Main Menu");
         return;
@@ -749,9 +749,10 @@ int browse_library_grid(
         }
         // Decoded local artwork, keyed by index into choices.
     std::map<std::size_t, banner::banner_image> local_art;
-    // 0 A-Z, 1 most played, 2 recently added, 3 last played. The browser
-    // opens on Last Played: the games from the previous session are the
-    // ones most likely wanted again.
+    // 0 A-Z, 1 most played, 2 recently added, 3 last played, 4 single-screen,
+    // 5 multi-screen. The browser opens on Last Played: the games from the
+    // previous session are the ones most likely wanted again. 4 and 5 are the
+    // MANX cabinet-form filters - the launcher's signature feature.
     int sort_mode = 3;
         // Paging: By Board / By Publisher turn the grid into a carousel - one
         // page per board or publisher, flipped with PgUp/PgDn or the shoulder
@@ -807,6 +808,25 @@ int browse_library_grid(
                 if (play_style &&
                     !matches_play_style(choice, *play_style))
                     continue;
+                if (sort_mode == 4 || sort_mode == 5) {
+                    // Cabinet-form filter. Identify the game by path and
+                    // look up its catalog manifest; if we cannot find a
+                    // manifest (an unpacked Xbox disc, say), the game is
+                    // treated as single-screen by default.
+                    const auto identity =
+                        identify_arcade_game(choice.path);
+                    if (!identity) continue;
+                    const rom_set_manifest* manifest =
+                        find_supported_rom_set(identity->short_name);
+                    if (!manifest) continue;
+                    const arcade_cabinet_form form =
+                        classify_cabinet_form(*manifest);
+                    const bool wants_multi =
+                        form == arcade_cabinet_form::twin_cabinet ||
+                        form == arcade_cabinet_form::linked_network;
+                    if (sort_mode == 4 && wants_multi) continue;
+                    if (sort_mode == 5 && !wants_multi) continue;
+                }
                 if (board_narrow >= 0 &&
                     board_slot(choice.board) != board_narrow)
                     continue;
@@ -841,7 +861,9 @@ int browse_library_grid(
             std::string view_name =
                 sort_mode == 1 ? "Most Played" :
                 sort_mode == 2 ? "Recently Added" :
-                sort_mode == 3 ? "Last Played" : "A - Z";
+                sort_mode == 3 ? "Last Played" :
+                sort_mode == 4 ? "Single-Screen Games" :
+                sort_mode == 5 ? "Multi-Screen Games" : "A - Z";
             if (play_style && *play_style > 0)
                 view_name = std::string(
                     play_style_names[static_cast<std::size_t>(*play_style)]) +
@@ -1140,6 +1162,53 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // The boot screen goes up before anything slow happens, so switching the
     // cabinet on shows the cabinet rather than an empty desktop.
     menu.show_splash("Starting up", 0.05f);
+
+    // Local helper: render the per-game loading screen between launcher
+    // pick and emulator start. The screen shows the game title, cabinet
+    // form, and a fading-in spinner. Driven by a callback that updates the
+    // progress fraction; the callback is called repeatedly while the
+    // loader runs.
+    //
+    // The screen is intentionally short (3-4 spinner ticks) so it does
+    // not visibly block the emulator from appearing; main() handles the
+    // long asset warm in the background.
+    auto run_loading_screen = [](launcher_menu& menu,
+                                   const rom_choice& choice) {
+        // Build the cabinet-form subtitle from the catalog manifest so the
+        // player can see what they just chose.
+        std::string subtitle = "Cabinet: ";
+        if (const auto identity = identify_arcade_game(choice.path)) {
+            if (const rom_set_manifest* manifest =
+                    find_supported_rom_set(identity->short_name)) {
+                subtitle += cabinet_form_label(classify_cabinet_form(*manifest));
+            } else {
+                subtitle += "Single-screen cabinet";
+            }
+        } else {
+            subtitle += "Single-screen cabinet";
+        }
+        // Brief, friendly messages — the spinner and progress bar carry
+        // the visual load.
+        const std::vector<std::string> steps = {
+            "Reserving cabinet hardware...",
+            "Loading cabinet artwork...",
+            "Warming emulated components...",
+        };
+        std::size_t step_index = 0;
+        float progress = 0.0f;
+        menu.show_loading_screen(
+            choice.label, subtitle,
+            [&steps, &step_index, &progress](float& out) -> bool {
+                if (step_index >= steps.size()) {
+                    out = 1.0f;
+                    return false;  // finished -> fade out
+                }
+                out = (step_index + 1.0f) / steps.size();
+                progress = out;
+                ++step_index;
+                return true;
+            });
+    };
     // Cover artwork, collected in the background and kept for the life
     // of the selector so moving between lists does not refetch.
     igdb::cover_library covers;
@@ -1175,7 +1244,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         menu.show_text(
             "Multiplayer game unavailable",
             "Player 1 selected " + *game +
-                ", but that ROM is not installed in this WhittyArcade "
+                ", but that ROM is not installed in this MANX "
                 "library.", "Back to Main Menu");
         return {};
     };
@@ -1216,7 +1285,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             std::function<bool()>{};
         const int picked = browse_library_grid(
             menu, choices, covers, cover_pixels, banners, banner_pixels,
-            "WhittyArcade", {}, &play_style, interrupt, "System Menu");
+            "MANX", {}, &play_style, interrupt, "System Menu");
         if (picked == launcher_menu::interrupted) {
             rom_selection_result remote = take_remote_launch();
             if (remote.action == rom_selection_action::selected) return remote;
@@ -1237,8 +1306,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 if (!shared_cabinet && !caps.system_link &&
                     !caps.network_two_player) {
                     // Genuinely a one-player board: nothing to ask about.
-                    return {rom_selection_action::selected, choice.path,
-                            cabinet_launch_mode::single, 0, false, false,
+                    run_loading_screen(menu, choice);
+
+                    return {rom_selection_action::selected, choice.path, cabinet_launch_mode::single, 0, false, false,
                             false, {}};
                 }
                 int wanted = -1;
@@ -1301,13 +1371,15 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     // Across two computers: the partner launches itself.
                     const auto identity = identify_arcade_game(choice.path);
                     if (identity) lobby->launch_game(identity->short_name);
-                    return {rom_selection_action::selected, choice.path,
-                            cabinet_launch_mode::linked_network, 1, false,
+                    run_loading_screen(menu, choice);
+
+                    return {rom_selection_action::selected, choice.path, cabinet_launch_mode::linked_network, 1, false,
                             false, true, {}};
                 }
                 if (wanted == 0 || wanted == 1 || wanted == 2) {
-                    return {rom_selection_action::selected, choice.path,
-                            cabinet_launch_mode::single, 0, false, false,
+                    run_loading_screen(menu, choice);
+
+                    return {rom_selection_action::selected, choice.path, cabinet_launch_mode::single, 0, false, false,
                             wanted != 0, {}};
                 }
                 play_style = wanted;   // twin screens or linked cabinets
@@ -1315,8 +1387,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             if (play_style == 1 || play_style == 2) {
                 // One cabinet, both players sharing it exactly as the
                 // original game was played.
-                return {rom_selection_action::selected, choice.path,
-                        cabinet_launch_mode::single, 0, false, false, true,
+                run_loading_screen(menu, choice);
+
+                return {rom_selection_action::selected, choice.path, cabinet_launch_mode::single, 0, false, false, true,
                         {}};
             }
             if (play_style == 3) {
@@ -1332,8 +1405,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                      second_monitor_label("Two Monitors  |  one per display")},
                     "Back", 0, second_monitor_blocked());
                 if (mode < 0) continue;
-                return {rom_selection_action::selected, choice.path,
-                        cabinet_launch_mode::independent_pair, 0, mode == 1,
+                run_loading_screen(menu, choice);
+
+                return {rom_selection_action::selected, choice.path, cabinet_launch_mode::independent_pair, 0, mode == 1,
                         false, true, {}};
             }
             // Games whose comm ring runs more than a twin offer the count
@@ -1376,12 +1450,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         // Back from the grid: the system menu. Everything that is not
         // picking a game lives here, including leaving the program.
         const int selected_page = menu.select(
-            "WhittyArcade",
+            "MANX",
             lobby && lobby->connected() ?
                 "Network player connected - Network Play launches a shared "
                 "game across both computers." :
                 "System pages. Network Play searches for a second "
-                "WhittyArcade on the local network automatically.",
+                "MANX on the local network automatically.",
             {lobby && lobby->connected() ?
                  std::string("Network Play  [CONNECTED]") :
                  std::string("Network Play  [SEARCHING]"),
@@ -1390,7 +1464,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
              "Controllers / Keyboard",
              "EEPROM / NVRAM Manager",
              "High Scores"},
-            "Exit WhittyArcade");
+            "Exit MANX");
         if (selected_page < 0) {
             rom_selection_result exit_result;
             exit_result.action = rom_selection_action::exit_requested;
@@ -1401,7 +1475,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 menu.show_text(
                     "Multiplayer - Network",
                     "Automatic multiplayer discovery is available when "
-                    "WhittyArcade is opened without a ROM on the command "
+                    "MANX is opened without a ROM on the command "
                     "line.");
                 continue;
             }
@@ -1414,10 +1488,10 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 if (!lobby->connected()) {
                     const int waiting = menu.select_interruptible(
                         "Multiplayer - Network - Finding Player 2",
-                        "Open WhittyArcade on the second screen or computer. "
+                        "Open MANX on the second screen or computer. "
                         "The apps detect each other automatically; no cabinet "
                         "role or IP address is required.",
-                        {"Searching for another WhittyArcade..."},
+                        {"Searching for another MANX..."},
                         "Back to Main Menu", 0, [lobby] {
                             return lobby->connected() ||
                                    lobby->launch_pending();
@@ -1510,8 +1584,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 const auto identity = identify_arcade_game(choice.path);
                 if (!identity) continue;
                 lobby->launch_game(identity->short_name);
-                return {rom_selection_action::selected, choice.path,
-                        cabinet_launch_mode::linked_network, 1, false, false,
+                run_loading_screen(menu, choice);
+
+                return {rom_selection_action::selected, choice.path, cabinet_launch_mode::linked_network, 1, false, false,
                         true, {}};
             }
             continue;
@@ -1724,7 +1799,7 @@ void show_system16b_dip_switches(uint16_t& switches) {
             nullptr,
             "Shinobi cabinet DIP switches",
             "These are the named Sega System 16B switches from MAME. "
-            "WhittyArcade defaults to English, upright, demo sound on, "
+            "MANX defaults to English, upright, demo sound on, "
             "three lives and normal difficulty.",
             static_cast<int>(buttons.size()),
             buttons.data(),

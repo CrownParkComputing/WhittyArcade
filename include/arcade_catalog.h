@@ -33,6 +33,31 @@ enum class arcade_multiplayer_mode : uint8_t {
     native_link,
 };
 
+// High-level cabinet form, derived from multiplayer mode plus the board.
+// Used by the MANX launcher to decide whether a game belongs in the
+// Single-screen tab or the Multi-screen tab, and what cabinet icon to
+// draw on its card.
+//
+//   single_cabinet_single_screen:  one screen, one cabinet. Most uprights.
+//   single_cabinet_dual_seat:      one cabinet, two seats alternating. Galaxian.
+//   single_cabinet_shared:         one cabinet, two seats simultaneously. Virtua Cop.
+//   twin_cabinet:                  two cabinets, one player each, linked. Galaga twin.
+//   linked_network:                cabinets talking over a wire. Ridge Racer 2.
+//
+// `twin_cabinet` and `linked_network` both qualify for the MANX Multi-screen
+// tab; `single_cabinet_dual_seat` and `single_cabinet_shared` are still a
+// single screen, but a multi-seat cabinet - they live in the Single-screen
+// tab with a 2P badge.
+enum class arcade_cabinet_form : uint8_t {
+    single_cabinet_single_screen,
+    single_cabinet_dual_seat,
+    single_cabinet_shared,
+    twin_cabinet,
+    linked_network,
+};
+
+struct native_title;
+
 struct rom_set_manifest {
     const char* short_name;
     const char* display_name;
@@ -50,6 +75,19 @@ struct rom_set_manifest {
     // is per game rather than derived from the board.
     const char* publisher{""};
 };
+
+// Classify a manifest. Boards with `multiplayer == none` are always
+// single_cabinet_single_screen; boards with simultaneous multiplayer are
+// single_cabinet_shared; boards with alternating multiplayer are
+// single_cabinet_dual_seat; boards with native_link multiplayer are split
+// into twin_cabinet (Model 2 twin, Galaxian twin) vs linked_network (System 22
+// link) by inspecting the board.
+arcade_cabinet_form classify_cabinet_form(const rom_set_manifest& manifest);
+
+// Short, cabinet-form-aware label for the launcher's info chip.
+// Returns something like "Single-screen upright", "Twin cockpit", or
+// "Linked cabinet wall".
+const char* cabinet_form_label(arcade_cabinet_form form);
 
 constexpr std::size_t arcade_board_count = 13;
 using arcade_board_list =
@@ -76,6 +114,19 @@ const arcade_game_list& supported_rom_sets();
 // has to outlive the catalogue - passing by value and storing is deliberate.
 struct discovered_game;
 void register_plugin_games(std::vector<discovered_game> games);
+
+// Adds the converted Xbox 360 titles to the catalogue. Called with the plugin
+// list already registered - both rebuild the same table, so the last caller
+// must see everything.
+void register_native_titles(std::vector<native_title> titles);
+
+// The converted title a short name or binary path refers to, or null.
+const native_title* find_native_title(std::string_view key);
+
+// The converted title whose OWNED GAME is at this path, or null. The launcher
+// hands a session the path it selected, which for a converted title is the
+// package or XEX it runs against - not its short name.
+const native_title* find_native_title_for_game(std::string_view game_path);
 
 // The game a bundle path names, or null. The launcher hands a session the path
 // it selected, which for a plugin is its folder - that is what identifies it.
