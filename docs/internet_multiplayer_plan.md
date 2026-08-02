@@ -1,5 +1,4 @@
-# Internet multiplayer
-
+# Internet multiplayer (MANX)
 The goal: a site where players register, a client that links to it without
 shipping a secret, friends lists, presence, and matches over the internet —
 for real multiplayer games and for two-player arcade games taken in turns.

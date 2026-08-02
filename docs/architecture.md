@@ -1,5 +1,8 @@
-# WhittyArcade architecture
+# MANX architecture
 
+> **Note:** MANX is the rebrand of WhittyArcade. This document describes the
+current codebase; identifiers in source still say `WhittyArcade` until
+the Phase 2 identifier rename.
 WhittyArcade separates arcade hardware from application and host-output
 policy. A ROM change destroys the complete emulated cabinet but deliberately
 keeps the host video worker alive.

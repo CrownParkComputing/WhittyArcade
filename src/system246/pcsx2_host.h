@@ -1,4 +1,4 @@
-// WhittyArcade System 246 board: shared host hooks between pcsx2_host.cpp and
+// MANX System 246 board: shared host hooks between pcsx2_host.cpp and
 // the System 246 PCSX2 session. The window hooks let a windowed front-end
 // register a native surface; the frame-capture API lets the surfaceless
 // session pull the latest GS-produced frame that Host::BeginPresentFrame()

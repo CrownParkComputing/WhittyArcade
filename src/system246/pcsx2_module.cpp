@@ -1,9 +1,9 @@
-// WhittyArcade System 246 board: PCSX2 arcade-core module.
+// MANX System 246 board: PCSX2 arcade-core module.
 //
 // This translation unit is the ONLY place PCSX2 headers/libraries are pulled in.
 // It is compiled with clang++ (matching the ABI libpcsx2.a was built with) and
 // linked, together with pcsx2_host.cpp, into libsystem246_pcsx2.so. The main
-// WhittyArcade binary (GCC) never links any PCSX2 symbol; it dlopen()s this .so
+// MANX binary (GCC) never links any PCSX2 symbol; it dlopen()s this .so
 // and drives it purely through the flat C ABI declared in pcsx2_module.h. This
 // keeps PCSX2's bundled glad GL loader and static initialisers out of the main
 // binary, where they collided with WhittyArcade's GLEW-based OpenGL renderer.

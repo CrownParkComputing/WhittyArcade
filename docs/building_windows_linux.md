@@ -1,5 +1,4 @@
-# Building WhittyArcade on Windows and Linux
-
+# Building MANX on Windows and Linux
 WhittyArcade uses one CMake project for Windows and Linux. Android is not part
 of these workflows. All current release jobs target x86-64 processors from
 AMD or Intel.

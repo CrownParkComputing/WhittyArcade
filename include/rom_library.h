@@ -1,4 +1,4 @@
-// WhittyArcade ROM/CHD folders: read directly, no import step.
+// MANX ROM/CHD folders: read directly, no import step.
 #pragma once
 
 #include "arcade_catalog.h"

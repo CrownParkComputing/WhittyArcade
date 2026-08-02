@@ -207,7 +207,7 @@ void network_video_link::run_sender() {
         close_socket(listener);
         return;
     }
-    std::printf("WhittyArcade Player 1 video stream listening on TCP %u\n",
+    std::printf("MANX Player 1 video stream listening on TCP %u\n",
                 m_port);
 
     native_socket client = invalid_socket;
@@ -223,7 +223,7 @@ void network_video_link::run_sender() {
             set_socket_timeouts(client);
             previous_frame.clear();
             delta_frames = 0;
-            std::printf("WhittyArcade Player 2 video display connected\n");
+            std::printf("MANX Player 2 video display connected\n");
         }
 
         network_video_frame frame;
@@ -275,7 +275,7 @@ void network_video_link::run_sender() {
             client = invalid_socket;
             previous_frame.clear();
             delta_frames = 0;
-            std::printf("WhittyArcade Player 2 video display disconnected\n");
+            std::printf("MANX Player 2 video display disconnected\n");
         } else {
             previous_frame = std::move(frame.rgba);
             delta_frames = delta ? delta_frames + 1 : 0;
@@ -306,7 +306,7 @@ void network_video_link::run_receiver() {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
             continue;
         }
-        std::printf("WhittyArcade Player 2 receiving Player 1 video\n");
+        std::printf("MANX Player 2 receiving Player 1 video\n");
         std::vector<uint8_t> previous_frame;
         while (!m_stop.load(std::memory_order_acquire)) {
             video_header header{};

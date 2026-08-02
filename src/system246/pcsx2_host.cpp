@@ -1,4 +1,4 @@
-// WhittyArcade System 246/256 board bring-up: minimal Host:: interface for the
+// MANX System 246/256 board bring-up: minimal Host:: interface for the
 // embedded PCSX2 core (libpcsx2.a).
 //
 // This is a link-foundation stub. It provides the Host:: (and a couple of
@@ -48,7 +48,7 @@
 #include "pcsx2_input.h"
 
 // ---------------------------------------------------------------------------
-// WhittyArcade host hooks
+// MANX host hooks
 //
 // State shared with a windowed front-end (e.g. pcsx2_boot_rrv.cpp). When a real
 // render window has been registered, Host::AcquireRenderWindow hands the PCSX2

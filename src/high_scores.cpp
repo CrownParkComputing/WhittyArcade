@@ -484,14 +484,14 @@ std::string high_score_report(const std::string& short_name) {
     if (!spec)
         return "No verified high-score decoder is available for this game yet.\n\n"
                "Its operator EEPROM/NVRAM remains available in the data "
-               "manager; WhittyArcade will not display guessed values.";
+               "manager; MANX will not display guessed values.";
 
     fs::path source;
     std::vector<std::uint8_t> bytes;
     if (!locate_score_file(short_name, source, bytes)) {
         return std::string("No saved high-score table exists yet.\n\n") +
             "Play " + spec->game_name +
-            " once and WhittyArcade will create one after the game's "
+            " once and MANX will create one after the game's "
             "score table is initialized. Existing MAME .hi files are "
             "detected automatically.";
     }

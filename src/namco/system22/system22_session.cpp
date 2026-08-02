@@ -141,7 +141,7 @@ system22_emulator::~system22_emulator() {
 bool system22_emulator::initialize(const std::string& rom_path,
                                       const std::string& bios_path,
                                       const emulator_settings& settings) {
-    printf("Initializing WhittyArcade System 22 backend...\n");
+    printf("Initializing MANX System 22 backend...\n");
     printf("ROM path: %s\n", rom_path.c_str());
     printf("BIOS path: %s\n", bios_path.c_str());
 

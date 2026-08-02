@@ -1,9 +1,12 @@
-// WhittyArcade application shell. Board implementations live in
+// MANX application shell. Board implementations live in
 // arcade_session.cpp and are selected through the canonical catalog.
 
 #include "arcade_audio_output.h"
 #include "arcade_catalog.h"
 #include "game_plugin_host.h"
+#include "native_title_library.h"
+#include "xbox360_native_runtime.h"
+#include "xbox360_asset_import.h"
 #include "platform_paths.h"
 #include "arcade_frontend.h"
 #include "arcade_input.h"
@@ -671,6 +674,63 @@ int audit_roms(int argc, char* argv[]) {
     return all_valid ? 0 : 1;
 }
 
+// Reports every converted Xbox 360 title, what it would run and against which
+// owned game - without launching anything. The pairing is the part that goes
+// wrong (a game moved, a binary cleaned away), and this is how to see it
+// without starting a title and watching a window close.
+int audit_native_titles() {
+    const std::string catalog = find_native_title_catalog();
+    if (catalog.empty()) {
+        std::printf("No converted-title catalogue found. Looked for:\n");
+        for (const std::string& candidate : native_title_catalog_candidates())
+            std::printf("  %s\n", candidate.c_str());
+        std::printf("Set WHITTY_XBOX_TITLES to point at one.\n");
+        return 1;
+    }
+    native_title_library library;
+    library.scan(catalog);
+    std::printf("%s\n\n", catalog.c_str());
+
+    for (const native_title& title : library.titles()) {
+        std::printf("OK    %s - %s [recomp, %s]\n", title.short_name.c_str(),
+                    title.display_name.c_str(), title.status.c_str());
+        // Said explicitly because a recompiled title plays from the owned
+        // package whether or not anything has been imported, so there is
+        // otherwise nothing to distinguish the two.
+        const imported_assets imported = imported_assets_for(title.short_name);
+        if (imported.any())
+            std::printf("      imported: %zu sound(s), %zu artwork file(s)\n",
+                        imported.sounds, imported.artwork);
+        else
+            std::printf("      imported: nothing yet - run --import-title to "
+                        "take its assets out of the game\n");
+        const xbox360_native_content content =
+            title.packaged()
+                ? xbox360_native_content::package(title.package_path)
+                : xbox360_native_content::extracted(title.xex_path,
+                                                    title.game_root);
+        const xbox360_native_launch launch =
+            plan_xbox360_native_launch(title.short_name, content,
+                                       title.binary_path);
+        if (!launch) {
+            std::printf("      cannot launch: %s\n", launch.error.c_str());
+            continue;
+        }
+        // Printed one argument per line because these paths contain spaces,
+        // and a single-line command would look like several arguments.
+        for (std::size_t i = 0; i < launch.arguments.size(); ++i)
+            std::printf("      %s %s\n", i == 0 ? "run " : "with",
+                        launch.arguments[i].c_str());
+    }
+    for (const rejected_title& rejected : library.rejected())
+        std::printf("FAIL  %s: %s\n", rejected.short_name.c_str(),
+                    rejected.reason.c_str());
+
+    std::printf("\n%zu playable, %zu unavailable\n", library.titles().size(),
+                library.rejected().size());
+    return library.titles().empty() ? 1 : 0;
+}
+
 std::optional<int> run_tool_command(int argc, char* argv[]) {
     if (argc <= 1) return std::nullopt;
     const std::string_view command(argv[1]);
@@ -685,6 +745,69 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
         return 0;
     }
     if (command == "--audit-roms") return audit_roms(argc, argv);
+    if (command == "--audit-titles") return audit_native_titles();
+    if (command == "--extract-title") {
+        if (argc < 4) {
+            std::printf("usage: WhittyArcade --extract-title <package> "
+                        "<directory>\n\nUnpacks your own game into ordinary "
+                        "files. A recompiled title can then run from the\n"
+                        "directory instead of mounting the signed package - "
+                        "which is what a standalone\nor Android build needs.\n");
+            return 1;
+        }
+        const import_report report = extract_xbox360_package(argv[2], argv[3]);
+        for (const std::string& problem : report.problems)
+            std::printf("  %s\n", problem.c_str());
+        std::printf("%zu file(s) extracted into %s\n", report.extracted.size(),
+                    argv[3]);
+        return report.ok() ? 0 : 1;
+    }
+    if (command == "--import-title") {
+        if (argc < 4) {
+            std::printf("usage: WhittyArcade --import-title <package> "
+                        "<bundle directory>\n\nTakes the artwork and sound "
+                        "effects out of your own Xbox 360 game and writes them\n"
+                        "into a native bundle, so the game no longer needs the "
+                        "package to run.\n");
+            return 1;
+        }
+        // The cues a bundle needs are the ones its plugin reports, so an import
+        // asks the installed game rather than assuming a list.
+        std::vector<std::string> cues;
+        game_plugin_library plugins;
+        plugins.scan((whitty_platform::data_root() / "WhittyArcade" / "games")
+                         .string());
+        const std::string wanted = fs::path(argv[3]).filename().string();
+        if (const discovered_game* game = plugins.find(wanted)) {
+            std::string error;
+            if (std::unique_ptr<loaded_plugin> plugin =
+                    plugins.load(*game, error)) {
+                const uint32_t count =
+                    plugin->api()->describe_audio_cues(nullptr, 0);
+                std::vector<const char*> raw(count, nullptr);
+                const uint32_t written =
+                    plugin->api()->describe_audio_cues(raw.data(), count);
+                for (uint32_t i = 0; i < written; ++i)
+                    if (raw[i] != nullptr) cues.emplace_back(raw[i]);
+            }
+        }
+        // No plugin is not a failure. Without a cue list the whole effects
+        // bank is imported under the game's own names, which is what you want
+        // before anything exists to render the title.
+        if (cues.empty())
+            std::printf("No game plugin named '%s' is installed - importing "
+                        "the whole effects bank under the game's own names.\n",
+                        wanted.c_str());
+        const import_report report =
+            import_xbox360_assets(argv[2], argv[3], cues);
+        for (const std::string& written : report.extracted)
+            std::printf("  wrote %s\n", written.c_str());
+        for (const std::string& problem : report.problems)
+            std::printf("  %s\n", problem.c_str());
+        std::printf("%zu asset(s) imported into %s\n", report.extracted.size(),
+                    argv[3]);
+        return report.ok() ? 0 : 1;
+    }
     return std::nullopt;
 }
 
@@ -708,6 +831,23 @@ int main(int argc, char* argv[]) {
             std::printf("%zu game plugin(s) installed in %s\n",
                         plugins.games().size(), root.string().c_str());
         register_plugin_games(plugins.games());
+    }
+
+    // Converted Xbox 360 titles. These are whole native executables that still
+    // need the owned game they were converted from, so the library pairs the two
+    // and refuses a title whose binary or game has gone - a converted game that
+    // starts and immediately dies tells the player nothing.
+    {
+        native_title_library converted;
+        const std::string catalog = find_native_title_catalog();
+        converted.scan(catalog);
+        for (const rejected_title& rejected : converted.rejected())
+            std::fprintf(stderr, "converted title unavailable: %s\n  %s\n",
+                         rejected.short_name.c_str(), rejected.reason.c_str());
+        if (!converted.titles().empty())
+            std::printf("%zu converted Xbox 360 title(s) from %s\n",
+                        converted.titles().size(), catalog.c_str());
+        register_native_titles(converted.titles());
     }
 
     if (const std::optional<int> result = run_tool_command(argc, argv))
@@ -1123,6 +1263,14 @@ int main(int argc, char* argv[]) {
             arcade_host_action::continue_running;
         bool generic_peer_visible = false;
         int displayed_turn = -2;
+        // A recompiled title runs in a window of its own, so the launcher's
+        // window is hidden for as long as it plays. Left up, both are on
+        // screen: the game draws in one while the launcher holds the desktop
+        // focus in the other, and the pad appears not to work at all even
+        // though the game opened it and is reading it.
+        const bool game_owns_the_window = emu->owns_its_own_window();
+        if (game_owns_the_window && shared_video)
+            shared_video->set_host_window_visible(false);
         while ((host_action = emu->process_events()) ==
                arcade_host_action::continue_running) {
             if (cabinet_node &&
@@ -1411,6 +1559,11 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // The game has finished with the screen; the launcher takes it back.
+        // Done before anything else so the window is up whether the next step
+        // is the menu or an exit path.
+        if (game_owns_the_window && shared_video)
+            shared_video->set_host_window_visible(true);
         whitty_wall_log::note("event loop ended, action=%d",
                               static_cast<int>(host_action));
         if (host_action == arcade_host_action::return_to_menu) {

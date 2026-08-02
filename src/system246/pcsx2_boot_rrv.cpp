@@ -1,4 +1,4 @@
-// WhittyArcade System 246/256 board bring-up: boot Ridge Racer V Arcade Battle
+// MANX System 246/256 board bring-up: boot Ridge Racer V Arcade Battle
 // in-process via the embedded PCSX2 arcade-fork core, rendering into a real
 // SDL3 window with Vulkan and real (cubeb) audio.
 //

@@ -1,5 +1,7 @@
-# AI handoff: add a game to an existing WhittyArcade platform
+# AI handoff: add a game to an existing MANX platform
 
+> **Note:** This is the MANX rebrand of the WhittyArcade handoff document.
+Project name in code is still `WhittyArcade` until Phase 2.
 Give this document to the AI that will implement the next game. Fill in the
 task inputs first. The instructions deliberately exclude new hardware
 platforms.

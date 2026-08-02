@@ -1,4 +1,4 @@
-// WhittyArcade System 246 board session (host side, plain GCC/C++17).
+// MANX System 246 board session (host side, plain GCC/C++17).
 //
 // This file is part of the main WhittyArcade binary and deliberately pulls in
 // NO PCSX2 headers or libraries -- only <dlfcn.h>, WhittyArcade headers and the

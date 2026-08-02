@@ -94,7 +94,7 @@ bool place_window_on_display(SDL_Window* window, int display_index,
 
 // Place a linked cabinet on its half of the only physical display.
 // Used when the host machine has one monitor and is running two separate
-// WhittyArcade processes for cabinet 1 / cabinet 2 — each process needs
+// MANX processes for cabinet 1 / cabinet 2 — each process needs
 // to position its own window without help from the other. Cabinet 1 →
 // left half, cabinet 2 → right half, so the two side-by-side windows fit
 // a single ultrawide without overlap.
@@ -1840,6 +1840,22 @@ void polygon_renderer_gpu::arm_title_capture(
     m_title_capture_name = short_name;
     m_title_capture_countdown = 1800;
     whitty_wall_log::note("title capture armed for %s", short_name.c_str());
+}
+
+void polygon_renderer_gpu::set_window_visible(bool visible) {
+    if (!m_ctx) return;
+    SDL_Window* window = m_alternate_presenter ?
+        static_cast<SDL_Window*>(m_alternate_presenter->window()) :
+        static_cast<SDL_Window*>(m_ctx->window);
+    if (window == nullptr) return;
+    if (visible) {
+        SDL_ShowWindow(window);
+        // Raised as well as shown: coming back from a game that had the focus,
+        // the launcher must be the thing being typed at again.
+        SDL_RaiseWindow(window);
+    } else {
+        SDL_HideWindow(window);
+    }
 }
 
 void polygon_renderer_gpu::set_cabinet_status(std::string status) {

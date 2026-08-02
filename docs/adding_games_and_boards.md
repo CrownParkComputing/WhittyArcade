@@ -1,5 +1,4 @@
-# Adding games and hardware boards
-
+# Adding games and hardware boards (MANX)
 This is the required extension path. Keep hardware facts in the owning board
 module and keep application code board-neutral.
 

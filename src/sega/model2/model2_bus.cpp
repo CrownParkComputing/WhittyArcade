@@ -1598,7 +1598,7 @@ void model2_bus::reset() {
     m_last_unmapped_read = 0;
     m_last_unmapped_write = 0;
 
-    // A paired WhittyArcade launch represents two cabinets with their
+    // A paired MANX launch represents two cabinets with their
     // communication boards physically attached. Bring the board up before
     // the game boots so the two processes can discover one another even when
     // an old battery-RAM image still says NOTLINK. Normal single-cabinet

@@ -1,4 +1,4 @@
-// WhittyArcade System 246 board: thread-safe cabinet-input bridge.
+// MANX System 246 board: thread-safe cabinet-input bridge.
 //
 // The main SDL event loop (pcsx2_boot_rrv.cpp) captures keyboard state and
 // calls the Set*/InsertCoin setters below. The PCSX2 CPU thread calls

@@ -1,4 +1,4 @@
-// WhittyArcade System 246 board: pure-C ABI for the isolated PCSX2 module.
+// MANX System 246 board: pure-C ABI for the isolated PCSX2 module.
 //
 // The PCSX2 arcade core (libpcsx2.a) bundles its own GL loader (glad) and a pile
 // of static initialisers that collide with WhittyArcade's GLEW-based OpenGL
