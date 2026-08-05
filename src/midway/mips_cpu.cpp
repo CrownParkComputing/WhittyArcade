@@ -35,8 +35,10 @@ struct mips_cpu {
     uint32_t sr;       // Status register
     uint32_t cause;    // Cause register (exception code + IP bits)
     uint32_t epc;      // Exception PC
-    uint32_t count;    // Free-running counter
+    uint32_t count;    // Count register value (increments at HALF cycle rate)
+    uint32_t count_frac; // carries the odd cycle so Count advances every 2
     uint32_t compare;  // Timer compare
+    bool compare_armed; // fire IP7 once per Compare write (edge-triggered)
     uint32_t config;   // Configuration
 
     // Bus callbacks.
@@ -132,8 +134,12 @@ static uint32_t cop0_read(mips_cpu* cpu, uint8_t reg) {
 
 static void cop0_write(mips_cpu* cpu, uint8_t reg, uint32_t val) {
     switch (reg) {
-    case  9: cpu->count   = val; break;
-    case 11: cpu->compare = val; cpu->cause &= ~(1u << 15); break;  // ack IP7
+    case  9: cpu->count = val; cpu->count_frac = 0; break;
+    case 11:  // Compare: arm the timer, clear any pending IP7 (the ack)
+        cpu->compare = val;
+        cpu->compare_armed = true;
+        cpu->cause &= ~(1u << 15);
+        break;
     case 12: cpu->sr      = val; break;
     case 13: cpu->cause   = (cpu->cause & ~0x00000300) | (val & 0x00000300); break;
     case 14: cpu->epc     = val; break;
@@ -178,6 +184,10 @@ static void exception(mips_cpu* cpu, uint8_t code, uint32_t bad_addr) {
     else
         cpu->pc = refill ? 0x80000000 : 0x80000180;
     cpu->next_pc = cpu->pc + 4;
+    // Enter exception level: masks further interrupts until the handler's
+    // ERET clears it. Without this the handler is re-interrupted on its very
+    // first instruction and the CPU storms the vector.
+    cpu->sr |= 0x2;  // SR.EXL
     (void)bad_addr;
 }
 
@@ -218,7 +228,9 @@ void mips_reset(mips_cpu* cpu) {
     cpu->cause   = 0;
     cpu->epc     = 0;
     cpu->count   = 0;
-    cpu->compare = 0;
+    cpu->count_frac = 0;
+    cpu->compare = 0xFFFFFFFF;  // MAME resets Compare high so it never matches
+    cpu->compare_armed = false;
     cpu->config  = 0;
     cpu->exception_pending = false;
     cpu->last_pc = 0;
@@ -335,22 +347,23 @@ uint32_t mips_step(mips_cpu* cpu) {
             break;
 
         // Multiply/Divide
+        // 32-bit mul/div results are 32-bit values held sign-extended in
+        // HI/LO, so the full-width MFHI/MFLO read them back correctly.
         case 0x18: // MULT
             {
                 const int64_t result = static_cast<int64_t>(GPR(rs)) *
                                        static_cast<int64_t>(GPR(rt));
-                cpu->lo = static_cast<uint64_t>(result) & 0xFFFFFFFFu;
-                cpu->hi = static_cast<uint64_t>(result >> 32) & 0xFFFFFFFFu;
+                cpu->lo = sign_ext32(static_cast<uint32_t>(result));
+                cpu->hi = sign_ext32(static_cast<uint32_t>(result >> 32));
                 cycles = 5;
             }
             break;
         case 0x19: // MULTU
             {
-                const uint64_t a = GPRU(rs) & 0xFFFFFFFFu;
-                const uint64_t b = GPRU(rt) & 0xFFFFFFFFu;
-                const uint64_t result = a * b;
-                cpu->lo = result & 0xFFFFFFFFu;
-                cpu->hi = (result >> 32) & 0xFFFFFFFFu;
+                const uint64_t result =
+                    (GPRU(rs) & 0xFFFFFFFFu) * (GPRU(rt) & 0xFFFFFFFFu);
+                cpu->lo = sign_ext32(static_cast<uint32_t>(result));
+                cpu->hi = sign_ext32(static_cast<uint32_t>(result >> 32));
                 cycles = 5;
             }
             break;
@@ -359,8 +372,8 @@ uint32_t mips_step(mips_cpu* cpu) {
                 const int32_t a = GPR(rs);
                 const int32_t b = GPR(rt);
                 if (b != 0) {
-                    cpu->lo = static_cast<uint32_t>(a / b);
-                    cpu->hi = static_cast<uint32_t>(a % b);
+                    cpu->lo = sign_ext32(static_cast<uint32_t>(a / b));
+                    cpu->hi = sign_ext32(static_cast<uint32_t>(a % b));
                 }
                 cycles = 36;
             }
@@ -370,23 +383,54 @@ uint32_t mips_step(mips_cpu* cpu) {
                 const uint32_t a = static_cast<uint32_t>(GPRU(rs));
                 const uint32_t b = static_cast<uint32_t>(GPRU(rt));
                 if (b != 0) {
-                    cpu->lo = a / b;
-                    cpu->hi = a % b;
+                    cpu->lo = sign_ext32(a / b);
+                    cpu->hi = sign_ext32(a % b);
                 }
                 cycles = 36;
             }
             break;
-        case 0x10: // MFHI
-            cpu->r[rd] = sign_ext32(static_cast<uint32_t>(cpu->hi));
+        case 0x1C: // DMULT (signed 64x64 -> 128, low half in LO, high in HI)
+        case 0x1D: { // DMULTU
+            const bool sgn = (func == 0x1C);
+            unsigned __int128 a = sgn
+                ? (unsigned __int128)(__int128)GPRD(rs)
+                : (unsigned __int128)GPRDU(rs);
+            unsigned __int128 b = sgn
+                ? (unsigned __int128)(__int128)GPRD(rt)
+                : (unsigned __int128)GPRDU(rt);
+            const unsigned __int128 r = a * b;
+            cpu->lo = static_cast<uint64_t>(r);
+            cpu->hi = static_cast<uint64_t>(r >> 64);
+            cycles = 8;
             break;
-        case 0x12: // MFLO
-            cpu->r[rd] = sign_ext32(static_cast<uint32_t>(cpu->lo));
+        }
+        case 0x1E: // DDIV
+            if (GPRD(rt) != 0) {
+                cpu->lo = static_cast<uint64_t>(GPRD(rs) / GPRD(rt));
+                cpu->hi = static_cast<uint64_t>(GPRD(rs) % GPRD(rt));
+            }
+            cycles = 68;
+            break;
+        case 0x1F: // DDIVU
+            if (GPRDU(rt) != 0) {
+                cpu->lo = GPRDU(rs) / GPRDU(rt);
+                cpu->hi = GPRDU(rs) % GPRDU(rt);
+            }
+            cycles = 68;
+            break;
+        case 0x0F: // SYNC - memory barrier, nothing to do in an interpreter
+            break;
+        case 0x10: // MFHI (full 64-bit)
+            cpu->r[rd] = cpu->hi;
+            break;
+        case 0x12: // MFLO (full 64-bit)
+            cpu->r[rd] = cpu->lo;
             break;
         case 0x11: // MTHI
-            cpu->hi = static_cast<uint64_t>(GPRU(rs));
+            cpu->hi = GPRDU(rs);
             break;
         case 0x13: // MTLO
-            cpu->lo = static_cast<uint64_t>(GPRU(rs));
+            cpu->lo = GPRDU(rs);
             break;
 
         // ALU
@@ -494,8 +538,18 @@ uint32_t mips_step(mips_cpu* cpu) {
             cpu->r[rd] = static_cast<uint64_t>(GPRD(rt) >> (sa + 32));
             break;
 
-        default:
+        default: {
+            static const bool trap = getenv("KI_TRAP_OP") != nullptr;
+            if (trap) {
+                static uint64_t seen = 0;
+                if (!(seen & (1ull << func))) {
+                    seen |= 1ull << func;
+                    fprintf(stderr, "[UNIMPL] special fn 0x%02X at pc=0x%08X\n",
+                            func, cpu->last_pc);
+                }
+            }
             break;  // Unimplemented: NOP
+        }
         }
     }
     // ---- REGIMM (opcode 0x01) --------------------------------------------
@@ -662,7 +716,17 @@ uint32_t mips_step(mips_cpu* cpu) {
             cpu->r[rt] = sign_ext32(cop0_read(cpu, rd));
         } else if (cop_fmt == 0x04) { // MTC0
             cop0_write(cpu, rd, GPRU(rt));
+        } else if ((op & 0x3F) == 0x18 && (rs & 0x10)) { // ERET (CO=1, fn 0x18)
+            // Return from exception: resume at EPC and drop the level bit.
+            // Without this the ISR can never return and interrupts stay
+            // masked (EXL) forever. We keep a single EPC, so ERET clears both
+            // EXL and ERL and jumps there.
+            cpu->pc = cpu->epc;
+            cpu->next_pc = cpu->epc + 4;
+            cpu->sr &= ~0x6u;  // clear EXL | ERL
         }
+        // Other CO=1 ops (TLBWI/TLBWR/TLBR/TLBP) are no-ops: kseg0/1 is
+        // unmapped so the TLB never resolves an address here.
     }
     // ---- Load instructions (opcodes 0x20-0x27) -------------------------
     else if (opcode == 0x20) { // LB
@@ -776,17 +840,78 @@ uint32_t mips_step(mips_cpu* cpu) {
         }
         cpu->r[rt] = r;
     }
+    else if (opcode == 0x27) { // LWU - load word, zero-extended to 64 bits
+        cpu->r[rt] = mem_read32(cpu, GPRU(rs) + static_cast<uint32_t>(simm));
+    }
+    // LL/LLD/SC/SCD: no multiprocessor here, so load-linked is a plain load
+    // and store-conditional always succeeds (writes and returns 1).
+    else if (opcode == 0x30) { // LL
+        cpu->r[rt] = sign_ext32(
+            mem_read32(cpu, GPRU(rs) + static_cast<uint32_t>(simm)));
+    }
+    else if (opcode == 0x34) { // LLD
+        const uint32_t a = GPRU(rs) + static_cast<uint32_t>(simm);
+        cpu->r[rt] = static_cast<uint64_t>(mem_read32(cpu, a)) |
+                     (static_cast<uint64_t>(mem_read32(cpu, a + 4)) << 32);
+    }
+    else if (opcode == 0x38) { // SC
+        mem_write32(cpu, GPRU(rs) + static_cast<uint32_t>(simm),
+                    static_cast<uint32_t>(GPRU(rt)));
+        if (rt != 0) cpu->r[rt] = 1;
+    }
+    else if (opcode == 0x3C) { // SCD
+        const uint32_t a = GPRU(rs) + static_cast<uint32_t>(simm);
+        mem_write32(cpu, a, static_cast<uint32_t>(GPRDU(rt)));
+        mem_write32(cpu, a + 4, static_cast<uint32_t>(GPRDU(rt) >> 32));
+        if (rt != 0) cpu->r[rt] = 1;
+    }
+    // Unaligned doubleword stores, byte-wise (little-endian), mirroring LDL/LDR.
+    else if (opcode == 0x2C) { // SDL
+        const uint32_t addr = GPRU(rs) + static_cast<uint32_t>(simm);
+        const int b = addr & 7;
+        for (int i = 0; i <= b; ++i)
+            mem_write8(cpu, addr - i,
+                       static_cast<uint8_t>(GPRDU(rt) >> ((7 - i) * 8)));
+    }
+    else if (opcode == 0x2D) { // SDR
+        const uint32_t addr = GPRU(rs) + static_cast<uint32_t>(simm);
+        const int b = addr & 7;
+        for (int i = 0; i < 8 - b; ++i)
+            mem_write8(cpu, addr + i,
+                       static_cast<uint8_t>(GPRDU(rt) >> (i * 8)));
+    }
+    else {
+        static const bool trap = getenv("KI_TRAP_OP") != nullptr;
+        if (trap) {
+            static uint64_t seen = 0;
+            if (opcode < 64 && !(seen & (1ull << opcode))) {
+                seen |= 1ull << opcode;
+                fprintf(stderr, "[UNIMPL] primary op 0x%02X at pc=0x%08X\n",
+                        opcode, cpu->last_pc);
+            }
+        }
+    }
 
     #undef GPR
     #undef GPRU
     #undef GPRD
     #undef GPRDU
 
-    // Timer: Count increments every cycle.
-    cpu->count += cycles;
+    // Count advances at HALF the cycle rate (MAME: Count = cycles/2), and the
+    // odd cycle is carried so it still ticks once every two.
+    const uint32_t prev_count = cpu->count;
+    cpu->count_frac += cycles;
+    cpu->count += cpu->count_frac >> 1;
+    cpu->count_frac &= 1;
 
-    // Check for timer interrupt.
-    if (cpu->compare != 0 && cpu->count >= cpu->compare) {
+    // Timer interrupt: fire IP7 exactly once when Count reaches Compare, and
+    // only while armed (armed is set when the game writes Compare). This is
+    // MAME's compare_armed edge behaviour, not a level that re-asserts every
+    // step - which used to storm the handler.
+    if (cpu->compare_armed &&
+        static_cast<int32_t>(cpu->count - cpu->compare) >= 0 &&
+        static_cast<int32_t>(prev_count - cpu->compare) < 0) {
+        cpu->compare_armed = false;
         cpu->cause |= (1u << 15);  // IP7: timer interrupt pending
     }
 
