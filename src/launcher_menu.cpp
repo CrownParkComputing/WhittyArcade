@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <utility>
@@ -76,6 +77,22 @@ rendered_text make_text(SDL_Renderer* renderer, TTF_Font* font,
 void destroy_text(rendered_text& text) {
     if (text.texture) SDL_DestroyTexture(text.texture);
     text = {};
+}
+
+// Same as draw_text but stretched about its top-left. Used only where the
+// size is under the player's control (the cover-flow designer): re-rendering
+// the face at a new point size every frame would be the sharper answer, but
+// the text block is three lines of an animated page, not body copy.
+void draw_text_scaled(SDL_Renderer* renderer, const rendered_text& text,
+                      int x, int y, float scale,
+                      const SDL_Rect* clip = nullptr) {
+    if (!text.texture) return;
+    const SDL_FRect destination = frect(
+        x, y, static_cast<int>(text.width * scale),
+        static_cast<int>(text.height * scale));
+    SDL_SetRenderClipRect(renderer, clip);
+    SDL_RenderTexture(renderer, text.texture, nullptr, &destination);
+    SDL_SetRenderClipRect(renderer, nullptr);
 }
 
 void draw_text(SDL_Renderer* renderer, const rendered_text& text,
@@ -153,6 +170,9 @@ struct launcher_menu::implementation {
     TTF_Font* font{};
     TTF_Font* title_font{};
     TTF_Font* hint_font{};
+    // Book-style italic face for the game synopsis on the cover-flow page;
+    // null falls back to the UI font.
+    TTF_Font* desc_font{};
     // Shown in the corner of the browsing screens: whether another machine
     // is out there. A player deciding what to play should not have to open a
     // game to find out that two-player across machines is unavailable.
@@ -166,16 +186,41 @@ struct launcher_menu::implementation {
     struct coverflow_video_state {
         manx_fmv* fmv{};
         SDL_Texture* texture{};
+        SDL_AudioStream* audio{};
         std::string path;
         void close() {
+            // The audio stream goes first: destroying it stops the device
+            // pulling before the decoder it reads from disappears.
+            if (audio) SDL_DestroyAudioStream(audio);
             if (fmv) manx_fmv_close(fmv);
             if (texture) SDL_DestroyTexture(texture);
+            audio = nullptr;
             fmv = nullptr;
             texture = nullptr;
             path.clear();
         }
     };
     coverflow_video_state cf_video;
+
+    // Opens (or reopens, for looping) the selected game's video snap and,
+    // when the snap has a soundtrack, a matching device audio stream.
+    void open_coverflow_video(const std::string& path) {
+        cf_video.path = path;
+        cf_video.fmv = manx_fmv_open(path.c_str(), logical_width,
+                                     logical_height, manx_fmv_format_rgba);
+        if (!cf_video.fmv || !manx_fmv_has_audio(cf_video.fmv)) return;
+        if (!SDL_WasInit(SDL_INIT_AUDIO) &&
+            !SDL_InitSubSystem(SDL_INIT_AUDIO))
+            return;
+        const SDL_AudioSpec spec{SDL_AUDIO_S16, 2, 48000};
+        cf_video.audio = SDL_OpenAudioDeviceStream(
+            SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+        if (!cf_video.audio) return;
+        // Background level: the snap is an attract loop behind the page,
+        // not the main event.
+        SDL_SetAudioStreamGain(cf_video.audio, 0.6f);
+        SDL_ResumeAudioStreamDevice(cf_video.audio);
+    }
 #endif
     // Cover-flow animation: target index, current float position (lerped),
     // and timestamp of the last selection change.
@@ -183,6 +228,155 @@ struct launcher_menu::implementation {
     float cf_position{};
     int cf_video_index{-1};
     Uint64 cf_anim_start{};
+
+    // ---- Cover-flow layout, user-adjustable via the F2 designer --------
+    //
+    // Every element is a centre point in screen fractions plus a scale, so
+    // one layout works at any window size. The designer writes the file;
+    // deleting it restores the defaults.
+    struct cf_element {
+        float x, y, scale;
+    };
+    struct cf_layout_t {
+        cf_element box, snap, marquee, text;
+    };
+    static constexpr cf_layout_t cf_layout_defaults{
+        {0.16f, 0.46f, 1.0f},   // box art, left
+        {0.74f, 0.44f, 1.0f},   // screenshot, right
+        {0.50f, 0.84f, 1.0f},   // marquee above the title
+        {0.50f, 0.905f, 1.0f},  // title + metadata + synopsis block
+    };
+    cf_layout_t cf_layout{cf_layout_defaults};
+    bool cf_layout_loaded{};
+    bool cf_design{};
+    // Set by arrange_coverflow_next() when the View menu asks for the
+    // designer; consumed the next time a cover-flow page opens.
+    bool cf_design_pending{};
+    int cf_design_sel{};
+    bool cf_dragging{};
+    // Rects of the four elements as last drawn, indexed box/snap/marquee/
+    // text - the designer's outlines and mouse hit-testing read these.
+    SDL_FRect cf_rects[4]{};
+
+    cf_element* cf_elements[4] = {&cf_layout.box, &cf_layout.snap,
+                                  &cf_layout.marquee, &cf_layout.text};
+
+    static std::filesystem::path cf_layout_path() {
+        const std::filesystem::path root = manx_platform::config_root();
+        return root.empty() ? std::filesystem::path("coverflow_layout.ini") :
+                              root / "MANX" / "coverflow_layout.ini";
+    }
+
+    void load_cf_layout() {
+        if (cf_layout_loaded) return;
+        cf_layout_loaded = true;
+        std::ifstream input(cf_layout_path());
+        if (!input) return;
+        std::string line;
+        while (std::getline(input, line)) {
+            const std::size_t equals = line.find('=');
+            if (equals == std::string::npos) continue;
+            const std::string key = line.substr(0, equals);
+            cf_element value{};
+            if (std::sscanf(line.c_str() + equals + 1, "%f,%f,%f",
+                            &value.x, &value.y, &value.scale) != 3)
+                continue;
+            value.x = std::clamp(value.x, 0.0f, 1.0f);
+            value.y = std::clamp(value.y, 0.0f, 1.0f);
+            value.scale = std::clamp(value.scale, 0.3f, 2.5f);
+            if (key == "box") cf_layout.box = value;
+            else if (key == "snap") cf_layout.snap = value;
+            else if (key == "marquee") cf_layout.marquee = value;
+            else if (key == "text") cf_layout.text = value;
+        }
+    }
+
+    void save_cf_layout() const {
+        const std::filesystem::path path = cf_layout_path();
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        std::ofstream output(path, std::ios::trunc);
+        if (!output) return;
+        const auto write = [&](const char* name, const cf_element& value) {
+            char line[96];
+            std::snprintf(line, sizeof line, "%s=%.4f,%.4f,%.4f\n", name,
+                          value.x, value.y, value.scale);
+            output << line;
+        };
+        write("box", cf_layout.box);
+        write("snap", cf_layout.snap);
+        write("marquee", cf_layout.marquee);
+        write("text", cf_layout.text);
+    }
+
+    static const cf_element& cf_default_element(int index) {
+        switch (index) {
+        case 0: return cf_layout_defaults.box;
+        case 1: return cf_layout_defaults.snap;
+        case 2: return cf_layout_defaults.marquee;
+        default: return cf_layout_defaults.text;
+        }
+    }
+
+    // One designer event. Arrow keys move (Shift for fine steps), +/-
+    // resizes, Tab cycles elements, R resets one element, F2/Escape leave
+    // and save. The mouse drags an element directly and the wheel resizes.
+    void design_event(const SDL_Event& event) {
+        cf_element& element = *cf_elements[cf_design_sel];
+        if (event.type == SDL_EVENT_KEY_DOWN) {
+            const bool fine = SDL_GetModState() & SDL_KMOD_SHIFT;
+            const float step = fine ? 0.002f : 0.01f;
+            switch (event.key.key) {
+            case SDLK_LEFT: element.x -= step; break;
+            case SDLK_RIGHT: element.x += step; break;
+            case SDLK_UP: element.y -= step; break;
+            case SDLK_DOWN: element.y += step; break;
+            case SDLK_EQUALS:
+            case SDLK_KP_PLUS: element.scale += 0.05f; break;
+            case SDLK_MINUS:
+            case SDLK_KP_MINUS: element.scale -= 0.05f; break;
+            case SDLK_TAB:
+                if (!event.key.repeat)
+                    cf_design_sel = (cf_design_sel + 1) % 4;
+                break;
+            case SDLK_R:
+                element = cf_default_element(cf_design_sel);
+                break;
+            case SDLK_ESCAPE:
+            case SDLK_RETURN:
+                if (!event.key.repeat) {
+                    cf_design = false;
+                    save_cf_layout();
+                }
+                break;
+            default: break;
+            }
+        } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                   event.button.button == SDL_BUTTON_LEFT) {
+            for (int index = 0; index < 4; ++index) {
+                const SDL_FRect& rect = cf_rects[index];
+                if (event.button.x >= rect.x &&
+                    event.button.x <= rect.x + rect.w &&
+                    event.button.y >= rect.y &&
+                    event.button.y <= rect.y + rect.h) {
+                    cf_design_sel = index;
+                    cf_dragging = true;
+                }
+            }
+        } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+            cf_dragging = false;
+        } else if (event.type == SDL_EVENT_MOUSE_MOTION && cf_dragging) {
+            cf_element& dragged = *cf_elements[cf_design_sel];
+            dragged.x = event.motion.x / static_cast<float>(logical_width);
+            dragged.y = event.motion.y / static_cast<float>(logical_height);
+        } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+            element.scale += event.wheel.y * 0.05f;
+        }
+        cf_element& clamped = *cf_elements[cf_design_sel];
+        clamped.x = std::clamp(clamped.x, 0.0f, 1.0f);
+        clamped.y = std::clamp(clamped.y, 0.0f, 1.0f);
+        clamped.scale = std::clamp(clamped.scale, 0.3f, 2.5f);
+    }
 
     bool row_unavailable(int index) const {
         return std::find(unavailable_rows.begin(), unavailable_rows.end(),
@@ -280,6 +474,27 @@ struct launcher_menu::implementation {
             std::fprintf(stderr, "Could not open a launcher font: %s\n",
                          SDL_GetError());
 
+        // The synopsis reads as a sentence, not chrome: give it an italic
+        // face a step larger than the UI font. First face found wins; null
+        // falls back to the UI font at draw time.
+        static constexpr const char* desc_faces[] = {
+#if defined(_WIN32)
+            "C:\\Windows\\Fonts\\segoeuii.ttf",
+            "C:\\Windows\\Fonts\\ariali.ttf",
+#else
+            "/usr/share/fonts/Adwaita/AdwaitaSans-Italic.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans-Oblique.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-Italic.ttf",
+            "/usr/share/fonts/truetype/liberation/"
+            "LiberationSans-Italic.ttf",
+#endif
+        };
+        for (const char* face : desc_faces) {
+            desc_font = TTF_OpenFont(face, 23);
+            if (desc_font) break;
+        }
+
         int count = 0;
         if (SDL_JoystickID* ids = SDL_GetJoysticks(&count)) {
             for (int index = 0; index < count; ++index)
@@ -294,6 +509,7 @@ struct launcher_menu::implementation {
 #endif
         for (SDL_Gamepad* controller : controllers)
             SDL_CloseGamepad(controller);
+        if (desc_font) TTF_CloseFont(desc_font);
         if (hint_font) TTF_CloseFont(hint_font);
         if (title_font) TTF_CloseFont(title_font);
         if (font) TTF_CloseFont(font);
@@ -627,6 +843,12 @@ struct launcher_menu::implementation {
             cf_position = static_cast<float>(initial_selection);
             cf_anim_start = 0;
             cf_video_index = -1;
+            cf_dragging = false;
+            load_cf_layout();
+            // The View menu's "Arrange Page" hands the designer over here,
+            // one page only: leaving and coming back is browsing again.
+            cf_design = cf_design_pending;
+            cf_design_pending = false;
 #ifdef MANX_HAVE_FFMPEG
             cf_video.close();
 #endif
@@ -653,27 +875,19 @@ struct launcher_menu::implementation {
                     if (std::abs(cf_position -
                                  static_cast<float>(selected)) < 0.005f)
                         cf_position = static_cast<float>(selected);
-                    // Reset scroll when selection changes
+                    // Selection changed: reset the description scroll and
+                    // start the new game's video snap.
                     if (selected != cf_video_index) {
                         description_started = SDL_GetTicks();
-                    }
-                    // Load video when selection changes
 #ifdef MANX_HAVE_FFMPEG
-                    if (selected != cf_video_index) {
                         cf_video.close();
-                        cf_video_index = selected;
                         if (video_for) {
-                            std::string path = video_for(selected);
-                            if (!path.empty()) {
-                                cf_video.path = path;
-                                cf_video.fmv = manx_fmv_open(
-                                    path.c_str(), logical_width,
-                                    logical_height,
-                                    manx_fmv_format_rgba);
-                            }
+                            const std::string path = video_for(selected);
+                            if (!path.empty()) open_coverflow_video(path);
                         }
-                    }
 #endif
+                        cf_video_index = selected;
+                    }
                     draw_coverflow(title, description, items, selected,
                                    textures, cover_for, back_label, chosen,
                                    wanted, item_descriptions,
@@ -692,13 +906,19 @@ struct launcher_menu::implementation {
                 chosen.assign(1, launcher_menu::interrupted);
                 break;
             }
-            if (!SDL_WaitEventTimeout(
-                    &event, (tick || interrupt) ? 100 : -1)) {
+            // Cover-flow is animated - the background video, the slide lerp
+            // and the description scroll all advance with the wall clock -
+            // so its loop runs at ~60Hz rather than sleeping until input.
+            const Sint32 wait_ms = coverflow ? 16 :
+                (tick || interrupt) ? 100 : -1;
+            if (!SDL_WaitEventTimeout(&event, wait_ms)) {
                 // Timed out: artwork may have arrived while nothing happened.
                 if (tick && tick()) redraw = true;
+                if (coverflow) redraw = true;
                 continue;
             }
             if (tick && tick()) redraw = true;
+            if (coverflow) redraw = true;
             if (event.type == SDL_EVENT_QUIT) break;
             if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
                 open_controller(event.gdevice.which);
@@ -710,6 +930,23 @@ struct launcher_menu::implementation {
             }
             if (event.type >= SDL_EVENT_WINDOW_FIRST &&
                 event.type <= SDL_EVENT_WINDOW_LAST) {
+                redraw = true;
+                continue;
+            }
+
+            // F2 opens the cover-flow designer. While it is open every
+            // other event belongs to it - arrows move the element, they do
+            // not change game - so the normal navigation below is skipped.
+            if (coverflow && event.type == SDL_EVENT_KEY_DOWN &&
+                !event.key.repeat && event.key.key == SDLK_F2) {
+                load_cf_layout();
+                cf_design = !cf_design;
+                if (!cf_design) save_cf_layout();
+                redraw = true;
+                continue;
+            }
+            if (cf_design) {
+                design_event(event);
                 redraw = true;
                 continue;
             }
@@ -1153,18 +1390,30 @@ struct launcher_menu::implementation {
                         }
                     }
                 }
+                // Feed the snap's soundtrack to the device, keeping about
+                // a quarter second queued ahead of the hardware.
+                if (cf_video.audio) {
+                    constexpr int frame_bytes = 2 * sizeof(int16_t);
+                    if (SDL_GetAudioStreamQueued(cf_video.audio) <
+                        12000 * frame_bytes) {
+                        int16_t samples[4096 * 2];
+                        const int got = manx_fmv_read_audio(
+                            cf_video.fmv, samples, 4096);
+                        if (got > 0)
+                            SDL_PutAudioStreamData(
+                                cf_video.audio, samples, got * frame_bytes);
+                    }
+                }
             } else {
                 // End of video: loop by reopening
                 const std::string path = cf_video.path;
                 cf_video.close();
-                cf_video.path = path;
-                cf_video.fmv = manx_fmv_open(
-                    path.c_str(), logical_width, logical_height,
-                    manx_fmv_format_rgba);
+                open_coverflow_video(path);
             }
-            // Video at reduced opacity behind everything
+            // Video behind everything, near-full strength: it is the point
+            // of the page, the wash below keeps the text readable.
             if (cf_video.texture) {
-                SDL_SetTextureAlphaMod(cf_video.texture, 90);
+                SDL_SetTextureAlphaMod(cf_video.texture, 230);
                 const SDL_FRect full{0, 0,
                     static_cast<float>(logical_width),
                     static_cast<float>(logical_height)};
@@ -1174,8 +1423,8 @@ struct launcher_menu::implementation {
         }
 #endif
 
-        // Dark wash over video for legibility
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 120);
+        // Light wash over video for legibility
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 55);
         const SDL_FRect wash{0, 0,
             static_cast<float>(logical_width),
             static_cast<float>(logical_height)};
@@ -1230,27 +1479,38 @@ struct launcher_menu::implementation {
             (cf_position - static_cast<float>(selected)) *
             static_cast<float>(logical_width);
 
-        // ---- Layout constants (percentage-based) -----------------------
-        constexpr float box_left_pct = 0.08f;
-        constexpr float snap_right_pct = 0.92f;
-        constexpr float centre_x_pct = 0.50f;
-        const int box_max_h = logical_height - 220;
-        const int snap_max_h = logical_height - 280;
-        const int marquee_max_w = static_cast<int>(logical_width * 0.38f);
-        const int marquee_max_h = 80;
+        // ---- Layout (user-adjustable via the F2 designer) ---------------
+        load_cf_layout();
+        const cf_layout_t& lay = cf_layout;
+        const float centre_x_pct = lay.text.x;
+        const int box_max_h = static_cast<int>(
+            (logical_height - 220) * lay.box.scale);
+        const int snap_max_h = static_cast<int>(
+            (logical_height - 280) * lay.snap.scale);
+        const int marquee_max_w = static_cast<int>(
+            logical_width * 0.38f * lay.marquee.scale);
+        const int marquee_max_h = static_cast<int>(80 * lay.marquee.scale);
 
         // ---- Box art on the left ---------------------------------------
-        if (box_tex) {
+        {
             int box_w = box_max_h > 0 ?
                 std::min(static_cast<int>(box_max_h * box_aspect),
-                         static_cast<int>(logical_width * 0.32f)) :
-                static_cast<int>(logical_width * 0.28f);
+                         static_cast<int>(logical_width * 0.32f *
+                                          lay.box.scale)) :
+                static_cast<int>(logical_width * 0.28f * lay.box.scale);
             int box_h = box_w > 0 ?
                 static_cast<int>(box_w / box_aspect) : box_max_h;
             int box_x = static_cast<int>(
-                logical_width * box_left_pct - box_w / 2 +
-                slide_offset);
-            int box_y = (logical_height - box_h) / 2 - 20;
+                logical_width * lay.box.x - box_w / 2 + slide_offset);
+            int box_y = static_cast<int>(
+                logical_height * lay.box.y - box_h / 2);
+            cf_rects[0] = frect(box_x, box_y, box_w, box_h);
+        }
+        if (box_tex) {
+            const int box_w = static_cast<int>(cf_rects[0].w);
+            const int box_h = static_cast<int>(cf_rects[0].h);
+            const int box_x = static_cast<int>(cf_rects[0].x);
+            const int box_y = static_cast<int>(cf_rects[0].y);
 
             // Drop shadow
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
@@ -1274,20 +1534,30 @@ struct launcher_menu::implementation {
         }
 
         // ---- Screenshot/fan art on the right ----------------------------
-        if (snap_tex && media.snap_w > 0) {
-            const float snap_aspect = static_cast<float>(media.snap_w) /
-                                      static_cast<float>(media.snap_h);
+        {
+            const float snap_aspect = media.snap_w > 0 && media.snap_h > 0 ?
+                static_cast<float>(media.snap_w) /
+                    static_cast<float>(media.snap_h) :
+                4.0f / 3.0f;
             int snap_w = snap_max_h > 0 ?
                 static_cast<int>(snap_max_h * snap_aspect) :
-                static_cast<int>(logical_width * 0.30f);
+                static_cast<int>(logical_width * 0.30f * lay.snap.scale);
             snap_w = std::min(snap_w,
-                              static_cast<int>(logical_width * 0.35f));
-            int snap_h = snap_w > 0 ?
+                              static_cast<int>(logical_width * 0.35f *
+                                               lay.snap.scale));
+            const int snap_h = snap_w > 0 ?
                 static_cast<int>(snap_w / snap_aspect) : snap_max_h;
-            int snap_x = static_cast<int>(
-                logical_width * snap_right_pct - snap_w +
-                slide_offset);
-            int snap_y = (logical_height - snap_h) / 2 - 40;
+            const int snap_x = static_cast<int>(
+                logical_width * lay.snap.x - snap_w / 2 + slide_offset);
+            const int snap_y = static_cast<int>(
+                logical_height * lay.snap.y - snap_h / 2);
+            cf_rects[1] = frect(snap_x, snap_y, snap_w, snap_h);
+        }
+        if (snap_tex && media.snap_w > 0) {
+            const int snap_w = static_cast<int>(cf_rects[1].w);
+            const int snap_h = static_cast<int>(cf_rects[1].h);
+            const int snap_x = static_cast<int>(cf_rects[1].x);
+            const int snap_y = static_cast<int>(cf_rects[1].y);
 
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
             const SDL_FRect snap_shadow{
@@ -1308,40 +1578,51 @@ struct launcher_menu::implementation {
         }
 
         // ---- Marquee/logo centred above title --------------------------
-        if (marquee_tex && media.marquee_w > 0) {
-            const float mq_aspect = static_cast<float>(media.marquee_w) /
-                                    static_cast<float>(media.marquee_h);
+        {
+            const float mq_aspect = media.marquee_w > 0 &&
+                    media.marquee_h > 0 ?
+                static_cast<float>(media.marquee_w) /
+                    static_cast<float>(media.marquee_h) :
+                4.0f;
             int mq_w = marquee_max_w;
             int mq_h = static_cast<int>(mq_w / mq_aspect);
             if (mq_h > marquee_max_h) {
                 mq_h = marquee_max_h;
                 mq_w = static_cast<int>(mq_h * mq_aspect);
             }
-            int mq_x = static_cast<int>(
-                logical_width * centre_x_pct - mq_w / 2 + slide_offset);
-            int mq_y = logical_height - 180;
-
+            const int mq_x = static_cast<int>(
+                logical_width * lay.marquee.x - mq_w / 2 + slide_offset);
+            const int mq_y = static_cast<int>(
+                logical_height * lay.marquee.y - mq_h / 2);
+            cf_rects[2] = frect(mq_x, mq_y, mq_w, mq_h);
+        }
+        if (marquee_tex && media.marquee_w > 0) {
             SDL_SetTextureAlphaMod(marquee_tex, 240);
-            const SDL_FRect mq_dest{
-                static_cast<float>(mq_x), static_cast<float>(mq_y),
-                static_cast<float>(mq_w), static_cast<float>(mq_h)};
-            SDL_RenderTexture(renderer, marquee_tex, nullptr, &mq_dest);
+            SDL_RenderTexture(renderer, marquee_tex, nullptr, &cf_rects[2]);
         }
 
         // ---- Title (large, centred) ------------------------------------
+        // The whole block - title, metadata row, synopsis - moves and
+        // resizes as one under lay.text, and its bounds are recorded in
+        // cf_rects[3] for the designer to outline and hit-test.
+        const float text_scale = lay.text.scale;
+        int text_left = logical_width;
+        int text_right = 0;
         const std::string& game_name =
             items[static_cast<std::size_t>(selected)];
         rendered_text heading = make_text(
             renderer, title_font ? title_font : font,
             game_name, accent,
-            logical_width - horizontal_margin * 2);
-        int title_y = logical_height - 125 +
-            (marquee_tex && media.marquee_w > 0 ? 25 : -20);
-        draw_text(renderer, heading,
-                  static_cast<int>(logical_width * centre_x_pct -
-                                   heading.width / 2 + slide_offset),
-                  title_y);
-        int heading_h = heading.height;
+            static_cast<int>((logical_width - horizontal_margin * 2) /
+                             text_scale));
+        int title_y = static_cast<int>(logical_height * lay.text.y);
+        const int heading_w = static_cast<int>(heading.width * text_scale);
+        const int heading_x = static_cast<int>(
+            logical_width * centre_x_pct - heading_w / 2 + slide_offset);
+        draw_text_scaled(renderer, heading, heading_x, title_y, text_scale);
+        int heading_h = static_cast<int>(heading.height * text_scale);
+        text_left = std::min(text_left, heading_x);
+        text_right = std::max(text_right, heading_x + heading_w);
         destroy_text(heading);
 
         // ---- Metadata row ----------------------------------------------
@@ -1362,12 +1643,17 @@ struct launcher_menu::implementation {
         if (!meta.empty()) {
             rendered_text meta_text = make_text(
                 renderer, font, meta, muted,
-                logical_width - horizontal_margin * 4);
-            draw_text(renderer, meta_text,
-                      static_cast<int>(logical_width * centre_x_pct -
-                                       meta_text.width / 2 + slide_offset),
-                      title_y + heading_h + 6);
-            heading_h = heading_h + meta_text.height + 6;
+                static_cast<int>((logical_width - horizontal_margin * 4) /
+                                 text_scale));
+            const int meta_w = static_cast<int>(meta_text.width * text_scale);
+            const int meta_x = static_cast<int>(
+                logical_width * centre_x_pct - meta_w / 2 + slide_offset);
+            draw_text_scaled(renderer, meta_text, meta_x,
+                             title_y + heading_h + 6, text_scale);
+            heading_h = heading_h +
+                static_cast<int>(meta_text.height * text_scale) + 6;
+            text_left = std::min(text_left, meta_x);
+            text_right = std::max(text_right, meta_x + meta_w);
             destroy_text(meta_text);
         }
 
@@ -1388,12 +1674,17 @@ struct launcher_menu::implementation {
             }
         }
         const int desc_y = title_y + heading_h + 8;
+        int desc_bottom = desc_y;
         if (!selected_description.empty()) {
-            const int desc_width = static_cast<int>(logical_width * 0.45f);
+            const int desc_width = static_cast<int>(
+                logical_width * 0.45f * text_scale);
             rendered_text line = make_text(
-                renderer, font, selected_description, muted, desc_width);
+                renderer, desc_font ? desc_font : font, selected_description,
+                muted, static_cast<int>(desc_width / text_scale));
+            const int line_w = static_cast<int>(line.width * text_scale);
+            const int line_h = static_cast<int>(line.height * text_scale);
             int offset = 0;
-            const int travel = std::max(0, line.width - desc_width);
+            const int travel = std::max(0, line_w - desc_width);
             if (travel > 0 && description_elapsed_ms > 0) {
                 constexpr Uint64 hold_ms = 2200;
                 constexpr Uint64 end_hold_ms = 1100;
@@ -1407,19 +1698,20 @@ struct launcher_menu::implementation {
                         travel,
                         (phase - hold_ms) * pixels_per_second / 1000));
             }
-            const SDL_Rect clip{
-                static_cast<int>(logical_width * centre_x_pct -
-                                 desc_width / 2 + slide_offset),
-                desc_y, desc_width,
-                std::max(line.height + 2, 24)};
-            SDL_SetRenderClipRect(renderer, &clip);
-            draw_text(renderer, line,
-                      static_cast<int>(logical_width * centre_x_pct -
-                                       desc_width / 2 + slide_offset - offset),
-                      desc_y);
-            SDL_SetRenderClipRect(renderer, nullptr);
+            const int desc_x = static_cast<int>(
+                logical_width * centre_x_pct - desc_width / 2 + slide_offset);
+            const SDL_Rect clip{desc_x, desc_y, desc_width,
+                                std::max(line_h + 2, 24)};
+            draw_text_scaled(renderer, line, desc_x - offset, desc_y,
+                             text_scale, &clip);
             destroy_text(line);
+            desc_bottom = desc_y + std::max(line_h, 24);
+            text_left = std::min(text_left, desc_x);
+            text_right = std::max(text_right, desc_x + desc_width);
         }
+        cf_rects[3] = frect(text_left, title_y,
+                            std::max(text_right - text_left, 40),
+                            std::max(desc_bottom - title_y, 40));
 
         // ---- Navigation arrows (subtle, at sides) -----------------------
         SDL_SetRenderDrawColor(renderer, 70, 208, 255, 80);
@@ -1472,9 +1764,68 @@ struct launcher_menu::implementation {
                 std::to_string(wanted) + ")" : std::string("Play")});
         if (wanted <= 0) hints.push_back({"Y", "View"});
         hints.push_back({"B", back_label});
+        hints.push_back({"F2", "Layout"});
         draw_hints(hints, list_bottom + 18);
         draw_status_chip();
+        if (cf_design) draw_design_overlay();
         SDL_RenderPresent(renderer);
+    }
+
+    // The F2 designer, drawn over the finished page so the player is
+    // arranging the real thing rather than a wireframe of it.
+    void draw_design_overlay() {
+        static constexpr const char* names[4] = {
+            "Box art", "Screenshot", "Marquee", "Text"};
+        for (int index = 0; index < 4; ++index) {
+            const bool live = index == cf_design_sel;
+            const SDL_FRect& rect = cf_rects[index];
+            if (rect.w <= 0 || rect.h <= 0) continue;
+            SDL_SetRenderDrawColor(renderer,
+                                   live ? accent.r : 120,
+                                   live ? accent.g : 132,
+                                   live ? accent.b : 146,
+                                   live ? 255 : 150);
+            SDL_RenderRect(renderer, &rect);
+            if (live) {
+                // A second inset line so the selection reads at a glance
+                // against busy box art.
+                const SDL_FRect inner{rect.x + 2, rect.y + 2,
+                                      rect.w - 4, rect.h - 4};
+                SDL_RenderRect(renderer, &inner);
+            }
+            rendered_text tag = make_text(
+                renderer, hint_font ? hint_font : font, names[index],
+                live ? accent : muted);
+            draw_text(renderer, tag, static_cast<int>(rect.x) + 4,
+                      static_cast<int>(rect.y) - tag.height - 2);
+            destroy_text(tag);
+        }
+
+        const cf_element& element = *cf_elements[cf_design_sel];
+        char readout[128];
+        std::snprintf(readout, sizeof readout,
+                      "%s   x %.3f   y %.3f   size %.2f",
+                      names[cf_design_sel], element.x, element.y,
+                      element.scale);
+        static constexpr const char* keys =
+            "Drag or arrows to move (Shift = fine)   "
+            "+/- or wheel to size   Tab next   R reset   "
+            "Enter/Esc save and exit";
+
+        rendered_text value = make_text(renderer, font, readout, accent);
+        rendered_text help = make_text(renderer, hint_font ? hint_font : font,
+                                       keys, muted);
+        const int panel_h = value.height + help.height + 26;
+        const SDL_FRect panel = frect(0, 0, logical_width, panel_h);
+        SDL_SetRenderDrawColor(renderer, 8, 13, 20, 225);
+        SDL_RenderFillRect(renderer, &panel);
+        SDL_SetRenderDrawColor(renderer, accent.r, accent.g, accent.b, 255);
+        const SDL_FRect edge = frect(0, panel_h - 2, logical_width, 2);
+        SDL_RenderFillRect(renderer, &edge);
+        draw_text(renderer, value, horizontal_margin, 8);
+        draw_text(renderer, help, horizontal_margin, 12 + value.height);
+        destroy_text(value);
+        destroy_text(help);
     }
 
     void draw_frame(const std::string& title,
@@ -2684,6 +3035,11 @@ int launcher_menu::select_grid(
     return chosen.empty() ? -1 : chosen.front();
 }
 
+void launcher_menu::arrange_coverflow_next() {
+    if (!m_impl->ready()) return;
+    m_impl->cf_design_pending = true;
+}
+
 std::vector<int> launcher_menu::select_grid_multiple(
         const std::string& title, const std::string& description,
         const std::vector<std::string>& items, const std::string& back_label,
@@ -2772,6 +3128,11 @@ int launcher_menu::select_modes(const std::string& title,
                               std::function<bool()> interrupt,
                               std::function<bool()> tick) {
     if (cards.empty()) return -1;
+    // Debug-only: drive straight through mode pages to reach the game grid
+    // headlessly.
+    if (std::getenv("MANX_AUTOPILOT"))
+        return std::clamp(initial_selection, 0,
+                          static_cast<int>(cards.size()) - 1);
 
     std::vector<std::string> items;
     std::vector<int> unavailable;

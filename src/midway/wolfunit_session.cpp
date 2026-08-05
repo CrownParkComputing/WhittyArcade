@@ -447,31 +447,38 @@ private:
 
         // PCI / Voodoo Graphics space (0x10000000 - 0x1EFFFFFF).
         // The boot ROM JALs to 0xB4036BFC (phys 0x14036BFC) for GPU
-        // init. Return JR $ra there so the function returns cleanly.
-        // For all other PCI addresses (GPU status registers), return 0
-        // so status polls see "ready" and continue.
+        // init. When the CPU is FETCHING from this window, return JR $ra
+        // so the function returns cleanly (NOP for the delay slot).
+        // A DATA read of the window is a different thing entirely: MAME
+        // maps kinst with unmap_value_high, so device-absent polls read
+        // 0xFFFFFFFF and fall through. Serving those polls the JR $ra
+        // opcode as data left the game spinning at 0x1007C03C forever.
         if (phys >= 0x10000000 && phys < 0x1F000000) {
             static int pci_log = 0;
             if (pci_log < 10) {
                 { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[PCI-R32] #%d PC=0x%08X phys=0x%08X\n", pci_log, mips_last_pc(m_cpu), phys); fclose(f); } }
                 ++pci_log;
             }
-            // Detect entry into PCI space from non-PCI domain.
-            // This is a JAL/J target — return JR $ra pair so it returns
-            // cleanly. Also write "GPU ready" flags to RAM so the boot
-            // ROM's status check finds the GPU initialised.
-            if (!m_in_pci_domain) {
-                m_in_pci_domain = true;
-                m_pci_entry_phys = phys;
-                // Inject GPU-done flags into RAM.
-                if (0x5AD4 < ram_size) write32_be(&m_ram[0x5AD4], 0x00000001u);
-                if (0x6268 < ram_size) write32_be(&m_ram[0x6268], 0x00000001u);
-                return 0x03E00008;  // JR $ra on entry
+            const uint32_t pc_phys = mips_last_pc(m_cpu) & 0x1FFFFFFF;
+            const bool fetching =
+                pc_phys >= 0x10000000 && pc_phys < 0x1F000000;
+            if (fetching) {
+                if (!m_in_pci_domain) {
+                    m_in_pci_domain = true;
+                    m_pci_entry_phys = phys;
+                    // Inject GPU-done flags into RAM.
+                    if (0x5AD4 < ram_size)
+                        write32_be(&m_ram[0x5AD4], 0x00000001u);
+                    if (0x6268 < ram_size)
+                        write32_be(&m_ram[0x6268], 0x00000001u);
+                    return 0x03E00008;  // JR $ra on entry
+                }
+                // Still in PCI: NOP for the delay slot and any subsequent
+                // linear execution. After JR $ra returns, the CPU is back
+                // in mapped memory, which resets m_in_pci_domain above.
+                return 0x00000000;  // NOP
             }
-            // Still in PCI: return NOP for delay slot and any subsequent
-            // linear execution. After JR $ra returns, the CPU will be
-            // back in boot ROM, which resets m_in_pci_domain below.
-            return 0x00000000;  // NOP
+            return 0xFFFFFFFFu;  // open bus, as MAME's unmap_value_high
         }
 
         // Log ALL unmapped reads (not RAM/ROM/I/O) to find status checks.
@@ -508,7 +515,7 @@ private:
     uint16_t bus_read16(uint32_t addr) {
         uint32_t phys = addr & 0x1FFFFFFF;
         if (phys >= 0x10000000 && phys < 0x1F000000)
-            return 1;
+            return 0xFFFF;  // open bus, as MAME's unmap_value_high
         if (addr < ram_size)
             return read16_be(&m_ram[addr & ~1u]);
         if (addr >= boot_rom_base && addr < boot_rom_base + boot_rom_size)
@@ -534,7 +541,7 @@ private:
     uint8_t bus_read8(uint32_t addr) {
         uint32_t phys = addr & 0x1FFFFFFF;
         if (phys >= 0x10000000 && phys < 0x1F000000)
-            return 1;
+            return 0xFF;  // open bus, as MAME's unmap_value_high
         if (addr < ram_size)
             return m_ram[addr];
         if (addr >= boot_rom_base && addr < boot_rom_base + boot_rom_size)

@@ -40,7 +40,7 @@ public:
         return arcade_host_action::continue_running;
     }
     arcade_board_type board_type() const noexcept override {
-        return arcade_board_type::xbox360;
+        return arcade_board_type::system246;
     }
     bool owns_its_own_window() const noexcept override { return m_owns; }
     void set_rom_choices(const std::vector<rom_choice>&) override {}
@@ -77,7 +77,7 @@ public:
                           : arcade_host_action::return_to_menu;
     }
     arcade_board_type board_type() const noexcept override {
-        return arcade_board_type::xbox360;
+        return arcade_board_type::system246;
     }
     bool owns_its_own_window() const noexcept override {
         return m_delegate && m_delegate->owns_its_own_window();

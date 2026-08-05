@@ -215,6 +215,11 @@ public:
                     const std::vector<std::string>* item_descriptions =
                         nullptr);
 
+    // Opens the next cover-flow page with the layout designer already on,
+    // so arranging the page can be reached from the View menu rather than
+    // only from the F2 key. Ignored by every other view.
+    void arrange_coverflow_next();
+
     // Picks several games from one grid rather than asking repeatedly. Cards
     // already chosen are numbered in the order they were taken, and the grid
     // returns as soon as `wanted` of them are held. Empty when cancelled.

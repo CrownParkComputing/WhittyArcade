@@ -114,6 +114,16 @@ chd_info chd_open(const std::string& path) {
     chd_info result;
     // CHD v5 fields at correct offsets.
     const uint32_t compression  = read_be32(header.data() + 16);
+    // A compressed CHD's hunk map is itself Huffman-compressed, not the
+    // plain array of lengths read below. Pretending to open one produced a
+    // garbage map and per-sector IDE failures; failing here instead lets
+    // the session fall back to a chdman-extracted .raw beside the .chd.
+    if (compression != 0) {
+        result.error =
+            "Compressed CHD images are not supported. Extract a raw disk "
+            "image beside it: chdman extracthd -i <game>.chd -o <game>.raw";
+        return result;
+    }
     result.logical_bytes = read_be64(header.data() + 32);
     const uint64_t map_offset   = read_be64(header.data() + 40);
     const uint64_t meta_offset  = read_be64(header.data() + 48);

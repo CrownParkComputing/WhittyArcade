@@ -266,6 +266,41 @@ fs::path artwork_path(const fs::path& root, const std::string& short_name,
                         preferred_category);
 }
 
+fs::path video_path(const fs::path& root,
+                    const std::vector<std::string>& short_names) {
+    if (root.empty() || short_names.empty()) return {};
+    static constexpr std::array<const char*, 4> directories{{
+        "videos", "video", "snap", "",
+    }};
+    static constexpr std::array<const char*, 4> extensions{{
+        ".mp4", ".mkv", ".avi", ".webm",
+    }};
+    std::error_code error;
+    std::vector<std::string> names;
+    for (const std::string& short_name : short_names) {
+        const std::string name = lowercase(short_name);
+        if (name.empty() ||
+            std::find(names.begin(), names.end(), name) != names.end())
+            continue;
+        names.push_back(name);
+        if (const auto alias = media_aliases().find(name);
+            alias != media_aliases().end() &&
+            std::find(names.begin(), names.end(), alias->second) == names.end())
+            names.push_back(alias->second);
+    }
+    for (const std::string& name : names) {
+        for (const char* directory : directories) {
+            const fs::path folder = *directory ? root / directory : root;
+            for (const char* extension : extensions) {
+                const fs::path candidate = folder / (name + extension);
+                if (fs::is_regular_file(candidate, error)) return candidate;
+                error.clear();
+            }
+        }
+    }
+    return {};
+}
+
 std::string description(const fs::path& root,
                         const std::vector<std::string>& short_names) {
     for (const std::string& short_name : short_names) {

@@ -76,6 +76,16 @@ int main() {
         return 7;
     if (!manx_media::artwork_path(local, "manxttc", "marquee").empty())
         return 8;
+    touch(local / "videos" / "manxtt.mp4", "video snap");
+    if (manx_media::video_path(local, std::vector<std::string>{"ManxTT"}) !=
+        local / "videos" / "manxtt.mp4")
+        return 13;
+    if (manx_media::video_path(local, std::vector<std::string>{"manxttc"}) !=
+        local / "videos" / "manxtt.mp4")
+        return 14;
+    if (!manx_media::video_path(
+             local, std::vector<std::string>{"daytona"}).empty())
+        return 15;
     if (manx_media::description(local, "daytona") !=
             "Fast & furious \"stock cars\"." ||
         manx_media::description(

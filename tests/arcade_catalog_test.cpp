@@ -8,7 +8,6 @@
 #include "sega/system16b/system16b_rom.h"
 #include "namco/system22/system22_rom.h"
 #include "system246_rom.h"
-#include "xbox360_rom.h"
 
 #include <cassert>
 #include <cstring>
@@ -108,16 +107,6 @@ int main() {
     assert_registered(system246_rom_loader::set_short_name(
                           system246_rom_set::ridge_racer_v_arcade_battle),
                       arcade_board_type::system246);
-    for (xbox360_rom_set set : {
-             xbox360_rom_set::robotron_2084,
-             // Both Geometry Wars titles are native game plugins now,
-             // discovered on disk rather than carried in the catalogue as Xbox
-             // 360 ROM sets. The loader below still recognises their packages -
-             // that is what the import path reads - but nothing offers them as
-             // a board game, so they are deliberately absent here.
-             xbox360_rom_set::space_giraffe})
-        assert_registered(xbox360_rom_loader::set_short_name(set),
-                          arcade_board_type::xbox360);
     for (model1_rom_set set : {
              model1_rom_set::virtua_formula,
              model1_rom_set::virtua_fighter,

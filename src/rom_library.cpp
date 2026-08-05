@@ -1,6 +1,5 @@
 #include "rom_library.h"
 #include "game_plugin_host.h"
-#include "native_title_library.h"
 
 #include "arcade_catalog.h"
 #include "arcade_settings.h"
@@ -15,7 +14,6 @@
 #include "midway/midway_rom.h"
 #include "namco/system22/system22_rom.h"
 #include "system246_rom.h"
-#include "xbox360_rom.h"
 
 #include <minizip/unzip.h>
 
@@ -188,13 +186,6 @@ std::string readiness_suffix(const fs::path& candidate,
             missing.emplace_back(missing_item.empty() ? "<game>.acgame"
                                                       : missing_item);
         }
-    } else if (manifest.board == arcade_board_type::xbox360) {
-        // An extracted Xbox 360 title is ready when its default.xex and the
-        // data files that title reads are all present. The loader knows which
-        // those are, so ask it rather than repeating the list here.
-        const xbox360_rom_info loaded =
-            xbox360_rom_loader::inspect(candidate.string());
-        if (!loaded) missing.emplace_back("game data");
     } else if (std::string(manifest.short_name) == "vformula" &&
                !archive_contains(candidate, "mpr-14890.26") &&
                !sibling_exists(candidate, "vr.zip")) {
@@ -501,125 +492,6 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
         }
     }
 
-    // Both Xbox 360 passes below hand their finds to this, because a title that
-    // was dumped both ways is on the machine twice and only one copy may be
-    // offered. Which one must be the title's registered preference rather than
-    // an accident of which pass ran first or which entry the filesystem listed
-    // first: the first copy found is listed, a later copy in the preferred shape
-    // replaces it, and any further copy is ignored. The exception is a copy the
-    // player currently has selected, which is never replaced - the browser has
-    // to be able to show which copy is loaded.
-    //
-    // Returns false only when the candidate is not a supported title at all, so
-    // a caller scanning several candidate paths for one game knows to keep
-    // looking.
-    struct xbox360_listing {
-        std::size_t index;
-        xbox360_content_shape shape;
-    };
-    std::unordered_map<std::string, xbox360_listing> xbox360_listed;
-    const auto offer_xbox360 = [&](const fs::path& candidate,
-                                   const char* incomplete_note) {
-        // Identification does not require the data, so an incomplete copy is
-        // still listed - a game the player can see is missing files beats a game
-        // that silently is not there - and it still reports its own shape.
-        const xbox360_rom_info identified =
-            xbox360_rom_loader::inspect(candidate.string(), false);
-        if (!identified) return false;
-        const std::string identity =
-            xbox360_rom_loader::set_short_name(identified.set);
-        // A title that now ships as a native plugin is no longer offered as an
-        // Xbox 360 ROM set: the loader still RECOGNISES its package, which is
-        // what an import reads, but the plugin owns the game. Offering both
-        // would put two entries with one short name in front of the player and
-        // leave the audit disagreeing with itself about which board it is.
-        if (const rom_set_manifest* owner = find_supported_rom_set(identity))
-            if (owner->board == arcade_board_type::game_plugin) return false;
-        const std::string normalized = normalized_path(candidate);
-        if (!seen_paths.insert(normalized).second) return true;
-        const xbox360_content_shape preferred =
-            xbox360_rom_loader::set_preferred_shape(identified.set);
-        const auto listed = xbox360_listed.find(identity);
-        if (listed != xbox360_listed.end()) {
-            if (listed->second.shape == preferred ||
-                identified.shape != preferred ||
-                choices[listed->second.index].path == normalized_current)
-                return true;
-        } else if (!seen_sets.insert(identity).second) {
-            return true;
-        }
-
-        std::string label =
-            xbox360_rom_loader::set_display_name(identified.set);
-        label += xbox360_rom_loader::inspect(candidate.string()) ?
-            "  [ready]" : incomplete_note;
-        if (normalized == normalized_current) label += "  [current]";
-        const rom_set_manifest* known = find_supported_rom_set(identity);
-        rom_choice choice{normalized, std::move(label),
-                          arcade_board_type::xbox360,
-                          known ? known->publisher : ""};
-        if (listed != xbox360_listed.end()) {
-            choices[listed->second.index] = std::move(choice);
-            listed->second.shape = identified.shape;
-            return true;
-        }
-        xbox360_listed.emplace(identity,
-                               xbox360_listing{choices.size(),
-                                               identified.shape});
-        choices.push_back(std::move(choice));
-        return true;
-    };
-
-    // Xbox 360 titles are extracted game directories, not archives, and the
-    // ones that have a native port live in the recompilation suite's own tree
-    // rather than in the library folders - the scans above never see them.
-    // Surface each extracted title there, deduped against anything the library
-    // already found, exactly as the System 246 pass above does for .acgame
-    // manifests. Overridable so a test can point it at an empty path.
-    {
-        const char* xbox_env = std::getenv("MANX_XBOX360_GAME_ROOT");
-        std::vector<fs::path> roots;
-        if (xbox_env != nullptr && *xbox_env != '\0') {
-            roots.emplace_back(xbox_env);
-        }
-        for (const fs::path& root : roots) {
-            std::error_code xbox_error;
-            if (!fs::is_directory(root, xbox_error)) continue;
-            for (fs::directory_iterator it(root, xbox_error), end;
-                 !xbox_error && it != end; it.increment(xbox_error)) {
-                std::error_code type_error;
-                if (!it->is_directory(type_error)) continue;
-                // The suite keeps each title's files in an "extracted" child;
-                // a directory holding default.xex directly works as well.
-                for (const fs::path& candidate :
-                     {it->path() / "extracted", it->path()}) {
-                    if (!fs::is_directory(candidate, type_error)) continue;
-                    if (offer_xbox360(candidate, "  [missing files]")) break;
-                }
-            }
-        }
-    }
-
-    // Xbox 360 titles that were never extracted: one signed STFS package holding
-    // the whole game. These are not archives, not directories and not named
-    // after anything - the file is named after the hash of its content - so the
-    // scans above cannot see them either. Same treatment as the extracted pass
-    // and the System 246 .acgame pass: find them where they are stored, identify
-    // them by their header, and dedupe by set. Overridable so a test can point
-    // it at a fixture instead of the machine's downloads.
-    {
-        const char* package_env = std::getenv("MANX_XBOX360_PACKAGE_ROOT");
-        std::vector<fs::path> roots;
-        if (package_env != nullptr && *package_env != '\0') {
-            roots.emplace_back(package_env);
-        }
-        std::vector<fs::path> candidates;
-        for (const fs::path& root : roots)
-            collect_package_candidates(root, 5, true, candidates);
-        for (const fs::path& candidate : candidates)
-            offer_xbox360(candidate, "  [incomplete package]");
-    }
-
     // Installed game plugins. They are not archives and no loader would claim
     // them, so they are offered directly from what discovery already found -
     // their bundle folder is the path, which is what identify_arcade_game
@@ -638,47 +510,6 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
                            plugin->publisher});
     }
 
-    // Converted Xbox 360 titles. Like a plugin, there is nothing for the player
-    // to go and find: the workbench already recorded which owned game each was
-    // converted from, and the library refused any whose game had moved. The
-    // path offered is that game, which is what the session hands the runtime.
-    for (const rom_set_manifest& manifest : supported_rom_sets()) {
-        if (manifest.board != arcade_board_type::xbox360) continue;
-        const native_title* title = find_native_title(manifest.short_name);
-        if (title == nullptr) continue;
-        const std::string source =
-            title->packaged() ? title->package_path : title->xex_path;
-        const std::string normalized = normalized_path(source);
-        if (!seen_paths.insert(normalized).second) continue;
-        // "recomp" rather than "converted": what makes these different from
-        // every other entry is that the title's own code was recompiled ahead
-        // of time into a native binary, and that is the word this project uses
-        // for it everywhere else.
-        std::string label = manifest.display_name;
-        label += "  (recomp";
-        // Whether its assets have been imported, because nothing else shows it:
-        // a recompiled title plays from the owned package either way, so an
-        // imported and a never-imported title are indistinguishable at the menu.
-        const imported_assets imported = imported_assets_for(title->short_name);
-        if (imported.any()) {
-            label += ", imported ";
-            label += std::to_string(imported.sounds);
-            label += " sound";
-            if (imported.sounds != 1) label += "s";
-            if (imported.artwork != 0) {
-                label += " + ";
-                label += std::to_string(imported.artwork);
-                label += " art";
-            }
-        } else {
-            label += ", not imported";
-        }
-        label += ")";
-        if (normalized == normalized_current) label += "  [current]";
-        choices.push_back({normalized, std::move(label),
-                           arcade_board_type::xbox360, ""});
-    }
-
     std::sort(choices.begin(), choices.end(),
               [](const rom_choice& left, const rom_choice& right) {
                   if (left.board != right.board) return left.board < right.board;
@@ -694,16 +525,6 @@ rom_audit_result audit_rom_path(const std::string& path) {
     // working game as broken purely because it has no archive.
     if (const discovered_game* plugin = find_plugin_game(path))
         return {true, plugin->short_name, "Installed game plugin."};
-
-    // Likewise a converted title. The ROM loader describes the shape the
-    // ORIGINAL console game was dumped in, and refuses a copy that does not
-    // match - but a conversion is only offered here because the workbench
-    // recorded a binary that runs against this exact file and it was checked to
-    // still be present. Geometry Wars is the case in point: the loader expects
-    // it extracted, this copy is a package, and the converted binary plays it
-    // perfectly well either way.
-    if (const native_title* converted = find_native_title_for_game(path))
-        return {true, converted->short_name, "Converted native title."};
 
     // System 246/256 collection games are ".acgame" manifests with no catalog
     // entry -- the board boots any of them, so there is nothing per-title to
@@ -757,12 +578,6 @@ rom_audit_result audit_rom_path(const std::string& path) {
                 (missing_item.empty() ? std::string() :
                      "Missing " + missing_item);
         }
-        break;
-    }
-    case arcade_board_type::xbox360: {
-        const xbox360_rom_info loaded = xbox360_rom_loader::inspect(path);
-        valid = static_cast<bool>(loaded);
-        loader_error = loaded.error;
         break;
     }
     case arcade_board_type::model1: {
@@ -856,29 +671,6 @@ std::string required_rom_sets_text() {
             text << "  " << manifest.short_name << " - "
                  << manifest.display_name;
             if (!manifest.working) text << " [not working]";
-            // A recompiled title is not a ROM set and nothing else in this
-            // listing says so: without it, an entry that needs no ROM at all
-            // reads exactly like one whose ROM is missing.
-            const native_title* recomp = find_native_title(manifest.short_name);
-            if (recomp != nullptr) {
-                text << "  [recomp]";
-                text << "\n    Native port: " << recomp->binary_path;
-                text << "\n    Plays from: "
-                     << (recomp->packaged() ? recomp->package_path
-                                            : recomp->xex_path);
-                // Stated for every recompiled title, including the ones with
-                // nothing imported. A title plays from the owned game whether
-                // or not its assets have been taken out, so silence here would
-                // leave the two indistinguishable.
-                const imported_assets imported =
-                    imported_assets_for(recomp->short_name);
-                text << "\n    Imported: ";
-                if (imported.any())
-                    text << imported.sounds << " sound(s), "
-                         << imported.artwork << " artwork file(s)";
-                else
-                    text << "nothing yet";
-            }
             if (manifest.split_parent[0] != '\0')
                 text << "\n    Split parent: " << manifest.split_parent;
             if (manifest.extra_archives[0] != '\0')

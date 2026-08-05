@@ -105,25 +105,6 @@ std::unique_ptr<emulator_session> make_system22_session(
 std::unique_ptr<emulator_session> make_system246_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);
-std::unique_ptr<emulator_session> make_xbox360_session(
-    std::shared_ptr<arcade_video_worker> video,
-    std::shared_ptr<arcade_cabinet_state> cabinet);
-// The Xbox 360 board's session for a title that ships as a native port. It owns
-// a child process rather than a machine, so it takes neither the video worker
-// nor the cabinet switches - the parameters exist only to match the factories.
-std::unique_ptr<emulator_session> make_xbox360_native_session(
-    std::shared_ptr<arcade_video_worker> video,
-    std::shared_ptr<arcade_cabinet_state> cabinet);
-std::unique_ptr<emulator_session> make_xbox_burnout3_session(
-    std::shared_ptr<arcade_video_worker> video,
-    std::shared_ptr<arcade_cabinet_state> cabinet);
-// The DXVK-backed session — spawns Burnout3StandaloneDXVK as a child process.
-// Prefer this over the kernel-shim session when the DXVK binary is available.
-std::unique_ptr<emulator_session> make_xbox_burnout3_dxvk_session(
-    std::shared_ptr<arcade_video_worker> video,
-    std::shared_ptr<arcade_cabinet_state> cabinet);
-// True when Burnout3StandaloneDXVK can be found on this machine.
-bool burnout3_dxvk_available();
 std::unique_ptr<emulator_session> make_model1_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);

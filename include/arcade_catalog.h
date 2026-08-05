@@ -56,8 +56,6 @@ enum class arcade_cabinet_form : uint8_t {
     linked_network,
 };
 
-struct native_title;
-
 struct rom_set_manifest {
     const char* short_name;
     const char* display_name;
@@ -89,14 +87,14 @@ arcade_cabinet_form classify_cabinet_form(const rom_set_manifest& manifest);
 // "Linked cabinet wall".
 const char* cabinet_form_label(arcade_cabinet_form form);
 
-constexpr std::size_t arcade_board_count = 15;
+constexpr std::size_t arcade_board_count = 13;
 using arcade_board_list =
     std::array<arcade_board_descriptor, arcade_board_count>;
 // The built-in games are a fixed table; the list as a whole is not, because
 // games also arrive as plugins discovered on disk at start-up. A std::array
 // sized by a constant would mean a game could only ever be added by rebuilding
 // the arcade, which is exactly what the plugin path exists to avoid.
-constexpr std::size_t arcade_builtin_game_count = 49;
+constexpr std::size_t arcade_builtin_game_count = 46;
 using arcade_game_list = std::vector<rom_set_manifest>;
 
 // This is the only board-name/order/directory table in the application.
@@ -114,19 +112,6 @@ const arcade_game_list& supported_rom_sets();
 // has to outlive the catalogue - passing by value and storing is deliberate.
 struct discovered_game;
 void register_plugin_games(std::vector<discovered_game> games);
-
-// Adds the converted Xbox 360 titles to the catalogue. Called with the plugin
-// list already registered - both rebuild the same table, so the last caller
-// must see everything.
-void register_native_titles(std::vector<native_title> titles);
-
-// The converted title a short name or binary path refers to, or null.
-const native_title* find_native_title(std::string_view key);
-
-// The converted title whose OWNED GAME is at this path, or null. The launcher
-// hands a session the path it selected, which for a converted title is the
-// package or XEX it runs against - not its short name.
-const native_title* find_native_title_for_game(std::string_view game_path);
 
 // The game a bundle path names, or null. The launcher hands a session the path
 // it selected, which for a plugin is its folder - that is what identifies it.

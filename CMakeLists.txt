@@ -18,42 +18,6 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
         Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-option(MANX_ENABLE_XBOX360
-    "Build the isolated ReXGlue Robotron: 2084 runtime module" OFF)
-set(MANX_REXGLUE_SDK_DIR "$ENV{REXSDK_DIR}" CACHE PATH
-    "ReXGlue SDK source directory used for the Xbox 360 runtime")
-set(MANX_REXGLUE_RUNTIME_DIR "" CACHE PATH
-    "Directory containing the ReXGlue Release shared libraries")
-set(MANX_ROBOTRON_GENERATED_DIR "" CACHE PATH
-    "Directory containing Robotron ReXGlue-generated sources.cmake")
-set(MANX_REXGLUE_CXX_COMPILER "" CACHE FILEPATH
-    "Clang 20+ compiler used for the generated Xbox 360 code")
-
-if(MANX_ENABLE_XBOX360)
-    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        message(FATAL_ERROR
-            "The isolated MANX/ReXGlue bridge currently supports Linux")
-    endif()
-    if(NOT MANX_REXGLUE_SDK_DIR)
-        message(FATAL_ERROR
-            "MANX_ENABLE_XBOX360 requires MANX_REXGLUE_SDK_DIR")
-    endif()
-    if(NOT MANX_REXGLUE_RUNTIME_DIR)
-        set(MANX_REXGLUE_RUNTIME_DIR
-            "${MANX_REXGLUE_SDK_DIR}/out/linux-amd64/Release"
-            CACHE PATH "Directory containing ReXGlue Release libraries" FORCE)
-    endif()
-    if(NOT EXISTS "${MANX_ROBOTRON_GENERATED_DIR}/sources.cmake")
-        message(FATAL_ERROR
-            "MANX_ENABLE_XBOX360 requires MANX_ROBOTRON_GENERATED_DIR "
-            "to contain Robotron's generated sources.cmake")
-    endif()
-    if(NOT MANX_REXGLUE_CXX_COMPILER)
-        find_program(MANX_REXGLUE_CXX_COMPILER
-            NAMES clang++-22 clang++
-            REQUIRED)
-    endif()
-endif()
 
 if(NOT WIN32)
     set(MANX_MATH_LIB m)
@@ -270,120 +234,6 @@ if(MANX_FFMPEG_FOUND)
     target_link_libraries(manx_fmv PUBLIC PkgConfig::MANX_FFMPEG)
 endif()
 
-# Original-Xbox (NV2A) texture decoding (include/manx_xbox_texture.h).
-# A framework module, not a Burnout one: every original-Xbox title stores
-# its textures in the same NV2A surface formats, Morton-swizzled or
-# linear, and a port only has to know which container holds them. Format
-# codes in, upload-ready bytes for a Vulkan image out. VkFormat is the
-# only Vulkan surface it touches — no device, no allocator, no linkage
-# beyond the headers.
-add_library(manx_xbox_texture STATIC src/xbox_texture/manx_xbox_texture.c)
-target_include_directories(manx_xbox_texture BEFORE PUBLIC
-    ${CMAKE_SOURCE_DIR}/third_party/vulkan_stub)
-target_include_directories(manx_xbox_texture PUBLIC
-    ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(manx_xbox_texture PUBLIC Vulkan::Vulkan)
-target_compile_options(manx_xbox_texture PRIVATE -Wall -Wextra -Wpedantic)
-
-# Burnout 3: Takedown — Xbox kernel (minimal shim or full port)
-#
-# Default: burnout3_kernel_shim.c — a lightweight Linux-native kernel
-# providing mmap-based 64 MB memory, stubbed thunks, and path translation.
-# This is sufficient for bootable bring-up.
-#
-# For the full kernel port (15 Windows-dependent files from
-# Burnout3Recomp/src/kernel/), enable: -DBURNOUT3_KERNEL_PORT=ON
-option(BURNOUT3_KERNEL_PORT "Build the full Xbox kernel port from Burnout3Recomp" OFF)
-
-if(BURNOUT3_KERNEL_PORT)
-    set(BURNOUT3_KERNEL_DIR "/home/jon/Burnout3Recomp/src/kernel")
-    add_library(burnout3_recomp STATIC
-        ${BURNOUT3_KERNEL_DIR}/xbox_memory_layout.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_bridge.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_thunks.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_path.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_memory.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_file.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_thread.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_sync.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_hal.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_xbox.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_ob.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_io.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_crypto.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_rtl.c
-        ${BURNOUT3_KERNEL_DIR}/kernel_pool.c
-    )
-    target_include_directories(burnout3_recomp PUBLIC ${BURNOUT3_KERNEL_DIR})
-    target_include_directories(burnout3_recomp BEFORE PRIVATE ${BURNOUT3_KERNEL_DIR})
-    target_compile_definitions(burnout3_recomp PRIVATE _GNU_SOURCE WIN32_LEAN_AND_MEAN)
-    set(BURNOUT3_KERNEL_LIB burnout3_recomp)
-else()
-    # Minimal shim + GPU Vulkan D3D8 + asset loaders
-    set(BURNOUT3_D3D_DIR "$ENV{HOME}/Burnout3Recomp/src/d3d")
-    set(BURNOUT3_GAME_DIR "$ENV{HOME}/Burnout3Recomp/src/game")
-    set(BURNOUT3_KERNEL_DIR "$ENV{HOME}/Burnout3Recomp/src/kernel")
-    add_library(burnout3_recomp STATIC
-        # Kernel shim (mmap + memory macros + register stubs)
-        src/xbox/burnout3_kernel_shim.c
-        # Native game layer (Vulkan init + texture loading)
-        src/xbox/burnout3_game_native.c
-        # Native game frame pump (Linux clock_gettime + input + MEM32 injection)
-        src/xbox/burnout3_game_frame_pump.c
-        # Vulkan D3D8 backend (GPU-accelerated IDirect3DDevice8)
-        ${BURNOUT3_D3D_DIR}/vulkan_d3d8.c
-        # Asset loaders (pure C, no Windows dependency)
-        ${BURNOUT3_GAME_DIR}/txd_loader.c
-        ${BURNOUT3_GAME_DIR}/bgv_loader.c
-        ${BURNOUT3_GAME_DIR}/track_loader.c
-        ${BURNOUT3_GAME_DIR}/track_collision.c
-        ${BURNOUT3_GAME_DIR}/track_route.c
-        ${BURNOUT3_GAME_DIR}/awd_loader.c
-        ${BURNOUT3_GAME_DIR}/static_textures.c
-        # Game code (render bridge, 3D renderer — frontend lives in native code)
-        ${BURNOUT3_GAME_DIR}/rw_bridge.c
-        ${BURNOUT3_GAME_DIR}/rw_renderer.c
-        ${BURNOUT3_GAME_DIR}/fe_menu.c
-    )
-    # Boot intro FMVs (ovid/*.xmv, WMV2) play through the shared manx_fmv
-    # module when the ffmpeg dev libraries are present; without them the
-    # intro is skipped and the frontend boots straight to the title screen.
-    if(MANX_FFMPEG_FOUND)
-        target_compile_definitions(burnout3_recomp PRIVATE B3_HAVE_FFMPEG)
-        target_link_libraries(burnout3_recomp PUBLIC manx_fmv)
-    else()
-        message(WARNING "ffmpeg dev libs not found — Burnout 3 intro FMVs disabled")
-    endif()
-    target_include_directories(burnout3_recomp PUBLIC
-        src/xbox
-        ${BURNOUT3_D3D_DIR}
-        ${BURNOUT3_GAME_DIR}
-        ${BURNOUT3_GAME_DIR}/recomp
-        ${BURNOUT3_KERNEL_DIR}
-    )
-    # Force kernel stub windows.h before system headers
-    target_include_directories(burnout3_recomp BEFORE PRIVATE
-        ${BURNOUT3_KERNEL_DIR}
-    )
-    target_compile_definitions(burnout3_recomp PUBLIC
-        BURNOUT3_RECOMP_LINKED
-        BURNOUT3_NATIVE_LINUX
-        D3D8_USE_PORTABLE
-        _GNU_SOURCE
-    )
-    find_library(SHADERC_LIB shaderc_shared)
-    if(SHADERC_LIB)
-        target_link_libraries(burnout3_recomp PUBLIC ${SHADERC_LIB})
-    else()
-        message(WARNING "shaderc_shared not found — Vulkan shader compilation disabled")
-    endif()
-    target_link_libraries(burnout3_recomp PUBLIC Vulkan::Vulkan)
-    # Track (static.dat) and menu (.txd) textures both decode through the
-    # shared NV2A module; the loaders keep only the container parsing.
-    target_link_libraries(burnout3_recomp PUBLIC manx_xbox_texture)
-    set(BURNOUT3_KERNEL_LIB burnout3_recomp)
-endif()
-
 # Model 1 sound devices. YM3438 synthesis uses the BSD-3-Clause ymfm library;
 # the standalone MultiPCM core is adapted from MAME's BSD-3-Clause source.
 add_library(model1_multipcm STATIC
@@ -441,9 +291,6 @@ set(SOURCES
     src/game_plugin_host.cpp
     src/plugin_session.cpp
     src/plugin_audio.cpp
-    src/native_title_library.cpp
-    src/xbox360_asset_import.cpp
-    src/xbox360/stfs.cpp
     src/namco/namco_session.cpp
     src/arcade_renderer.cpp
     src/arcade_input.cpp
@@ -473,16 +320,6 @@ set(SOURCES
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/system246_controls.cpp
-    src/xbox360_rom.cpp
-    src/xbox360_runtime_loader.cpp
-    src/xbox360_audio.cpp
-    src/xbox360_session.cpp
-    src/xbox360_native_runtime.cpp
-    src/xbox360_native_session.cpp
-    src/xbox/burnout3_session.cpp
-    src/xbox/burnout3_dxvk_session.cpp
-    src/xbox/burnout3_bridge.c
-    src/xbox/burnout3_importer.c
     src/sega/model1/model1_rom.cpp
     src/sega/model1/model1_machine.cpp
     src/sega/model1/model1_audio.cpp
@@ -608,7 +445,6 @@ target_link_libraries(MANX
     mb86233
     model1_video
     model1_io
-    ${BURNOUT3_KERNEL_LIB}
     # model1_audio calls into the DSB directly, so the binary needs it even
     # though no other library pulls it in.
     model1_dsb
@@ -650,32 +486,6 @@ endif()
 target_compile_options(MANX PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:-O2;-Wall;-Wextra;-Wpedantic>"
 )
-
-if(MANX_ENABLE_XBOX360)
-    include(ExternalProject)
-    ExternalProject_Add(manx_robotron_runtime_project
-        SOURCE_DIR "${CMAKE_SOURCE_DIR}/src/xbox360/bridge"
-        BINARY_DIR "${CMAKE_BINARY_DIR}/xbox360-bridge"
-        CMAKE_ARGS
-            -DCMAKE_BUILD_TYPE=Release
-            -DCMAKE_CXX_COMPILER=${MANX_REXGLUE_CXX_COMPILER}
-            -DMANX_HOST_INCLUDE_DIR=${CMAKE_SOURCE_DIR}/include
-            -DMANX_REXGLUE_SDK_DIR=${MANX_REXGLUE_SDK_DIR}
-            -DMANX_REXGLUE_RUNTIME_DIR=${MANX_REXGLUE_RUNTIME_DIR}
-            -DMANX_ROBOTRON_GENERATED_DIR=${MANX_ROBOTRON_GENERATED_DIR}
-            -DMANX_OUTPUT_DIR=${CMAKE_BINARY_DIR}
-        BUILD_BYPRODUCTS
-            "${CMAKE_BINARY_DIR}/libmanx_robotron_runtime.so"
-            "${CMAKE_BINARY_DIR}/librexruntime.so"
-            "${CMAKE_BINARY_DIR}/librexgpu-xenos.so"
-            "${CMAKE_BINARY_DIR}/libTracyClient.so"
-            "${CMAKE_BINARY_DIR}/librenderdoc.so"
-        UPDATE_COMMAND ""
-        INSTALL_COMMAND ""
-        BUILD_ALWAYS TRUE
-        USES_TERMINAL_BUILD TRUE)
-    add_dependencies(MANX manx_robotron_runtime_project)
-endif()
 
 enable_testing()
 add_test(NAME video_session_lifecycle_test
@@ -835,49 +645,9 @@ target_compile_options(input_mapping_test PRIVATE
 target_compile_definitions(input_mapping_test PRIVATE SDL_MAIN_HANDLED)
 add_test(NAME input_mapping_test COMMAND input_mapping_test)
 
-add_executable(xbox360_asset_import_test
-    tests/xbox360_asset_import_test.cpp
-    src/xbox360_asset_import.cpp
-    src/xbox360/stfs.cpp)
-target_include_directories(xbox360_asset_import_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include)
-add_test(NAME xbox360_asset_import_test COMMAND xbox360_asset_import_test)
-
 add_executable(session_window_test tests/session_window_test.cpp)
 target_include_directories(session_window_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME session_window_test COMMAND session_window_test)
-
-add_executable(native_title_test
-    tests/native_title_test.cpp
-    src/native_title_library.cpp
-    src/rom_library.cpp
-    src/arcade_settings.cpp
-    src/game_plugin_host.cpp
-    src/arcade_catalog.cpp
-    src/arcade_game_probe.cpp
-    src/taito/taitoz/taitoz_rom.cpp
-    src/midway/midway_rom.cpp
-    src/namco/system22/system22_rom.cpp
-    src/system246_rom.cpp
-    src/xbox360_rom.cpp
-    src/sega/model1/model1_rom.cpp
-    src/sega/model2/model2_rom.cpp
-    src/namco/galaxian/galaxian_rom.cpp
-    src/sega/system16b/system16b_rom.cpp
-    src/capcom/gng/gng_rom.cpp
-    src/namco/namco_rom.cpp)
-target_include_directories(native_title_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/third_party/json/include)
-target_link_libraries(native_title_test PRIVATE
-    PkgConfig::MINIZIP ZLIB::ZLIB ${CMAKE_DL_LIBS})
-add_test(NAME native_title_test COMMAND native_title_test)
-
-add_executable(geometrywars_test
-    tests/geometrywars_test.cpp
-    src/geometrywars/gw_game.cpp)
-target_include_directories(geometrywars_test PRIVATE include)
-add_test(NAME geometrywars_test COMMAND geometrywars_test)
 
 add_executable(bubblebobble_test
     tests/bubblebobble_test.cpp
@@ -890,66 +660,6 @@ add_executable(jetpac_test
     src/jetpac/jp_game.cpp)
 target_include_directories(jetpac_test PRIVATE include)
 add_test(NAME jetpac_test COMMAND jetpac_test)
-
-# Project Gotham Racing 3 - the second title on the Burnout 3 port pattern.
-#
-# The game lives in ITS OWN TREE (PGR3Native), not here. This file only compiles
-# the subset the arcade needs, the same arrangement Burnout 3 has with
-# Burnout3Recomp. Game-specific knowledge - how PGR3 stores a road, how wide a
-# lane is - belongs to the game; cabinets, presenters and input belong here.
-#
-# The difference from the Burnout 3 wiring is the GUARD. Burnout 3's sources are
-# pulled in unconditionally, so this project cannot configure at all on a machine
-# without that sibling tree. That is a coupling worth not repeating: if
-# PGR3Native is absent the arcade simply builds without PGR3, and says so.
-set(PGR3_NATIVE_DIR "$ENV{HOME}/PGR3Native" CACHE PATH
-    "PGR3Native checkout supplying the PGR3 game code")
-
-if(EXISTS "${PGR3_NATIVE_DIR}/src/game/pgr3_route.c")
-    # The road network and the surface built from it are pure: a text file in,
-    # vertices out, with no window, no device and no game state. So they are
-    # their own library, and their tests run on a machine that does not have the
-    # game - the shipped-city checks skip rather than fail.
-    add_library(pgr3_assets STATIC
-        ${PGR3_NATIVE_DIR}/src/game/pgr3_route.c
-        ${PGR3_NATIVE_DIR}/src/game/pgr3_mesh.c)
-    target_include_directories(pgr3_assets PUBLIC ${PGR3_NATIVE_DIR}/include)
-    target_link_libraries(pgr3_assets PUBLIC m)
-
-    foreach(pgr3_case route mesh)
-        add_executable(pgr3_${pgr3_case}_test
-            ${PGR3_NATIVE_DIR}/tests/pgr3_${pgr3_case}_test.c)
-        target_link_libraries(pgr3_${pgr3_case}_test PRIVATE pgr3_assets)
-        add_test(NAME pgr3_${pgr3_case}_test COMMAND pgr3_${pgr3_case}_test)
-        set_tests_properties(pgr3_${pgr3_case}_test PROPERTIES LABELS "pgr3")
-    endforeach()
-
-    # Points the PGR3 tests at a real Game/router directory, the same way the
-    # board tests take a local ROM path. Never embedded in source: owned content.
-    set(PGR3_TEST_ROUTER_DIR "" CACHE PATH
-        "PGR3 Game/router directory; enables the shipped-city asset checks")
-    if(PGR3_TEST_ROUTER_DIR)
-        foreach(pgr3_case route mesh)
-            set_property(TEST pgr3_${pgr3_case}_test APPEND PROPERTY
-                ENVIRONMENT "PGR3_TEST_ROUTER_DIR=${PGR3_TEST_ROUTER_DIR}")
-        endforeach()
-    endif()
-    # PGR3 drawn through the SAME D3D8-on-Vulkan backend Burnout 3 uses. The
-    # integration lives here, not in PGR3Native: the game supplies geometry and
-    # knows nothing about any device, and only the framework is allowed to know
-    # about both it and the backend. It needs burnout3_recomp today purely
-    # because the backend still lives in that tree - the promotion this is the
-    # second user for.
-    if(TARGET burnout3_recomp)
-        add_executable(pgr3_frame_dump tests/pgr3_frame_dump.c)
-        target_link_libraries(pgr3_frame_dump PRIVATE
-            pgr3_assets burnout3_recomp Vulkan::Vulkan)
-        set_target_properties(pgr3_frame_dump PROPERTIES LINKER_LANGUAGE C)
-    endif()
-else()
-    message(STATUS
-        "PGR3Native not found at ${PGR3_NATIVE_DIR} - building without PGR3")
-endif()
 
 add_executable(plugin_audio_test
     tests/plugin_audio_test.cpp
@@ -968,7 +678,6 @@ add_executable(game_plugin_test
     src/taito/taitoz/taitoz_rom.cpp
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
-    src/xbox360_rom.cpp
     src/sega/model1/model1_rom.cpp
     src/sega/model2/model2_rom.cpp
     src/namco/galaxian/galaxian_rom.cpp
@@ -996,7 +705,6 @@ add_executable(arcade_catalog_test
     src/taito/taitoz/taitoz_rom.cpp
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
-    src/xbox360_rom.cpp
     src/sega/model1/model1_rom.cpp
     src/sega/model2/model2_rom.cpp
     src/namco/galaxian/galaxian_rom.cpp
@@ -1015,7 +723,6 @@ add_test(NAME arcade_catalog_test COMMAND arcade_catalog_test)
 add_executable(rom_library_test
     tests/rom_library_test.cpp
     src/arcade_catalog.cpp
-    src/native_title_library.cpp
     src/midway/midway_rom.cpp
     src/arcade_settings.cpp
     src/arcade_game_probe.cpp
@@ -1023,7 +730,6 @@ add_executable(rom_library_test
     src/rom_library.cpp
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
-    src/xbox360_rom.cpp
     src/sega/model1/model1_rom.cpp
     src/sega/model2/model2_rom.cpp
     src/namco/galaxian/galaxian_rom.cpp
@@ -1077,66 +783,6 @@ if(GNG_TEST_ROM)
         COMMAND gng_machine_test "${GNG_TEST_ROM}")
     set_tests_properties(gng_rom_integration_test PROPERTIES
         LABELS "gng;rom;integration")
-endif()
-
-add_executable(xbox360_rom_test
-    tests/xbox360_rom_test.cpp
-    src/xbox360_rom.cpp
-)
-target_include_directories(xbox360_rom_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include)
-target_compile_options(xbox360_rom_test PRIVATE
-    -Wall -Wextra -Wpedantic -UNDEBUG)
-set(XBOX360_TEST_GAME "" CACHE PATH
-    "Optional extracted Robotron: 2084 directory used by the XEX test")
-if(XBOX360_TEST_GAME)
-    add_test(NAME xbox360_rom_test
-        COMMAND xbox360_rom_test "${XBOX360_TEST_GAME}")
-else()
-    add_test(NAME xbox360_rom_test COMMAND xbox360_rom_test)
-endif()
-set_tests_properties(xbox360_rom_test PROPERTIES LABELS xbox360)
-
-# Launching a native port. The stand-in runtimes it spawns are shell scripts, so
-# the test is POSIX-only; the code it covers builds on both platforms.
-if(NOT WIN32)
-    add_executable(xbox360_native_runtime_test
-        tests/xbox360_native_runtime_test.cpp
-        src/xbox360_native_runtime.cpp
-    )
-    target_include_directories(xbox360_native_runtime_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/include)
-    target_link_libraries(xbox360_native_runtime_test PRIVATE Threads::Threads)
-    target_compile_options(xbox360_native_runtime_test PRIVATE
-        -Wall -Wextra -Wpedantic -UNDEBUG)
-    add_test(NAME xbox360_native_runtime_test
-        COMMAND xbox360_native_runtime_test)
-    set_tests_properties(xbox360_native_runtime_test PROPERTIES
-        LABELS "xbox360;runtime" TIMEOUT 60)
-endif()
-
-if(MANX_ENABLE_XBOX360)
-    add_executable(xbox360_runtime_smoke_test
-        tests/xbox360_runtime_smoke_test.cpp
-        src/xbox360_runtime_loader.cpp)
-    target_include_directories(xbox360_runtime_smoke_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/include)
-    target_link_libraries(xbox360_runtime_smoke_test PRIVATE
-        Threads::Threads ${CMAKE_DL_LIBS})
-    target_compile_options(xbox360_runtime_smoke_test PRIVATE
-        -Wall -Wextra -Wpedantic -UNDEBUG)
-    add_dependencies(xbox360_runtime_smoke_test
-        manx_robotron_runtime_project)
-    if(XBOX360_TEST_GAME)
-        add_test(NAME xbox360_runtime_smoke_test
-            COMMAND xbox360_runtime_smoke_test
-                "${XBOX360_TEST_GAME}"
-                "${CMAKE_BINARY_DIR}/xbox360-test-user"
-                "${CMAKE_BINARY_DIR}/xbox360-test-cache")
-        set_tests_properties(xbox360_runtime_smoke_test PROPERTIES
-            LABELS "xbox360;runtime"
-            TIMEOUT 45)
-    endif()
 endif()
 
 add_executable(persistent_data_test
@@ -1436,7 +1082,7 @@ target_include_directories(galaxian_mooncrst_machine_test PRIVATE
 target_include_directories(galaxian_mooncrst_machine_test SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/chips)
 target_link_libraries(galaxian_mooncrst_machine_test PRIVATE
-    chips_z80 PkgConfig::MINIZIP ZLIB::ZLIB
+    chips_z80 arcade_feedback PkgConfig::MINIZIP ZLIB::ZLIB
 )
 target_compile_options(galaxian_mooncrst_machine_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
@@ -1488,7 +1134,7 @@ target_include_directories(galaxian_base_machine_test PRIVATE
 target_include_directories(galaxian_base_machine_test SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/chips)
 target_link_libraries(galaxian_base_machine_test PRIVATE
-    chips_z80 PkgConfig::MINIZIP ZLIB::ZLIB)
+    chips_z80 arcade_feedback PkgConfig::MINIZIP ZLIB::ZLIB)
 target_compile_options(galaxian_base_machine_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 set(GALAXIAN_BASE_TEST_ROM "" CACHE FILEPATH
@@ -1513,7 +1159,7 @@ target_include_directories(galaxian_uniwars_machine_test PRIVATE
 target_include_directories(galaxian_uniwars_machine_test SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/chips)
 target_link_libraries(galaxian_uniwars_machine_test PRIVATE
-    chips_z80 PkgConfig::MINIZIP ZLIB::ZLIB)
+    chips_z80 arcade_feedback PkgConfig::MINIZIP ZLIB::ZLIB)
 target_compile_options(galaxian_uniwars_machine_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 set(GALAXIAN_UNIWARS_TEST_ROM "" CACHE FILEPATH
@@ -1774,367 +1420,6 @@ target_include_directories(m68000_cpu_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(m68000_cpu_test PRIVATE m68000_cpu)
 target_compile_options(m68000_cpu_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME m68000_cpu_test COMMAND m68000_cpu_test)
-
-# Burnout 3: Takedown boot integration test
-add_executable(burnout3_boot_test
-    tests/burnout3_boot_test.cpp
-    src/xbox/burnout3_bridge.c
-)
-target_include_directories(burnout3_boot_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/xbox
-)
-target_link_libraries(burnout3_boot_test PRIVATE
-    burnout3_recomp
-    SDL3::SDL3
-    ${MANX_MATH_LIB}
-    ${CMAKE_DL_LIBS}
-)
-target_compile_definitions(burnout3_boot_test PRIVATE
-    BURNOUT3_RECOMP_LINKED
-    D3D8_USE_PORTABLE
-    BURNOUT3_NATIVE_LINUX
-    _GNU_SOURCE
-)
-target_compile_options(burnout3_boot_test PRIVATE -Wall -Wextra)
-
-set(BURNOUT3_TEST_GAME_DATA "" CACHE FILEPATH
-    "Optional Burnout 3 game data directory for integration tests")
-
-# Asset-build conversion for desktop and Android packages. The retail XMV
-# files are video-only; movie.xwb contains standalone ASF/WMA audio streams.
-# This target converts them once to H.264/AAC MP4 plus indexed M4A files, so
-# the shipped runtime needs no Xbox codec or plugin loader.
-find_package(Python3 QUIET COMPONENTS Interpreter)
-find_program(MANX_FFMPEG_CLI NAMES ffmpeg)
-if(BURNOUT3_TEST_GAME_DATA AND Python3_Interpreter_FOUND AND MANX_FFMPEG_CLI)
-    set(BURNOUT3_PORTABLE_MEDIA_DIR
-        "${CMAKE_BINARY_DIR}/generated/burnout3_media" CACHE PATH
-        "Output directory for converted Burnout 3 media assets")
-    set(_b3_media_manifest "${BURNOUT3_PORTABLE_MEDIA_DIR}/manifest.json")
-    add_custom_command(
-        OUTPUT "${_b3_media_manifest}"
-        BYPRODUCTS
-            "${BURNOUT3_PORTABLE_MEDIA_DIR}/movies/cri_rw30.mp4"
-            "${BURNOUT3_PORTABLE_MEDIA_DIR}/movies/englis30.mp4"
-            "${BURNOUT3_PORTABLE_MEDIA_DIR}/movies/Titles30.mp4"
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_SOURCE_DIR}/tools/burnout3_media_import.py"
-            --game-dir "${BURNOUT3_TEST_GAME_DATA}"
-            --output "${BURNOUT3_PORTABLE_MEDIA_DIR}"
-            --ffmpeg "${MANX_FFMPEG_CLI}"
-        DEPENDS
-            "${CMAKE_SOURCE_DIR}/tools/burnout3_media_import.py"
-            "${BURNOUT3_TEST_GAME_DATA}/ovid/movie.xwb"
-            "${BURNOUT3_TEST_GAME_DATA}/ovid/cri_rw30.xmv"
-            "${BURNOUT3_TEST_GAME_DATA}/ovid/englis30.xmv"
-            "${BURNOUT3_TEST_GAME_DATA}/ovid/Titles30.xmv"
-        COMMENT "Converting Burnout 3 boot media to Android-ready H.264/AAC"
-        VERBATIM)
-    add_custom_target(burnout3_media_import DEPENDS "${_b3_media_manifest}")
-endif()
-# Registered only when there is game data to run it against. Without the
-# argument the test prints its usage and exits non-zero, so registering it
-# unconditionally made the suite permanently red for a missing file rather than
-# for a defect - and a suite that is always red stops being read.
-if(BURNOUT3_TEST_GAME_DATA)
-    add_test(NAME burnout3_boot_test
-        COMMAND burnout3_boot_test "${BURNOUT3_TEST_GAME_DATA}")
-    set_tests_properties(burnout3_boot_test PROPERTIES
-        LABELS "burnout3;integration")
-endif()
-
-# Burnout 3 unit tests — no GPU, no game data, safe everywhere.
-#
-# Render: #includes vulkan_d3d8.c to reach its static vertex machinery
-# (FVF layouts, canonicalization, strip/fan/quad/indexed expansion,
-# matrix product). Nothing initialises Vulkan, but the linker still wants
-# the shaderc/Vulkan symbols the included file references.
-add_executable(burnout3_render_unit_test
-    tests/burnout3_render_unit_test.c)
-target_include_directories(burnout3_render_unit_test PRIVATE
-    ${BURNOUT3_D3D_DIR})
-target_link_libraries(burnout3_render_unit_test PRIVATE
-    Vulkan::Vulkan ${CMAKE_DL_LIBS} m)
-if(SHADERC_LIB)
-    target_link_libraries(burnout3_render_unit_test PRIVATE ${SHADERC_LIB})
-endif()
-add_test(NAME burnout3_render_unit_test COMMAND burnout3_render_unit_test)
-set_tests_properties(burnout3_render_unit_test PROPERTIES
-    LABELS "burnout3;unit")
-
-# Car viewer: loads a .bgv car model, renders it through the Vulkan D3D8
-# backend, and displays it in a live SDL3 window. Arrow keys rotate the
-# camera, +/- zoom, R resets view, Esc quits. Needs a GPU and a display;
-# not registered with ctest (interactive).
-add_executable(burnout3_car_render_test
-    tests/burnout3_car_render_test.c)
-target_include_directories(burnout3_car_render_test PRIVATE
-    ${BURNOUT3_D3D_DIR}
-    ${BURNOUT3_GAME_DIR}
-    ${CMAKE_SOURCE_DIR}/include)
-target_compile_definitions(burnout3_car_render_test PRIVATE
-    BURNOUT3_NATIVE_LINUX
-    D3D8_USE_PORTABLE
-    _GNU_SOURCE)
-target_link_libraries(burnout3_car_render_test PRIVATE
-    burnout3_recomp SDL3::SDL3 Vulkan::Vulkan ${CMAKE_DL_LIBS} m)
-if(SHADERC_LIB)
-    target_link_libraries(burnout3_car_render_test PRIVATE ${SHADERC_LIB})
-endif()
-target_compile_options(burnout3_car_render_test PRIVATE -Wall -Wextra)
-
-# Gameplay: drives b3_drive_physics (drag equilibrium, boost cap, brake,
-# speed-scaled steering, road constraint against synthetic track geometry)
-# through the real library.
-add_executable(burnout3_gameplay_unit_test
-    tests/burnout3_gameplay_unit_test.c)
-target_link_libraries(burnout3_gameplay_unit_test PRIVATE
-    burnout3_recomp m)
-add_test(NAME burnout3_gameplay_unit_test COMMAND burnout3_gameplay_unit_test)
-set_tests_properties(burnout3_gameplay_unit_test PROPERTIES
-    LABELS "burnout3;unit")
-
-# ── Transformed game code ────────────────────────────────────────
-# Criterion's own functions, transformed from the XBE by tools/recomp.
-# 64-bit only and the Xbox mapping must be 4GB-aligned; both are pinned
-# by burnout3_native_env_test and explained in native/README.md.
-set(BURNOUT3_NATIVE_DIR $ENV{HOME}/Burnout3Recomp/src/game/recomp/native)
-set(BURNOUT3_GEN_DIR   $ENV{HOME}/Burnout3Recomp/src/game/recomp/gen)
-set(BURNOUT3_FULLAD_DIR $ENV{HOME}/Burnout3Recomp/src/game/recomp/fullad)
-# B3_FULL_LIFT=ON: replace the hand-promoted per-function subset with the
-# full 22k-function lift in gen/ (monolith chunks + stubs + full dispatch
-# table). The ~45 hand adapters are compiled from fullad/ wrappers that
-# rename them to b3ad_* so the retail symbols stay owned by gen/, and the
-# bridge sources compile with b3ad_rename.h so the manual dispatch list
-# binds the adapters. gen/recomp_dispatch.c provides the strong full-table
-# recomp_lookup that overrides the weak stub in b3_native_runtime.c, so
-# every indirect call resolves with no B3_DISPATCH env.
-option(B3_FULL_LIFT "Build Burnout 3 against the full 22k-function lift" ON)
-if(EXISTS ${BURNOUT3_NATIVE_DIR}/b3_native_env.c)
-    if(B3_FULL_LIFT AND EXISTS ${BURNOUT3_GEN_DIR}/recomp_dispatch.c)
-        file(GLOB BURNOUT3_GEN_CHUNKS ${BURNOUT3_GEN_DIR}/recomp_00*.c)
-        file(GLOB BURNOUT3_FULLAD_FUNCS ${BURNOUT3_FULLAD_DIR}/f_*.c)
-        set(BURNOUT3_NATIVE_FUNCS
-            ${BURNOUT3_GEN_CHUNKS}
-            ${BURNOUT3_GEN_DIR}/recomp_stubs.c
-            ${BURNOUT3_GEN_DIR}/recomp_dispatch.c
-            ${BURNOUT3_FULLAD_FUNCS})
-    else()
-        file(GLOB BURNOUT3_NATIVE_FUNCS ${BURNOUT3_NATIVE_DIR}/f_*.c)
-    endif()
-    add_library(burnout3_native STATIC
-        ${BURNOUT3_NATIVE_DIR}/b3_native_env.c
-        ${BURNOUT3_NATIVE_DIR}/b3_native_runtime.c
-        ${BURNOUT3_NATIVE_FUNCS})
-    # The generated code is machine output: it trips every style warning
-    # and none of them mean anything here.
-    # SHELL: keeps CMake from de-duplicating the repeated -include flag,
-    # which would otherwise leave a bare header path as a source file.
-    target_compile_options(burnout3_native PRIVATE -w
-        "SHELL:-include ${BURNOUT3_NATIVE_DIR}/msvc_compat.h"
-        "SHELL:-include ${BURNOUT3_NATIVE_DIR}/b3_decls.h")
-    if(B3_FULL_LIFT AND EXISTS ${BURNOUT3_FULLAD_DIR}/b3ad_rename.h)
-        # Bridge + adapters see the rename map; gen chunks must not (they
-        # own the retail symbols). b3_native_env.c / runtime.c call adapter
-        # entry points directly, so they need the map too.
-        # Source-file (not target) properties, so they apply in every
-        # target these files are compiled into (burnout3_native, the intro
-        # and pixels test executables, the standalone).
-        set_source_files_properties(
-            ${BURNOUT3_NATIVE_DIR}/b3_native_env.c
-            ${BURNOUT3_NATIVE_DIR}/b3_native_runtime.c
-            ${BURNOUT3_NATIVE_DIR}/b3_native_dispatch.c
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_backend.cpp
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_geometry.cpp
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_bindings.c
-            ${BURNOUT3_FULLAD_FUNCS}
-            PROPERTIES COMPILE_FLAGS
-                "-include ${BURNOUT3_FULLAD_DIR}/b3ad_rename.h")
-        # NOTE: the gen chunks must NOT force-include recomp_funcs.h here —
-        # they define RECOMP_GENERATED_CODE before including it themselves,
-        # and a premature include trips the header guard and leaves the
-        # register macros (esp g_esp, etc.) undefined. Declaring the stub
-        # symbols is safe though: the header is a flat decl list.
-        set_source_files_properties(
-            ${BURNOUT3_GEN_CHUNKS}
-            ${BURNOUT3_GEN_DIR}/recomp_stubs.c
-            ${BURNOUT3_GEN_DIR}/recomp_dispatch.c
-            PROPERTIES COMPILE_FLAGS
-                "-include ${BURNOUT3_GEN_DIR}/recomp_stub_decls.h")
-    endif()
-    target_include_directories(burnout3_native PUBLIC
-        ${BURNOUT3_NATIVE_DIR}
-        $ENV{HOME}/Burnout3Recomp/src/game/recomp
-        $ENV{HOME}/Burnout3Recomp/src/game/recomp/gen)
-    target_compile_definitions(burnout3_native PRIVATE _GNU_SOURCE)
-
-    # DXVK route: the game's D3D8 calls forwarded to DXVK's native D3D8,
-    # a complete maintained implementation under a zlib licence. Opt in
-    # with -DDXVK_NATIVE_DIR=<dxvk checkout containing build-native/>.
-    if(DXVK_NATIVE_DIR AND EXISTS ${DXVK_NATIVE_DIR}/build-native)
-        file(GLOB DXVK_D3D8_LIB ${DXVK_NATIVE_DIR}/build-native/src/d3d8/libdxvk_d3d8.so)
-        # b3_native_dispatch.c resolves the game's computed calls, which is
-        # how RenderWare reaches most of its draw calls. It belongs to this
-        # target rather than to burnout3_native: once those calls run, the
-        # code behind them reserves push-buffer space and waits for the GPU
-        # to consume it, and only the DXVK bindings answer that. Linked into
-        # a build without them the game spins forever.
-        #
-        # Compiled into the executable rather than the archive on purpose.
-        # recomp_lookup_manual is defined weakly in b3_native_runtime.c, and
-        # a weak definition in an archive member that is already linked stops
-        # the strong one from ever being extracted.
-        add_executable(burnout3_dxvk_pixels_test
-            tests/burnout3_dxvk_pixels_test.c
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_backend.cpp
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_geometry.cpp
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_bindings.c
-            ${BURNOUT3_NATIVE_DIR}/b3_native_dispatch.c)
-        target_include_directories(burnout3_dxvk_pixels_test PRIVATE
-            ${DXVK_NATIVE_DIR}/include/native
-            ${DXVK_NATIVE_DIR}/include/native/directx
-            ${DXVK_NATIVE_DIR}/include/native/windows)
-        target_compile_options(burnout3_dxvk_pixels_test PRIVATE -w -rdynamic
-            "SHELL:-include ${BURNOUT3_NATIVE_DIR}/msvc_compat.h")
-        target_link_options(burnout3_dxvk_pixels_test PRIVATE -rdynamic)
-        target_link_libraries(burnout3_dxvk_pixels_test PRIVATE
-            burnout3_native ${DXVK_D3D8_LIB} SDL3::SDL3 m pthread ${CMAKE_DL_LIBS})
-        add_executable(burnout3_intro_test
-            tests/burnout3_intro_test.c
-            # The original XBE imports xboxkrnl ordinals through its thunk
-            # table.  Use the same native bridge as the portable standalone;
-            # leaving raw 0x800000xx values made every kernel call return 0.
-            src/xbox/burnout3_kernel_shim.c
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_backend.cpp
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_geometry.cpp
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_bindings.c
-            ${BURNOUT3_NATIVE_DIR}/b3_native_dispatch.c)
-        target_include_directories(burnout3_intro_test PRIVATE
-            ${DXVK_NATIVE_DIR}/include/native
-            ${DXVK_NATIVE_DIR}/include/native/directx
-            ${DXVK_NATIVE_DIR}/include/native/windows)
-        target_compile_options(burnout3_intro_test PRIVATE -w -rdynamic
-            "SHELL:-include ${BURNOUT3_NATIVE_DIR}/msvc_compat.h")
-        target_link_options(burnout3_intro_test PRIVATE -rdynamic)
-        target_link_libraries(burnout3_intro_test PRIVATE
-            burnout3_native ${DXVK_D3D8_LIB} SDL3::SDL3 m pthread ${CMAKE_DL_LIBS})
-        if(BURNOUT3_TEST_GAME_DATA)
-            add_test(NAME burnout3_intro_test
-                     COMMAND burnout3_intro_test
-                             ${BURNOUT3_TEST_GAME_DATA}/default.xbe)
-            set_tests_properties(burnout3_intro_test PROPERTIES
-                LABELS "burnout3;integration"
-                ENVIRONMENT "DXVK_WSI_DRIVER=SDL3")
-        endif()
-
-        # FMV playback test — plays an XMV file through the shared
-        # manx_fmv module without booting the game.  Only built when
-        # ffmpeg is available (same guard as the FMV module itself).
-        if(TARGET manx_fmv)
-            add_executable(burnout3_fmv_test tests/burnout3_fmv_test.c)
-            target_link_libraries(burnout3_fmv_test PRIVATE
-                manx_fmv SDL3::SDL3)
-        endif()
-
-        if(BURNOUT3_TEST_GAME_DATA)
-            add_test(NAME burnout3_dxvk_pixels_test
-                     COMMAND burnout3_dxvk_pixels_test
-                             ${BURNOUT3_TEST_GAME_DATA}/default.xbe)
-            set_tests_properties(burnout3_dxvk_pixels_test PROPERTIES
-                LABELS "burnout3;integration"
-                ENVIRONMENT "DXVK_WSI_DRIVER=SDL3")
-        endif()
-
-        # DXVK-backed Burnout 3 standalone: FMV + menu in a live window.
-        # Same DXVK backend as the intro test, but with a visible SDL3
-        # window that displays the read-back frame continuously.
-        # Not registered with ctest — interactive; Esc to quit.
-        add_executable(Burnout3Standalone
-            src/burnout3_dxvk_standalone.c
-            # Keep the exact Linux-native kernel boundary used by the
-            # passing retail-XBE regression. The larger Windows API port is
-            # neither required nor linked into the Burnout 3 runtime.
-            src/xbox/burnout3_kernel_shim.c
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_backend.cpp
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_geometry.cpp
-            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_bindings.c
-            ${BURNOUT3_NATIVE_DIR}/b3_native_dispatch.c)
-        target_include_directories(Burnout3Standalone PRIVATE
-            ${DXVK_NATIVE_DIR}/include/native
-            ${DXVK_NATIVE_DIR}/include/native/directx
-            ${DXVK_NATIVE_DIR}/include/native/windows)
-        target_compile_options(Burnout3Standalone PRIVATE -w -rdynamic
-            "SHELL:-include ${BURNOUT3_NATIVE_DIR}/msvc_compat.h")
-        target_link_options(Burnout3Standalone PRIVATE -rdynamic)
-        target_link_libraries(Burnout3Standalone PRIVATE
-            burnout3_native ${DXVK_D3D8_LIB}
-            manx_fmv SDL3::SDL3 m pthread ${CMAKE_DL_LIBS})
-        target_compile_definitions(Burnout3Standalone PRIVATE
-            B3_BUILD_MEDIA_DIR="${CMAKE_BINARY_DIR}/generated/burnout3_media")
-    endif()
-
-    # Pixels: the game's own D3D8 calls forwarded to the Vulkan backend.
-    # Needs the D3D layer and a GPU, so it is separate from the pure
-    # transform tests and skips cleanly without a device.
-    add_executable(burnout3_native_pixels_test
-        tests/burnout3_native_pixels_test.c
-        ${BURNOUT3_NATIVE_DIR}/b3_native_d3d.c)
-    target_compile_options(burnout3_native_pixels_test PRIVATE -w
-        "SHELL:-include ${BURNOUT3_NATIVE_DIR}/msvc_compat.h")
-    target_link_libraries(burnout3_native_pixels_test PRIVATE
-        burnout3_native burnout3_recomp m)
-    if(BURNOUT3_TEST_GAME_DATA)
-        add_test(NAME burnout3_native_pixels_test
-                 COMMAND burnout3_native_pixels_test
-                         ${BURNOUT3_TEST_GAME_DATA}/default.xbe)
-        set_tests_properties(burnout3_native_pixels_test PROPERTIES
-            LABELS "burnout3;integration")
-    endif()
-
-    foreach(t native_env native_func native_render native_frames native_boot)
-        add_executable(burnout3_${t}_test tests/burnout3_${t}_test.c)
-        target_link_libraries(burnout3_${t}_test PRIVATE burnout3_native m pthread)
-        if(BURNOUT3_TEST_GAME_DATA)
-            add_test(NAME burnout3_${t}_test
-                     COMMAND burnout3_${t}_test
-                             ${BURNOUT3_TEST_GAME_DATA}/default.xbe)
-            set_tests_properties(burnout3_${t}_test PROPERTIES
-                LABELS "burnout3;unit")
-        endif()
-    endforeach()
-endif()
-
-# Burnout 3 menu test — pump-only, no game thread. Boots the real game
-# through the legacy pump init sequence (XBE load,
-# kernel thunks, Vulkan D3D8, texture dictionaries, RenderWare), then
-# pumps game_frame_pump() in a visible SDL3 window. The game's own
-# thread (sub_00156400) is never spawned, so the indirect-call crash
-# after menu reach is avoided entirely.
-add_executable(burnout3_menu_test tests/burnout3_menu_test.c)
-target_link_libraries(burnout3_menu_test PRIVATE burnout3_recomp SDL3::SDL3 ${MANX_MATH_LIB})
-
-# Collision: the broad-phase grid over the per-object bounds in
-# streamed.dat, and the wall/ground split by triangle normal. Runs against
-# synthetic geometry so each behaviour is isolated and exactly predictable.
-add_executable(burnout3_collision_unit_test
-    tests/burnout3_collision_unit_test.c)
-target_link_libraries(burnout3_collision_unit_test PRIVATE
-    burnout3_recomp m)
-add_test(NAME burnout3_collision_unit_test COMMAND burnout3_collision_unit_test)
-set_tests_properties(burnout3_collision_unit_test PROPERTIES
-    LABELS "burnout3;unit")
-
-# Burnout 3 as its own executable: the burnout3 session on the shared
-# presentation stack (video worker + Vulkan renderer/presenter + input +
-# settings), with none of the launcher - no frontend browser, wall,
-# netplay lobby, plugins or other boards. The module map is documented in
-# docs/burnout3_standalone.md. The renderer's in-game furniture (game
-# picker, ROM identification for the importer path) is what pulls in the
-# catalog and ROM probes below; they are dormant here but must link.
-# The handcrafted fe_menu standalone was deleted 2026-08-03: the retail
-# XBE frontend (Burnout3Standalone, src/burnout3_dxvk_standalone.c above)
-# is the only Burnout 3 launch path.
 
 # ===========================================================================
 # System 246/256 board bring-up: embedded PCSX2 core link test (FOUNDATION).
@@ -2452,102 +1737,6 @@ target_link_libraries(namco_system1_start_test PRIVATE
     m6809f namcos1_core ymfm Threads::Threads PkgConfig::MINIZIP ZLIB::ZLIB)
 target_compile_options(namco_system1_start_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
-
-# FlatOut 1 — first boot test (XBE loader + kernel thunk init only).
-# Verifies the 64 MB memory map, 145 thunks at 0x00273BC0, and the ordinal
-# mapping before any game thread or D3D8 backend is attempted.
-add_executable(FlatOut1FirstBoot
-    src/xbox/flatout1_first_boot.c
-    src/xbox/flatout1_kernel_shim.c
-)
-target_include_directories(FlatOut1FirstBoot PRIVATE
-    ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(FlatOut1FirstBoot PRIVATE
-    Threads::Threads ${CMAKE_DL_LIBS})
-target_compile_options(FlatOut1FirstBoot PRIVATE
-    -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
-
-# FlatOut 1 — D3D8/Vulkan infrastructure diagnostic.
-# Probes the D3D/D3DX sections, initialises the Vulkan D3D8 backend
-# (vulkan_d3d8.c from Burnout3Recomp), and catalogues exactly which
-# D3D/D3DX functions FlatOut 1 needs for native rendering.
-#
-# Compiles vulkan_d3d8.c independently (not via burnout3_recomp) so
-# there are no symbol clashes with the Burnout 3 kernel shim.
-set(BURNOUT3_D3D_DIR "$ENV{HOME}/Burnout3Recomp/src/d3d")
-add_executable(FlatOut1D3DProbe
-    src/xbox/flatout1_game_native.c
-    src/xbox/flatout1_kernel_shim.c
-    ${BURNOUT3_D3D_DIR}/vulkan_d3d8.c
-)
-target_include_directories(FlatOut1D3DProbe PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${BURNOUT3_D3D_DIR}
-)
-target_compile_definitions(FlatOut1D3DProbe PRIVATE
-    D3D8_USE_PORTABLE
-    _GNU_SOURCE
-)
-find_library(SHADERC_LIB shaderc_shared)
-if(SHADERC_LIB)
-    target_link_libraries(FlatOut1D3DProbe PRIVATE ${SHADERC_LIB})
-endif()
-target_link_libraries(FlatOut1D3DProbe PRIVATE
-    Vulkan::Vulkan
-    ${CMAKE_DL_LIBS}
-)
-target_compile_options(FlatOut1D3DProbe PRIVATE
-    -O2 -Wall -Wextra -Wpedantic -UNDEBUG -Wno-unused-function)
-
-# FlatOut 1 — BFS archive diagnostic tool.
-# Lists contents by type (DDS, FSB, Lua, etc.), extracts sample files.
-add_executable(FlatOut1BFSTest
-    tools/flatout1_bfs_test.c
-    src/xbox/flatout1_bfs_vfs.c
-)
-target_include_directories(FlatOut1BFSTest PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/xbox
-)
-target_link_libraries(FlatOut1BFSTest PRIVATE
-    ZLIB::ZLIB
-)
-target_compile_options(FlatOut1BFSTest PRIVATE
-    -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
-
-# FlatOut 1 — Boot visualiser.
-# Loads boot-screen textures from flatout.bfs and renders them in
-# an SDL3 window.  Proves the asset pipeline without running game code.
-add_executable(FlatOut1Boot
-    tools/flatout1_boot.c
-    src/xbox/flatout1_bfs_vfs.c
-    src/xbox/flatout1_kernel_shim.c
-)
-target_include_directories(FlatOut1Boot PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/xbox
-)
-target_link_libraries(FlatOut1Boot PRIVATE
-    SDL3::SDL3
-    ZLIB::ZLIB
-)
-target_compile_options(FlatOut1Boot PRIVATE
-    -O2 -Wall -Wextra -Wpedantic -UNDEBUG -Wno-unused-function)
-
-add_executable(FlatOut1CRTTest
-    tools/flatout1_crt_test.c
-    src/xbox/flatout1_kernel_shim.c
-    src/xbox/flatout1_bfs_vfs.c
-)
-target_include_directories(FlatOut1CRTTest PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/xbox
-)
-target_link_libraries(FlatOut1CRTTest PRIVATE
-    ZLIB::ZLIB
-)
-target_compile_options(FlatOut1CRTTest PRIVATE
-    -O2 -Wall -Wextra -Wpedantic -UNDEBUG -Wno-unused-function)
 
 # Asserts must survive in every test, including Release.
 #

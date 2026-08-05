@@ -94,9 +94,13 @@ emulator_settings load_settings() {
         else if (key == "media_directory")
             settings.media_directory = std::string(value);
         else if (key == "media_artwork_category") {
-            static constexpr std::array<std::string_view, 9> allowed{{
+            // Still-image categories plus the two view modes stored in the
+            // same key; "coverflow" missing here silently reverted the
+            // saved Cover Flow view to the plain card grid on every launch.
+            static constexpr std::array<std::string_view, 10> allowed{{
                 "box2d", "box3d", "titles", "images", "marquee",
                 "thumbnails", "fanarts", "boxback", "cartridges",
+                "coverflow",
             }};
             if (std::find(allowed.begin(), allowed.end(), value) !=
                 allowed.end())

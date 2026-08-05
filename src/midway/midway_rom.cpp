@@ -152,13 +152,16 @@ bool read_entry(const std::string& archive_path, const char* name,
 // ---- Boot ROM detection ---------------------------------------------------
 
 // Known boot ROM filenames, in order of preference (most specific first).
+// Names follow MAME's kinst.cpp: the u98 socket holds the only CPU-visible
+// ROM, one file per revision, newest first.
 constexpr const char* kinst_boot_names[] = {
-    "u10-laser.uc3", "kinst.u10", "ki-l15d.u98", "u10-laser",
-    "boot.bin", "u10-laser.uc",
+    "ki-l15d.u98", "ki-l14.u98", "ki-l13.u98", "ki_l15di.u98", "ki-p47.u98",
+    "u10-laser.uc3", "kinst.u10", "u10-laser", "boot.bin", "u10-laser.uc",
 };
 constexpr const char* kinst2_boot_names[] = {
-    "kinst2.u10", "ki2_l1.u10", "u10-laser.u10", "ki2_l14.u98",
-    "kinst2.boot", "boot.bin",
+    "ki2-l14.u98", "ki2-l13.u98", "ki2-l11.u98", "ki2-l10.u98",
+    "ki2_l14p.u98", "ki2-l14k.u98", "ki2-l13k.u98", "kinst2.u10",
+    "kinst2.boot",
 };
 
 // Probe for any boot ROM file and determine which set it belongs to.
@@ -211,6 +214,15 @@ midway_rom_set probe_set(const std::string& path, std::string& boot_name) {
                     // Must look like a ROM (not a subdirectory, text, etc.)
                     if (name_lower.find('/') != std::string::npos &&
                         name_lower.find("kinst2uk/") == std::string::npos)
+                        continue;
+                    // Every chip in a KI set is 512 KiB, so size alone
+                    // cannot tell the boot ROM from a DCS sound chip. Only
+                    // u98-socket (or explicitly boot-named) files qualify;
+                    // matching a u10-u36 sound chip here once misloaded the
+                    // whole set.
+                    if (name_lower.find("u98") == std::string::npos &&
+                        name_lower.find("laser") == std::string::npos &&
+                        name_lower.rfind("boot", 0) == std::string::npos)
                         continue;
                     // Decide KI1 vs KI2 by filename clues
                     const bool looks_ki2 = name_lower.find("ki2") != std::string::npos;
@@ -363,16 +375,21 @@ midway_rom_load_result midway_rom_loader::load(
     // Pad or truncate to standard boot ROM size.
     result.boot_rom.resize(boot_rom_size, 0xFF);
 
-    // Load game code ROMs (u10-l1 through u36-l1).
-    // The R4600 has a 64-bit data bus. Game ROMs are 16-bit chips
-    // interleaved in groups of 4:
-    //   Group A (0x1F800000-0x1F9FFFFF): u10, u11, u12, u13
-    //   Group B (0x1FA00000-0x1FBFFFFF): u33, u34, u35, u36
-    // Interleave pattern: every 8 bytes = 2 bytes from each of 4 chips.
-    static const char* game_rom_names[] = {
+    // Load the u10-u36 chips. Per MAME's kinst.cpp these are DCS *sound*
+    // data ROMs (ROM_REGION16_LE "dcs") - the main CPU sees only the u98
+    // boot ROM, and game code comes off the hard drive. They are kept
+    // loaded for the DCS sound board. File names differ per set.
+    static const char* kinst_game_roms[] = {
         "u10-l1", "u11-l1", "u12-l1", "u13-l1",
         "u33-l1", "u34-l1", "u35-l1", "u36-l1",
     };
+    static const char* kinst2_game_roms[] = {
+        "ki2_l1.u10", "ki2_l1.u11", "ki2_l1.u12", "ki2_l1.u13",
+        "ki2_l1.u33", "ki2_l1.u34", "ki2_l1.u35", "ki2_l1.u36",
+    };
+    const char* const* game_rom_names =
+        result.set == midway_rom_set::killer_instinct_2 ? kinst2_game_roms :
+                                                          kinst_game_roms;
     constexpr int game_rom_count = 8;
     constexpr int chip_size = 512 * 1024;  // 512KB per chip
     constexpr int group_size = chip_size * 4;  // 2MB per group

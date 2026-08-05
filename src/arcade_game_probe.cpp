@@ -3,7 +3,6 @@
 
 #include "arcade_catalog.h"
 #include "game_plugin_host.h"
-#include "native_title_library.h"
 
 #include "namco/galaxian/galaxian_rom.h"
 #include "capcom/gng/gng_rom.h"
@@ -14,7 +13,6 @@
 #include "taito/taitoz/taitoz_rom.h"
 #include "namco/system22/system22_rom.h"
 #include "system246_rom.h"
-#include "xbox360_rom.h"
 #include "midway/midway_rom.h"
 
 #include <filesystem>
@@ -22,35 +20,6 @@ namespace fs = std::filesystem;
 
 std::optional<arcade_game_identity> identify_arcade_game(
         const std::string& path) {
-    // Burnout 3: Takedown (Xbox) — extracted directory or archive (ISO/RAR).
-    // Archives are auto-imported by the session on first launch.
-    {
-        fs::path p(path);
-        if (fs::is_regular_file(p)) {
-            std::string ext = p.extension().string();
-            // Detect .iso (Xbox DVD) or .rar (scene release) archives.
-            // Require the filename to contain "burnout" (case-insensitive)
-            // to avoid false-positives on unrelated ISOs/RARs.
-            if (ext == ".iso" || ext == ".rar") {
-                std::string stem = p.stem().string();
-                std::string lower;
-                for (char c : stem) lower += (char)tolower((unsigned char)c);
-                if (lower.find("burnout") != std::string::npos)
-                    return arcade_game_identity{
-                        arcade_board_type::xbox, "burnout3"};
-            }
-            // Otherwise, it might be a path to default.xbe inside an
-            // already-extracted directory — check parent.
-            p = p.parent_path();
-        }
-        if (fs::exists(p / "default.xbe") &&
-            fs::exists(p / "Tracks") &&
-            fs::exists(p / "sound")) {
-            return arcade_game_identity{
-                arcade_board_type::xbox, "burnout3"};
-        }
-    }
-
     const ridge_racer_rom_set system22 = rom_loader::identify_set(path);
     if (system22 != ridge_racer_rom_set::unknown)
         return arcade_game_identity{arcade_board_type::system22,
@@ -71,14 +40,6 @@ std::optional<arcade_game_identity> identify_arcade_game(
         return arcade_game_identity{arcade_board_type::game_plugin,
                                     plugin->short_name};
 
-    // A converted Xbox 360 title, recognised by the owned game it runs against.
-    // Also checked before the ROM loaders: those know only the handful of
-    // titles compiled into them, so a package with a perfectly good conversion
-    // installed would otherwise be reported as an unrecognised game.
-    if (const native_title* converted = find_native_title_for_game(path))
-        return arcade_game_identity{arcade_board_type::xbox360,
-                                    converted->short_name};
-
     // Any other ".acgame" manifest is still a System 246/256 game -- the board
     // boots any manifest directly, so a collection title with no built-in enum
     // entry (e.g. Tekken 5) must route here too, keyed by its basename. Without
@@ -89,12 +50,6 @@ std::optional<arcade_game_identity> identify_arcade_game(
         system246_rom_loader::acgame_short_name(path);
     if (!acgame_key.empty())
         return arcade_game_identity{arcade_board_type::system246, acgame_key};
-
-    const xbox360_rom_set xbox360 = xbox360_rom_loader::identify_set(path);
-    if (xbox360 != xbox360_rom_set::unknown)
-        return arcade_game_identity{
-            arcade_board_type::xbox360,
-            xbox360_rom_loader::set_short_name(xbox360)};
 
     const model1_rom_set model1 = model1_rom_loader::identify_set(path);
     if (model1 != model1_rom_set::unknown)

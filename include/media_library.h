@@ -34,6 +34,13 @@ std::filesystem::path artwork_path(
     const std::vector<std::string>& short_names,
     const std::string& preferred_category = {});
 
+// Best video snap for a game, searched with the same lowercasing and
+// set-name aliasing as artwork_path. Media packs keep videos under
+// `videos/`; `video/` and `snap/` cover other pack layouts.
+std::filesystem::path video_path(
+    const std::filesystem::path& root,
+    const std::vector<std::string>& short_names);
+
 // Imported game synopsis from the media pack's gamelist.xml. Descriptions
 // are stored as one small UTF-8 file per canonical ROM name, so browsing never
 // has to parse the multi-megabyte XML or touch the NAS.

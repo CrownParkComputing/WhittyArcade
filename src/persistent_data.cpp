@@ -114,10 +114,6 @@ std::vector<persistent_game_info> build_games() {
                     (std::string(manifest.short_name) + ".backupram"),
                 0x10000));
             break;
-        case arcade_board_type::xbox360:
-            // ReXGlue owns Robotron's local profile and achievement files.
-            // They are intentionally not exposed as fixed-size arcade NVRAM.
-            break;
         case arcade_board_type::phoenix:
         case arcade_board_type::galaxian:
         case arcade_board_type::system16b:

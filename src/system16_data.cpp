@@ -85,20 +85,6 @@ const spec_list& built_in_specs(const std::string& board_id) {
                                   "sprite hardware - everything is drawn "
                                   "from character tiles."},
         }},
-        {"xbox360", {
-            {"Main CPU", "IBM Xenon: 3 x PowerPC cores @ 3.2 GHz, 2 threads "
-                         "each"},
-            {"Graphics", "ATI Xenos @ 500 MHz with 10 MB embedded EDRAM"},
-            {"Memory", "512 MB GDDR3 @ 700 MHz, unified"},
-            {"Sound", "Xenos audio, 320 independent decompression channels"},
-            {"Video resolution", "Up to 1920 x 1080"},
-            {"Board composition", "Console mainboard"},
-            {"Hardware Features", "Unified shader architecture, hardware "
-                                  "tessellation and MSAA resolve through "
-                                  "EDRAM - the arcade titles here run as "
-                                  "native recompiled executables rather "
-                                  "than emulated code."},
-        }},
         {"capcom_gng", {
             {"Main CPU", "2 x MC6809 @ 1.5 MHz"},
             {"Sound CPU", "Z80 @ 3 MHz"},

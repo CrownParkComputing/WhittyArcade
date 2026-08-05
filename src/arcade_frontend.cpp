@@ -38,9 +38,7 @@ namespace {
 using board_counts = std::array<int, arcade_board_count>;
 
 bool hidden_from_launcher(arcade_board_type board) {
-    return board == arcade_board_type::xbox ||
-           board == arcade_board_type::xbox360 ||
-           board == arcade_board_type::game_plugin;
+    return board == arcade_board_type::game_plugin;
 }
 
 fs::path source_media_root();
@@ -716,7 +714,6 @@ const char* board_wiki_article(arcade_board_type type) {
     switch (type) {
     case arcade_board_type::system22: return "Namco System 22";
     case arcade_board_type::system246: return "Namco System 246/256";
-    case arcade_board_type::xbox360: return "Xbox 360";
     case arcade_board_type::model1: return "Sega Model 1";
     case arcade_board_type::model2: return "Sega Model 2";
     case arcade_board_type::phoenix: return "Phoenix (1980 video game)";
@@ -832,14 +829,33 @@ int browse_library_grid(
         // Decoded local artwork, keyed by index into choices.
     std::map<std::size_t, banner::banner_image> local_art;
     std::map<std::size_t, std::string> local_descriptions;
+    // Cover-flow media, decoded once per game and kept for the life of the
+    // browser. The launcher reads these pixels while drawing, so they must
+    // outlive every media_for call - a per-call buffer would dangle.
+    std::map<std::size_t, banner::banner_image> flow_box;
+    std::map<std::size_t, banner::banner_image> flow_marquee;
+    std::map<std::size_t, banner::banner_image> flow_snap;
+    // Media names resolved once per game: media_names_for_choice hashes the
+    // ROM archive to identify it, far too expensive for a per-frame call.
+    std::map<std::size_t, std::vector<std::string>> flow_names;
+    const auto names_for_entry =
+        [&](std::size_t entry) -> const std::vector<std::string>& {
+        auto found = flow_names.find(entry);
+        if (found == flow_names.end())
+            found = flow_names
+                        .emplace(entry, media_names_for_choice(choices[entry]))
+                        .first;
+        return found->second;
+    };
     const fs::path media_source = source_media_root();
     const fs::path media_local = manx_media::local_root();
     std::string media_category = load_settings().media_artwork_category;
     // 0 A-Z, 1 most played, 2 recently added, 3 last played, 4 single-screen,
-    // 5 multi-screen. The browser opens on Last Played: the games from the
-    // previous session are the ones most likely wanted again. 4 and 5 are the
-    // MANX cabinet-form filters - the launcher's signature feature.
-    int sort_mode = 3;
+    // 5 multi-screen. The browser opens A-Z, the order every established
+    // front end (EmulationStation, Retrobat, LaunchBox) defaults to; the
+    // other orders are one TAB away. 4 and 5 are the MANX cabinet-form
+    // filters - the launcher's signature feature.
+    int sort_mode = 0;
         // Paging: By Board / By Publisher turn the grid into a carousel - one
         // page per board or publisher, flipped with PgUp/PgDn or the shoulder
         // buttons, each page showing every game that belongs to it.
@@ -1102,141 +1118,89 @@ int browse_library_grid(
                 /*marquee_view=*/media_category == "marquee",
                 /*coverflow_view=*/media_category == "coverflow",
                 /*video_for=*/[&](int index) -> std::string {
-                    if (index < 0 || index >= static_cast<int>(game_indices.size()))
+                    if (index < 0 ||
+                        index >= static_cast<int>(game_indices.size()))
                         return {};
-                    const std::size_t entry = game_indices[static_cast<std::size_t>(index)];
-                    const auto names = media_names_for_choice(choices[entry]);
-                    for (const std::string& name : names) {
-                        for (const char* dir : {"snap", "video", "videos", ""}) {
-                            const fs::path folder = dir[0] ?
-                                media_local / dir : media_local;
-                            std::error_code ec;
-                            if (!fs::is_directory(folder, ec)) { ec.clear(); continue; }
-                            for (const char* ext : {".mp4", ".avi", ".mkv"}) {
-                                const fs::path candidate = folder / (name + ext);
-                                if (fs::is_regular_file(candidate, ec)) {
-                                    ec.clear();
-                                    return candidate.string();
-                                }
-                                ec.clear();
-                            }
-                        }
-                        for (const char* dir : {"snap", "video", "videos", ""}) {
-                            const fs::path folder = dir[0] ?
-                                media_source / dir : media_source;
-                            if (folder.empty()) continue;
-                            std::error_code ec;
-                            if (!fs::is_directory(folder, ec)) { ec.clear(); continue; }
-                            for (const char* ext : {".mp4", ".avi", ".mkv"}) {
-                                const fs::path candidate = folder / (name + ext);
-                                if (fs::is_regular_file(candidate, ec)) {
-                                    ec.clear();
-                                    return candidate.string();
-                                }
-                                ec.clear();
-                            }
-                        }
-                    }
-                    return std::string();
+                    const std::size_t entry =
+                        game_indices[static_cast<std::size_t>(index)];
+                    const auto& names = names_for_entry(entry);
+                    fs::path found = manx_media::video_path(media_local, names);
+                    if (found.empty())
+                        found = manx_media::video_path(media_source, names);
+                    return found.string();
                 },
                 /*media_for=*/[&](int index) -> launcher_menu::game_media {
                     launcher_menu::game_media media;
-                    if (index < 0 || index >= static_cast<int>(game_indices.size()))
+                    if (index < 0 ||
+                        index >= static_cast<int>(game_indices.size()))
                         return media;
 
-                    const std::size_t entry = game_indices[static_cast<std::size_t>(index)];
-                    const auto names = media_names_for_choice(choices[entry]);
+                    const std::size_t entry =
+                        game_indices[static_cast<std::size_t>(index)];
+                    const auto& names = names_for_entry(entry);
 
-                    // Lambda to load image file
-                    auto load_image = [](const fs::path& path) -> std::pair<std::vector<uint8_t>, std::pair<int, int>> {
-                        std::ifstream file(path, std::ios::binary);
-                        if (!file) return {{}, {0, 0}};
-                        std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
-                                                   std::istreambuf_iterator<char>());
-                        int w = 0, h = 0;
-                        stbi_uc* pixels = stbi_load_from_memory(
-                            data.data(), static_cast<int>(data.size()), &w, &h, nullptr, 4);
-                        if (!pixels) return {{}, {0, 0}};
-                        std::vector<uint8_t> rgba(pixels, pixels + static_cast<std::size_t>(w) * h * 4);
-                        stbi_image_free(pixels);
-                        return {rgba, {w, h}};
+                    // One decoded image per media slot, found through the
+                    // media library's category search - the same lookup the
+                    // grid uses, so the pack's real folder names (box2d,
+                    // images, titles...) all resolve. The first category
+                    // that has an image for this game wins.
+                    auto flow_art =
+                        [&](std::map<std::size_t, banner::banner_image>& cache,
+                            std::initializer_list<const char*> categories)
+                            -> const banner::banner_image& {
+                        auto found = cache.find(entry);
+                        if (found == cache.end()) {
+                            banner::banner_image image;
+                            for (const char* category : categories) {
+                                image = load_local_art(
+                                    manx_media::artwork_path(
+                                        media_local, names, category)
+                                        .string());
+                                if (!image.valid())
+                                    image = load_local_art(
+                                        manx_media::artwork_path(
+                                            media_source, names, category)
+                                            .string());
+                                if (image.valid()) break;
+                            }
+                            found = cache.emplace(entry, std::move(image))
+                                        .first;
+                        }
+                        return found->second;
                     };
 
-                    // Load box art
-                    for (const std::string& name : names) {
-                        for (const char* dir : {"box", "boxart", ""}) {
-                            const fs::path folder = dir[0] ? media_local / dir : media_local;
-                            std::error_code ec;
-                            for (const char* ext : {".png", ".jpg", ".jpeg"}) {
-                                const fs::path candidate = folder / (name + ext);
-                                if (fs::is_regular_file(candidate, ec)) {
-                                    auto [pixels, dims] = load_image(candidate);
-                                    if (!pixels.empty()) {
-                                        static std::vector<uint8_t> box_data;
-                                        box_data = std::move(pixels);
-                                        media.box_pixels = box_data.data();
-                                        media.box_w = dims.first;
-                                        media.box_h = dims.second;
-                                        break;
-                                    }
-                                    ec.clear();
-                                }
-                            }
-                            if (media.box_pixels) break;
-                        }
-                        if (media.box_pixels) break;
+                    const banner::banner_image& box = flow_art(
+                        flow_box,
+                        {"box2d", "box3d", "covers", "cover", "flyers"});
+                    if (box.valid()) {
+                        media.box_pixels = box.rgba.data();
+                        media.box_w = box.width;
+                        media.box_h = box.height;
+                    }
+                    const banner::banner_image& marquee = flow_art(
+                        flow_marquee, {"marquee", "marquees"});
+                    if (marquee.valid()) {
+                        media.marquee_pixels = marquee.rgba.data();
+                        media.marquee_w = marquee.width;
+                        media.marquee_h = marquee.height;
+                    }
+                    const banner::banner_image& snap = flow_art(
+                        flow_snap,
+                        {"images", "titles", "title", "snaps", "snap",
+                         "thumbnails", "fanarts"});
+                    if (snap.valid()) {
+                        media.snap_pixels = snap.rgba.data();
+                        media.snap_w = snap.width;
+                        media.snap_h = snap.height;
                     }
 
-                    // Load marquee
-                    for (const std::string& name : names) {
-                        for (const char* dir : {"marquee", "logo", ""}) {
-                            const fs::path folder = dir[0] ? media_local / dir : media_local;
-                            std::error_code ec;
-                            for (const char* ext : {".png", ".jpg", ".jpeg"}) {
-                                const fs::path candidate = folder / (name + ext);
-                                if (fs::is_regular_file(candidate, ec)) {
-                                    auto [pixels, dims] = load_image(candidate);
-                                    if (!pixels.empty()) {
-                                        static std::vector<uint8_t> marquee_data;
-                                        marquee_data = std::move(pixels);
-                                        media.marquee_pixels = marquee_data.data();
-                                        media.marquee_w = dims.first;
-                                        media.marquee_h = dims.second;
-                                        break;
-                                    }
-                                    ec.clear();
-                                }
-                            }
-                            if (media.marquee_pixels) break;
-                        }
-                        if (media.marquee_pixels) break;
-                    }
-
-                    // Load snapshot
-                    for (const std::string& name : names) {
-                        for (const char* dir : {"snap", "screenshot", "screenshot", ""}) {
-                            const fs::path folder = dir[0] ? media_local / dir : media_local;
-                            std::error_code ec;
-                            for (const char* ext : {".png", ".jpg", ".jpeg"}) {
-                                const fs::path candidate = folder / (name + ext);
-                                if (fs::is_regular_file(candidate, ec)) {
-                                    auto [pixels, dims] = load_image(candidate);
-                                    if (!pixels.empty()) {
-                                        static std::vector<uint8_t> snap_data;
-                                        snap_data = std::move(pixels);
-                                        media.snap_pixels = snap_data.data();
-                                        media.snap_w = dims.first;
-                                        media.snap_h = dims.second;
-                                        break;
-                                    }
-                                    ec.clear();
-                                }
-                            }
-                            if (media.snap_pixels) break;
-                        }
-                        if (media.snap_pixels) break;
-                    }
-
+                    const rom_choice& choice = choices[entry];
+                    media.publisher = choice.publisher;
+                    const int slot = board_slot(choice.board);
+                    if (slot >= 0)
+                        media.board_name =
+                            arcade_boards()[static_cast<std::size_t>(slot)]
+                                .display_name;
                     return media;
                 },
                 &descriptions);
@@ -1256,15 +1220,22 @@ int browse_library_grid(
                 continue;
             }
             if (selected_game == launcher_menu::view_change) {
+                // One page for the whole view: what the cards look like,
+                // what order they come in, and whether the library is paged
+                // by board or publisher - the sort/group menu every
+                // established front end hangs off its select button.
                 static constexpr std::array<const char*, 4> categories{{
                     "box2d", "box3d", "marquee", "coverflow",
                 }};
-                int current_artwork = 0;
+                constexpr int first_sort = 4;   // cards 4..7 pick the order
+                constexpr int first_group = 8;  // cards 8..9 pick the paging
+                constexpr int arrange = 10;     // card 10 opens the designer
+                int current = 0;
                 for (std::size_t index = 0; index < categories.size(); ++index)
                     if (media_category == categories[index])
-                        current_artwork = static_cast<int>(index);
-                const int artwork = menu.select_modes(
-                    "Artwork", "",
+                        current = static_cast<int>(index);
+                const int picked = menu.select_modes(
+                    "View", "",
                     {{"2D", "Flat cover",
                       launcher_menu::mode_icon::cover_front},
                      {"3D", "Box render",
@@ -1272,18 +1243,50 @@ int browse_library_grid(
                      {"Marquee", "Cabinet header",
                       launcher_menu::mode_icon::marquee_art},
                      {"Cover Flow", "Full-screen 3D carousel",
-                      launcher_menu::mode_icon::fan_art}},
-                    "Back to Games", current_artwork);
-                if (artwork == launcher_menu::exit_requested)
+                      launcher_menu::mode_icon::fan_art},
+                     {"A-Z", "Alphabetical order",
+                      launcher_menu::mode_icon::audit},
+                     {"Most Played", "Favourites first",
+                      launcher_menu::mode_icon::scores},
+                     {"Recently Added", "Newest sets first",
+                      launcher_menu::mode_icon::refresh},
+                     {"Last Played", "Pick up where you left off",
+                      launcher_menu::mode_icon::solo},
+                     {"By Board", "One page per board",
+                      launcher_menu::mode_icon::storage},
+                     {"By Publisher", "One page per publisher",
+                      launcher_menu::mode_icon::folder},
+                     {"Arrange Page", "Move and resize the cover-flow art",
+                      launcher_menu::mode_icon::cover_3d}},
+                    "Back to Games", current);
+                if (picked == launcher_menu::exit_requested)
                     return launcher_menu::exit_requested;
-                if (artwork >= 0 && artwork <
-                        static_cast<int>(categories.size())) {
+                if (picked >= 0 &&
+                    picked < static_cast<int>(categories.size())) {
                     media_category =
-                        categories[static_cast<std::size_t>(artwork)];
+                        categories[static_cast<std::size_t>(picked)];
                     emulator_settings settings = load_settings();
                     settings.media_artwork_category = media_category;
                     save_settings(settings);
                     local_art.clear();
+                } else if (picked >= first_sort && picked < first_group) {
+                    sort_mode = picked - first_sort;
+                    page_mode = 0;
+                } else if (picked == first_group || picked == first_group + 1) {
+                    page_mode = picked - first_group + 1;
+                    page_index = 0;
+                } else if (picked == arrange) {
+                    // Arranging is only meaningful over the cover-flow page,
+                    // so asking for it from any other view switches to it
+                    // rather than doing nothing visible.
+                    if (media_category != "coverflow") {
+                        media_category = "coverflow";
+                        emulator_settings settings = load_settings();
+                        settings.media_artwork_category = media_category;
+                        save_settings(settings);
+                        local_art.clear();
+                    }
+                    menu.arrange_coverflow_next();
                 }
                 remembered = 0;
                 continue;

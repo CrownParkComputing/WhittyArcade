@@ -1,6 +1,5 @@
 #include "arcade_catalog.h"
 
-#include "native_title_library.h"
 #include "game_plugin_host.h"
 
 #include <algorithm>
@@ -19,10 +18,6 @@ constexpr arcade_board_list boards{{
      "NAMCO SYSTEM 22", "system22"},
     {arcade_board_type::system246, "system246", "Namco System 246/256",
      "NAMCO SYSTEM 246/256", "system246"},
-    {arcade_board_type::xbox360, "xbox360", "Microsoft Xbox 360",
-     "XBOX 360", "xbox360"},
-    {arcade_board_type::xbox, "xbox", "Microsoft Xbox",
-     "XBOX", "xbox"},
     {arcade_board_type::model1, "model1", "Sega Model 1",
      "SEGA MODEL 1", "model1"},
     {arcade_board_type::model2, "model2", "Sega Model 2",
@@ -85,20 +80,6 @@ constexpr std::array<rom_set_manifest, arcade_builtin_game_count> builtin_manife
     {"motogp", "MotoGP", arcade_board_type::system246, "",
      "motogp_hdd.chd", true,
      arcade_multiplayer_mode::none, "Namco"},
-    {"robotron", "Robotron: 2084 (offline Xbox 360)",
-     arcade_board_type::xbox360, "",
-     "Extracted default.xex with classic/ and media/ data", true,
-     arcade_multiplayer_mode::none, "Williams"},
-    // Dumped both ways, and either plays. The package is preferred, so that is
-    // what the requirement names first.
-    {"spacegiraffe", "Space Giraffe (Xbox 360)",
-     arcade_board_type::xbox360, "",
-     "Signed STFS package, or an extracted default.xex with its Media/ data",
-     true, arcade_multiplayer_mode::none, "Llamasoft"},
-    {"burnout3", "Burnout 3: Takedown (Xbox)",
-     arcade_board_type::xbox, "",
-     "Extracted default.xbe with Data/, Tracks/, sound/, Graphics/ game data",
-     true, arcade_multiplayer_mode::none, "EA / Criterion"},
     {"vformula", "Virtua Formula", arcade_board_type::model1,
      "vr.zip", "", true,
      arcade_multiplayer_mode::none, "Sega"},
@@ -324,11 +305,6 @@ const char* cabinet_form_label(arcade_cabinet_form form) {
     return "Single-screen cabinet";
 }
 
-std::vector<native_title>& native_records() {
-    static std::vector<native_title> records;
-    return records;
-}
-
 // One rebuild for both kinds of discovered game. They share the catalogue, so
 // registering either from its own function would drop whatever the other had
 // added - and the symptom is a game that vanishes depending on start-up order.
@@ -351,66 +327,11 @@ void rebuild_catalogue() {
         row.publisher = game.publisher.c_str();
         all.push_back(row);
     }
-    for (const native_title& title : native_records()) {
-        rom_set_manifest row{};
-        row.short_name = title.short_name.c_str();
-        row.display_name = title.display_name.c_str();
-        row.board = arcade_board_type::xbox360;
-        row.split_parent = "";
-        // The player supplies nothing: the workbench already recorded which
-        // owned game this was converted from, and the library refused the title
-        // outright if that game was not still on the machine.
-        row.extra_archives =
-            "Recompiled native port; plays from your own copy of the game";
-        row.working = true;
-        // Local multiplayer is the title's own business - it is a whole game in
-        // its own process, so MANX cannot wire a second seat into it.
-        row.multiplayer = arcade_multiplayer_mode::none;
-        row.publisher = "";
-
-        // A converted title REPLACES any row of the same name rather than
-        // joining it. Space Giraffe already had a built-in entry describing the
-        // same game, and a plugin may carry the same short name too - and the
-        // catalogue keys scores, artwork and bundles on that name, so two rows
-        // sharing one is not a duplicate listing but an ambiguous key.
-        // The converted title wins because it is the most specific: it knows
-        // which binary to run and which owned game to run it against.
-        const auto existing = std::find_if(
-            all.begin(), all.end(), [&](const rom_set_manifest& row_in) {
-                return row_in.short_name != nullptr &&
-                       title.short_name == row_in.short_name;
-            });
-        if (existing != all.end())
-            *existing = row;
-        else
-            all.push_back(row);
-    }
 }
 
 void register_plugin_games(std::vector<discovered_game> games) {
     plugin_records() = std::move(games);
     rebuild_catalogue();
-}
-
-void register_native_titles(std::vector<native_title> titles) {
-    native_records() = std::move(titles);
-    rebuild_catalogue();
-}
-
-const native_title* find_native_title(std::string_view key) {
-    for (const native_title& title : native_records())
-        if (title.short_name == key || title.binary_path == key) return &title;
-    return nullptr;
-}
-
-const native_title* find_native_title_for_game(std::string_view game_path) {
-    if (game_path.empty()) return nullptr;
-    for (const native_title& title : native_records()) {
-        if (title.package_path == game_path || title.xex_path == game_path ||
-            title.game_root == game_path)
-            return &title;
-    }
-    return nullptr;
 }
 
 const discovered_game* find_plugin_game(std::string_view bundle_path) {
