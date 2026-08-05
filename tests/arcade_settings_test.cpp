@@ -10,12 +10,12 @@
 int main() {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-settings-test-" + std::to_string(test_process_id()));
-    fs::create_directories(root / "WhittyArcade");
+        ("manx-settings-test-" + std::to_string(test_process_id()));
+    fs::create_directories(root / "MANX");
     if (!test_set_environment("XDG_CONFIG_HOME", root)) return 1;
 
     {
-        std::ofstream output(root / "WhittyArcade" / "settings.ini");
+        std::ofstream output(root / "MANX" / "settings.ini");
         output << "master_volume=125\n"
                << "renderer=software\n"
                << "show_fps=true\n"
@@ -24,6 +24,8 @@ int main() {
                << "vsync=false\n"
                << "rom_directory=/games/arcade/roms\n"
                << "chd_directory=/games/arcade/chd\n"
+               << "media_directory=/nas/Roms/v3_0.285/media\n"
+               << "media_artwork_category=marquee\n"
                << "library_setup_complete=true\n";
     }
     emulator_settings settings = load_settings();
@@ -33,6 +35,8 @@ int main() {
         settings.window_width != 1100 ||
         settings.rom_directory != "/games/arcade/roms" ||
         settings.chd_directory != "/games/arcade/chd" ||
+        settings.media_directory != "/nas/Roms/v3_0.285/media" ||
+        settings.media_artwork_category != "marquee" ||
         !settings.library_setup_complete)
         return 1;
     if (std::string(renderer_backend_name(renderer_backend::opengl)) !=
@@ -50,6 +54,8 @@ int main() {
     if (saved.renderer != renderer_backend::vulkan || saved.show_fps ||
         saved.rom_directory != "/games/arcade/roms" ||
         saved.chd_directory != "/games/arcade/chd" ||
+        saved.media_directory != "/nas/Roms/v3_0.285/media" ||
+        saved.media_artwork_category != "marquee" ||
         !saved.library_setup_complete)
         return 4;
 

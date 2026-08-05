@@ -140,10 +140,10 @@ namespace fs = std::filesystem;
 // Per-game NVRAM subdirectory (from the game profile) so games never
 // overwrite each other's saves.
 fs::path model2_nvram_directory(const char* leaf) {
-    fs::path root = whitty_platform::config_root();
+    fs::path root = manx_platform::config_root();
     if (root.empty()) root = ".";
-    return root / "WhittyArcade" / "nvram" /
-        whitty_platform::cabinet_scoped_name(leaf ? leaf : "srallyc");
+    return root / "MANX" / "nvram" /
+        manx_platform::cabinet_scoped_name(leaf ? leaf : "srallyc");
 }
 
 bool read_exact(const fs::path& path, uint8_t* data, std::size_t size) {
@@ -967,7 +967,7 @@ bool model2_bus::comm_peer_receive() {
         m_communication_ram[0x02] = m_comm_node_id <= 1 ? 1 :
             static_cast<uint8_t>(m_comm_link_count - m_comm_node_id + 2);
         m_communication_ram[0x03] = m_comm_link_count;
-        whitty_wall_log::note("comm: linked, local port %u peer port %u",
+        manx_wall_log::note("comm: linked, local port %u peer port %u",
                               m_comm_local_port, m_comm_peer_port);
         std::printf("Model 2 cabinet %u: linked as node %u of %u\n",
                     m_comm_node_id, m_comm_node_id, m_comm_link_count);
@@ -2843,7 +2843,7 @@ void model2_bus::vblank() {
                              "run alone (peer port %u)\n",
                              m_comm_node_id, m_comm_local_port,
                              m_comm_peer_port);
-                whitty_wall_log::note(
+                manx_wall_log::note(
                     "comm: no peer on local port %u (peer port %u) after 4s",
                     m_comm_local_port, m_comm_peer_port);
             }

@@ -175,7 +175,7 @@ int main() {
         return 23;
 
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-input-test-" + std::to_string(test_process_id()));
+        ("manx-input-test-" + std::to_string(test_process_id()));
     const fs::path path = root / "nested" / "input.ini";
     fs::remove_all(root);
     if (!save_input_mappings(config, path.string())) return 8;

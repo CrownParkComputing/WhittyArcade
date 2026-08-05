@@ -184,3 +184,4 @@ std::unique_ptr<galaxian_board_interface> make_phoenix_board_interface();
 std::unique_ptr<galaxian_board_interface> make_galaxian_board_interface();
 std::unique_ptr<galaxian_board_interface> make_mooncrst_board_interface();
 std::unique_ptr<galaxian_board_interface> make_uniwars_board_interface();
+std::unique_ptr<galaxian_board_interface> make_warofbug_board_interface();

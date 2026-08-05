@@ -14,7 +14,7 @@
 #include <cstdint>
 
 // SPIR-V for the native render path, compiled from shaders/*.vert|frag by the
-// whitty_shaders build target.
+// manx_shaders build target.
 #include "arcade_post_vert.h"
 #include "arcade_post_frag.h"
 #include "arcade_overlay_vert.h"
@@ -191,7 +191,7 @@ bool vk_ok(VkResult result, const char* operation) {
                  static_cast<int>(result));
     // Also into the wall column's own log: a spawned column's stderr lands on
     // the parent's terminal, where a failure is invisible.
-    whitty_wall_log::note("%s failed (Vulkan result %d)", operation,
+    manx_wall_log::note("%s failed (Vulkan result %d)", operation,
                           static_cast<int>(result));
     return false;
 }
@@ -561,7 +561,7 @@ struct alternate_presenter::implementation {
     void count_present_attempt() {
         if (!first_present || settings.wall_count <= 1) return;
         if (++present_attempts < 120) return;
-        whitty_wall_log::note(
+        manx_wall_log::note(
             "forcing window visible without a successful present");
         SDL_ShowWindow(window);
         first_present = false;
@@ -578,13 +578,13 @@ struct alternate_presenter::implementation {
         mirror_texture_width = mirror_texture_height = 0;
         mirror_layout_attempts = 0;
         mirror_pixels.clear();
-        if (window) SDL_SetWindowTitle(window, "WhittyArcade");
+        if (window) SDL_SetWindowTitle(window, "MANX");
     }
 
     bool ensure_mirror() {
         if (mirror_window && mirror_renderer) return true;
         mirror_window = SDL_CreateWindow(
-            "WhittyArcade - Player 2", settings.window_width,
+            "MANX - Player 2", settings.window_width,
             settings.window_width * 3 / 4,
             SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if (!mirror_window) return false;
@@ -602,12 +602,12 @@ struct alternate_presenter::implementation {
             SDL_SetWindowMaximumSize(mirror_window, 16384, 16384);
             place_window_on_display(mirror_window, 1, false);
             SDL_SetWindowFullscreen(mirror_window, true);
-            SDL_SetWindowTitle(window, "WhittyArcade - Player 1");
+            SDL_SetWindowTitle(window, "MANX - Player 1");
             return true;
         }
         set_fixed_window_size(mirror_window, settings.window_width);
         if (!settings.twin_separate_monitors) {
-            SDL_SetWindowTitle(window, "WhittyArcade - Player 1");
+            SDL_SetWindowTitle(window, "MANX - Player 1");
             mirror_layout_attempts = 0;
         } else if (!place_window_on_display(mirror_window, 1, true)) {
             int x = SDL_WINDOWPOS_CENTERED;
@@ -616,7 +616,7 @@ struct alternate_presenter::implementation {
             SDL_SetWindowPosition(mirror_window, x + 48, y + 48);
         }
         if (settings.twin_separate_monitors)
-            SDL_SetWindowTitle(window, "WhittyArcade - Player 1");
+            SDL_SetWindowTitle(window, "MANX - Player 1");
         return true;
     }
 
@@ -642,7 +642,7 @@ struct alternate_presenter::implementation {
         if (!settings.twin_separate_monitors &&
             mirror_layout_attempts < 6) {
             SDL_PumpEvents();
-            whitty_window::arrange_twin_windows(
+            manx_window::arrange_twin_windows(
                 window, mirror_window, settings.window_width);
             ++mirror_layout_attempts;
         }
@@ -779,7 +779,7 @@ struct alternate_presenter::implementation {
         const VkResult result =
             vkWaitForFences(device, 1, &frame_fence, VK_TRUE, frame_wait_ns);
         if (result == VK_SUCCESS) return true;
-        whitty_wall_log::note("%s: frame fence %s", where,
+        manx_wall_log::note("%s: frame fence %s", where,
                               result == VK_TIMEOUT ? "timed out" : "failed");
         if (result != VK_TIMEOUT) vk_ok(result, "vkWaitForFences");
         return false;
@@ -791,8 +791,8 @@ struct alternate_presenter::implementation {
         SDL_GetWindowSizeInPixels(window, &drawable_width, &drawable_height);
         if (drawable_width <= 0 || drawable_height <= 0) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted))
-                whitty_wall_log::note("swapchain: window has no size yet");
+            if (manx_wall_log::first(noted))
+                manx_wall_log::note("swapchain: window has no size yet");
             return false;
         }
         // A compositor resize can arrive after the previous image has been
@@ -857,13 +857,13 @@ struct alternate_presenter::implementation {
             // extent. This is a retry, not a failure: the caller comes back
             // next frame once the compositor has given the surface a size.
             static int noted = 0;
-            if (whitty_wall_log::first(noted))
-                whitty_wall_log::note("swapchain: degenerate extent %ux%u",
+            if (manx_wall_log::first(noted))
+                manx_wall_log::note("swapchain: degenerate extent %ux%u",
                                       extent.width, extent.height);
             return false;
         }
         if (!(capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
-            whitty_wall_log::note("swapchain: surface lacks TRANSFER_DST");
+            manx_wall_log::note("swapchain: surface lacks TRANSFER_DST");
             std::fprintf(stderr, "Vulkan surface cannot accept transfer output\n");
             return false;
         }
@@ -1200,8 +1200,8 @@ struct alternate_presenter::implementation {
         if (native_ready) return true;
         if (native_failed) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted))
-                whitty_wall_log::note("native path: latched off");
+            if (manx_wall_log::first(noted))
+                manx_wall_log::note("native path: latched off");
             return false;
         }
         // Missing swapchain targets are a startup race, not a verdict: the
@@ -1213,8 +1213,8 @@ struct alternate_presenter::implementation {
             if (--native_retry_countdown > 0) return false;
             native_retry_countdown = 30;
             static int noted = 0;
-            if (whitty_wall_log::first(noted, 6))
-                whitty_wall_log::note(
+            if (manx_wall_log::first(noted, 6))
+                manx_wall_log::note(
                     "native path: swapchain not usable (attachable=%d "
                     "render_pass=%d framebuffers=%zu) - retrying",
                     swapchain_attachable ? 1 : 0, render_pass ? 1 : 0,
@@ -1223,12 +1223,12 @@ struct alternate_presenter::implementation {
             if (!create_swapchain() || !swapchain_attachable || !render_pass ||
                 framebuffers.empty()) {
                 static int failed_note = 0;
-                if (whitty_wall_log::first(failed_note, 6))
-                    whitty_wall_log::note("native path: swapchain retry "
+                if (manx_wall_log::first(failed_note, 6))
+                    manx_wall_log::note("native path: swapchain retry "
                                           "failed");
                 return false;
             }
-            whitty_wall_log::note("native path: swapchain recovered");
+            manx_wall_log::note("native path: swapchain recovered");
         }
 
         auto sampler_info = vk_structure<VkSamplerCreateInfo>(
@@ -1407,7 +1407,7 @@ struct alternate_presenter::implementation {
     bool native_give_up() {
         native_failed = true;
         native_ready = false;
-        whitty_wall_log::note("native path gave up permanently");
+        manx_wall_log::note("native path gave up permanently");
         std::fprintf(stderr,
                      "Vulkan native render path unavailable; falling back to "
                      "the transfer blit path\n");
@@ -1516,7 +1516,7 @@ struct alternate_presenter::implementation {
         const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
         if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT &&
             data && data->pMessage)
-            whitty_wall_log::note("VALIDATION: %.900s", data->pMessage);
+            manx_wall_log::note("VALIDATION: %.900s", data->pMessage);
         return VK_FALSE;
     }
 
@@ -1528,11 +1528,11 @@ struct alternate_presenter::implementation {
             return false;
         std::vector<const char*> extensions(
             sdl_extensions, sdl_extensions + extension_count);
-        // WHITTY_VK_VALIDATION=1: run with the validation layer and write its
+        // MANX_VK_VALIDATION=1: run with the validation layer and write its
         // findings to the wall column log. This is how a device loss gets a
         // name: the message naming the invalid work arrives before the
         // device dies.
-        const char* want_validation = std::getenv("WHITTY_VK_VALIDATION");
+        const char* want_validation = std::getenv("MANX_VK_VALIDATION");
         const bool validation = want_validation && *want_validation == '1';
         static const char* const validation_layer =
             "VK_LAYER_KHRONOS_validation";
@@ -1540,9 +1540,9 @@ struct alternate_presenter::implementation {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         auto app = vk_structure<VkApplicationInfo>(
             VK_STRUCTURE_TYPE_APPLICATION_INFO);
-        app.pApplicationName = "WhittyArcade";
+        app.pApplicationName = "MANX";
         app.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-        app.pEngineName = "WhittyArcade Output";
+        app.pEngineName = "MANX Output";
         app.apiVersion = VK_API_VERSION_1_0;
         auto create = vk_structure<VkInstanceCreateInfo>(
             VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
@@ -1558,7 +1558,7 @@ struct alternate_presenter::implementation {
                    "vkCreateInstance") && validation) {
             // The layer may not be installed; run without it rather than
             // refusing to start.
-            whitty_wall_log::note("validation layer unavailable");
+            manx_wall_log::note("validation layer unavailable");
             create.enabledLayerCount = 0;
             create.enabledExtensionCount = extension_count;
             if (!vk_ok(vkCreateInstance(&create, nullptr, &instance),
@@ -1585,7 +1585,7 @@ struct alternate_presenter::implementation {
             if (create_messenger)
                 create_messenger(instance, &messenger_info, nullptr,
                                  &debug_messenger);
-            whitty_wall_log::note("validation layer active");
+            manx_wall_log::note("validation layer active");
         }
         if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
             return false;
@@ -1760,7 +1760,7 @@ struct alternate_presenter::implementation {
         const VkResult waited = vkWaitForFences(device, 1, &upload_fence,
                                                 VK_TRUE, frame_wait_ns);
         if (waited == VK_TIMEOUT)
-            whitty_wall_log::note("upload fence timed out");
+            manx_wall_log::note("upload fence timed out");
         const bool signalled = waited == VK_SUCCESS ||
                                vk_ok(waited, "vkWaitForFences");
         vkResetFences(device, 1, &upload_fence);
@@ -2133,8 +2133,8 @@ struct alternate_presenter::implementation {
     bool initialise_sheet(device_image& sheet) {
         if (!await_upload() || !ensure_upload_fence()) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted))
-                whitty_wall_log::note("sheet init: upload fence unavailable");
+            if (manx_wall_log::first(noted))
+                manx_wall_log::note("sheet init: upload fence unavailable");
             return false;
         }
         auto allocate = vk_structure<VkCommandBufferAllocateInfo>(
@@ -2273,8 +2273,8 @@ struct alternate_presenter::implementation {
         if (!dual_source_blend || !create_scene_render_pass() ||
             !ensure_scene_sheets()) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted))
-                whitty_wall_log::note(
+            if (manx_wall_log::first(noted))
+                manx_wall_log::note(
                     "scene pipelines: dual_src=%d render_pass=%d (sheets "
                     "otherwise)",
                     dual_source_blend ? 1 : 0, scene_render_pass ? 1 : 0);
@@ -2289,8 +2289,8 @@ struct alternate_presenter::implementation {
                                 sizeof(system22_text_uniform_block),
                                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted))
-                whitty_wall_log::note("scene pipelines: uniform buffers "
+            if (manx_wall_log::first(noted))
+                manx_wall_log::note("scene pipelines: uniform buffers "
                                       "failed");
             return false;
         }
@@ -2793,8 +2793,8 @@ struct alternate_presenter::implementation {
     bool ensure_scene_target(int width, int height) {
         if (!create_scene_render_pass()) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted))
-                whitty_wall_log::note("scene target: render pass failed");
+            if (manx_wall_log::first(noted))
+                manx_wall_log::note("scene target: render pass failed");
             return false;
         }
         if (scene_image.width == width && scene_image.height == height &&
@@ -2814,8 +2814,8 @@ struct alternate_presenter::implementation {
                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                           VK_IMAGE_ASPECT_DEPTH_BIT)) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted))
-                whitty_wall_log::note("scene target: image creation failed");
+            if (manx_wall_log::first(noted))
+                manx_wall_log::note("scene target: image creation failed");
             return false;
         }
         descriptors_valid = false;
@@ -2947,10 +2947,10 @@ struct alternate_presenter::implementation {
                             bool menu_visible, int display_width,
                             int display_height) {
         if (native_failed) {
-            whitty_wall_log::note("native path already gave up");
+            manx_wall_log::note("native path already gave up");
             return false;
         }
-        whitty_wall_log::begin(settings.wall_slot, settings.wall_count);
+        manx_wall_log::begin(settings.wall_slot, settings.wall_count);
         count_present_attempt();
         const bool upload_scene = pixels != nullptr;
         if (upload_scene) {
@@ -2962,7 +2962,7 @@ struct alternate_presenter::implementation {
         } else {
             if (!have_board_frame || !scene_image.image)
                 {
-                whitty_wall_log::note("declined: no retained scene");
+                manx_wall_log::note("declined: no retained scene");
                 return decline("no retained scene to present");
             }
             width = scene_image.width;
@@ -2982,7 +2982,7 @@ struct alternate_presenter::implementation {
                  static_cast<uint32_t>(drawable_height)))
             swapchain_dirty = true;
         if (swapchain_dirty && !create_swapchain()) {
-            whitty_wall_log::note("declined: swapchain not created");
+            manx_wall_log::note("declined: swapchain not created");
             return decline("swapchain could not be created");
         }
         // A wall column that renders into the wrong part of its window, or
@@ -2997,13 +2997,13 @@ struct alternate_presenter::implementation {
             reported_extent = swapchain_extent;
             reported_drawable[0] = drawable_width;
             reported_drawable[1] = drawable_height;
-            whitty_wall_log::note("window %dx%d, swapchain %ux%u",
+            manx_wall_log::note("window %dx%d, swapchain %ux%u",
                                   drawable_width, drawable_height,
                                   swapchain_extent.width,
                                   swapchain_extent.height);
         }
         if (!create_native_path()) {
-            whitty_wall_log::note("declined: native path unavailable");
+            manx_wall_log::note("declined: native path unavailable");
             return decline("native path unavailable");
         }
 
@@ -3076,20 +3076,20 @@ struct alternate_presenter::implementation {
             // mid-shuffle while its neighbours are re-placed. Drop the frame
             // and rebuild; blocking forever here is how a wall column froze
             // while its game played on.
-            whitty_wall_log::note("native present: acquire starved - "
+            manx_wall_log::note("native present: acquire starved - "
                                   "rebuilding swapchain");
             swapchain_dirty = true;
             return true;
         }
         if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted, 6))
-                whitty_wall_log::note("native present: acquire OUT_OF_DATE");
+            if (manx_wall_log::first(noted, 6))
+                manx_wall_log::note("native present: acquire OUT_OF_DATE");
             swapchain_dirty = true;
             return true;
         }
         if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
-            whitty_wall_log::note("native present: acquire failed (%d) - "
+            manx_wall_log::note("native present: acquire failed (%d) - "
                                   "rebuilding swapchain",
                                   static_cast<int>(acquired));
             // A failed acquire can leave the signal semaphore pending - the
@@ -3164,14 +3164,14 @@ struct alternate_presenter::implementation {
                 // Re-placed when the cabinet being played changes, because
                 // every column's position depends on which one is the big
                 // one - not only the column that gained or lost focus.
-                const int focused = whitty_window::read_wall_focus();
+                const int focused = manx_window::read_wall_focus();
                 // Checked every tick, not once: a sibling column opening
                 // re-tiles the ones already up, so "placed" is a state to be
                 // maintained rather than a step to be completed.
                 bool drifted = false;
                 if (wall_placed) {
                     int got_x = 0, got_y = 0, got_w = 0, got_h = 0;
-                    if (whitty_window::compositor_window_geometry(got_x, got_y,
+                    if (manx_window::compositor_window_geometry(got_x, got_y,
                                                                   got_w, got_h))
                         drifted = got_w != placed_width ||
                                   got_h != placed_height ||
@@ -3179,15 +3179,15 @@ struct alternate_presenter::implementation {
                 }
                 if (!wall_placed || drifted || focused != wall_focus_applied) {
                     wall_focus_applied = focused;
-                    const bool took = whitty_window::place_wall_slot(
+                    const bool took = manx_window::place_wall_slot(
                         window, settings.wall_slot, settings.wall_count);
                     if (took != wall_placed || !took)
-                        whitty_wall_log::note("placement %s (playing %d)",
+                        manx_wall_log::note("placement %s (playing %d)",
                                               took ? "took" : "not yet",
                                               focused);
                     wall_placed = took;
                     if (took)
-                        whitty_window::compositor_window_geometry(
+                        manx_window::compositor_window_geometry(
                             placed_x, placed_y, placed_width, placed_height);
                 }
             }
@@ -3203,20 +3203,20 @@ struct alternate_presenter::implementation {
                 if (!cabinet_placed) {
                     static const int node = [] {
                         const char* text =
-                            std::getenv("WHITTY_CABINET_NODE");
+                            std::getenv("MANX_CABINET_NODE");
                         const int value = text ? std::atoi(text) : 1;
                         return value >= 1 ? value : 1;
                     }();
                     static const int count = [] {
                         const char* text =
-                            std::getenv("WHITTY_CABINET_COUNT");
+                            std::getenv("MANX_CABINET_COUNT");
                         const int value = text ? std::atoi(text) : 2;
                         return value >= 2 ? value : 2;
                     }();
-                    const bool took = whitty_window::place_cabinet_cell(
+                    const bool took = manx_window::place_cabinet_cell(
                         window, node, count);
                     if (took != cabinet_placed || !took)
-                        whitty_wall_log::note("cabinet cell %d/%d %s",
+                        manx_wall_log::note("cabinet cell %d/%d %s",
                                               node, count,
                                               took ? "took" : "not yet");
                     cabinet_placed = took;
@@ -3376,12 +3376,12 @@ struct alternate_presenter::implementation {
         if (vk_ok(result, "vkQueuePresentKHR")) {
             have_board_frame = true;
             if (first_present) {
-                whitty_wall_log::note("first present succeeded - showing");
+                manx_wall_log::note("first present succeeded - showing");
                 SDL_ShowWindow(window);
                 first_present = false;
             }
         } else {
-            whitty_wall_log::note("vkQueuePresentKHR failed (%d)",
+            manx_wall_log::note("vkQueuePresentKHR failed (%d)",
                                   static_cast<int>(result));
         }
         return true;
@@ -3397,8 +3397,8 @@ struct alternate_presenter::implementation {
         // X and Y independently on an ultrawide display. Compare against the
         // live drawable every frame and rebuild before presenting.
         static int bridge_note = 0;
-        if (whitty_wall_log::first(bridge_note))
-            whitty_wall_log::note("presenting via transfer bridge %dx%d",
+        if (manx_wall_log::first(bridge_note))
+            manx_wall_log::note("presenting via transfer bridge %dx%d",
                                   width, height);
         count_present_attempt();
         int drawable_width = 0;
@@ -3412,8 +3412,8 @@ struct alternate_presenter::implementation {
             swapchain_dirty = true;
         if (swapchain_dirty && !create_swapchain()) {
             static int fail_note = 0;
-            if (whitty_wall_log::first(fail_note))
-                whitty_wall_log::note("bridge: swapchain not created");
+            if (manx_wall_log::first(fail_note))
+                manx_wall_log::note("bridge: swapchain not created");
             return true;
         }
         if (!wait_frame_fence("bridge")) return true;
@@ -3422,22 +3422,22 @@ struct alternate_presenter::implementation {
             device, swapchain, frame_wait_ns, image_available, VK_NULL_HANDLE,
             &image_index);
         if (acquired == VK_TIMEOUT || acquired == VK_NOT_READY) {
-            whitty_wall_log::note("bridge: acquire starved - rebuilding "
+            manx_wall_log::note("bridge: acquire starved - rebuilding "
                                   "swapchain");
             swapchain_dirty = true;
             return true;
         }
         if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted, 6))
-                whitty_wall_log::note("bridge: acquire OUT_OF_DATE");
+            if (manx_wall_log::first(noted, 6))
+                manx_wall_log::note("bridge: acquire OUT_OF_DATE");
             swapchain_dirty = true;
             return true;
         }
         if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
             static int noted = 0;
-            if (whitty_wall_log::first(noted, 6))
-                whitty_wall_log::note("bridge: acquire failed (%d) - "
+            if (manx_wall_log::first(noted, 6))
+                manx_wall_log::note("bridge: acquire failed (%d) - "
                                       "rebuilding swapchain",
                                       static_cast<int>(acquired));
             // Same reasoning as the native path: a pending acquire semaphore
@@ -3600,10 +3600,10 @@ struct alternate_presenter::implementation {
         }
         const bool presented = vk_ok(result, "vkQueuePresentKHR");
         if (!presented)
-            whitty_wall_log::note("bridge: vkQueuePresentKHR failed (%d)",
+            manx_wall_log::note("bridge: vkQueuePresentKHR failed (%d)",
                                   static_cast<int>(result));
         if (presented && first_present) {
-            whitty_wall_log::note("first present succeeded via bridge - "
+            manx_wall_log::note("first present succeeded via bridge - "
                                   "showing");
             SDL_ShowWindow(window);
             first_present = false;
@@ -3637,8 +3637,8 @@ bool alternate_presenter::initialize(renderer_backend backend, int width,
         SDL_WINDOW_HIGH_PIXEL_DENSITY |
         (backend == renderer_backend::vulkan ? SDL_WINDOW_VULKAN : 0);
     m_impl->window = SDL_CreateWindow(
-        backend == renderer_backend::vulkan ? "WhittyArcade - Vulkan" :
-                                              "WhittyArcade - Software",
+        backend == renderer_backend::vulkan ? "MANX - Vulkan" :
+                                              "MANX - Software",
         width, height, flags);
     if (!m_impl->window) {
         std::fprintf(stderr, "Output window creation failed: %s\n", SDL_GetError());
@@ -3707,7 +3707,7 @@ void alternate_presenter::apply_settings(const emulator_settings& settings) {
         SDL_SetWindowFullscreen(m_impl->window, false);
         SDL_ShowWindow(m_impl->window);
         m_impl->first_present = false;
-        m_impl->wall_placed = whitty_window::place_wall_slot(
+        m_impl->wall_placed = manx_window::place_wall_slot(
             m_impl->window, settings.wall_slot, settings.wall_count);
         m_impl->wall_place_countdown = 0;
     } else if (settings.twin_one_screen) {
@@ -3717,11 +3717,11 @@ void alternate_presenter::apply_settings(const emulator_settings& settings) {
         SDL_SetWindowFullscreen(m_impl->window, false);
         SDL_ShowWindow(m_impl->window);
         m_impl->first_present = false;
-        const char* node_text = std::getenv("WHITTY_CABINET_NODE");
-        const char* count_text = std::getenv("WHITTY_CABINET_COUNT");
+        const char* node_text = std::getenv("MANX_CABINET_NODE");
+        const char* count_text = std::getenv("MANX_CABINET_COUNT");
         const int node = node_text ? std::atoi(node_text) : 0;
         const int count = count_text ? std::atoi(count_text) : 2;
-        m_impl->cabinet_placed = whitty_window::place_cabinet_cell(
+        m_impl->cabinet_placed = manx_window::place_cabinet_cell(
             m_impl->window, node >= 1 ? node : 1, count >= 2 ? count : 2);
         // The per-present loop keeps trying: at this point the compositor
         // usually does not know the window yet.
@@ -3744,7 +3744,7 @@ void alternate_presenter::apply_settings(const emulator_settings& settings) {
         bool arranged_pair = false;
         if (settings.output == output_mode::dual &&
             !settings.twin_separate_monitors && m_impl->mirror_window) {
-            whitty_window::arrange_twin_windows(
+            manx_window::arrange_twin_windows(
                 m_impl->window, m_impl->mirror_window,
                 settings.window_width);
             arranged_pair = true;
@@ -3833,8 +3833,8 @@ bool alternate_presenter::upload_scene_sheet(scene_sheet sheet,
             // were handed over in pixels rather than bytes, and the only
             // symptom was every 2D screen on the board coming up black.
             static int refused = 0;
-            if (whitty_wall_log::first(refused))
-                whitty_wall_log::note(
+            if (manx_wall_log::first(refused))
+                manx_wall_log::note(
                     "sheet %d upload refused: %zu bytes, image needs %zu",
                     index, bytes, capacity_bytes);
             return false;
@@ -3877,31 +3877,31 @@ bool alternate_presenter::render_system22_scene(
         const system22_scene& scene) {
     static int backend_note = 0, extent_note = 0, target_note = 0;
     if (!m_impl || m_impl->backend != renderer_backend::vulkan) {
-        if (whitty_wall_log::first(backend_note))
-            whitty_wall_log::note("scene declined: presenter backend=%d",
+        if (manx_wall_log::first(backend_note))
+            manx_wall_log::note("scene declined: presenter backend=%d",
                                   m_impl ? static_cast<int>(m_impl->backend)
                                          : -1);
         return false;
     }
     if (scene.width <= 0 || scene.height <= 0) {
-        if (whitty_wall_log::first(extent_note))
-            whitty_wall_log::note("scene declined: extent %dx%d", scene.width,
+        if (manx_wall_log::first(extent_note))
+            manx_wall_log::note("scene declined: extent %dx%d", scene.width,
                                   scene.height);
         return false;
     }
     if (!m_impl->create_native_path()) return false;
     if (!m_impl->ensure_scene_target(scene.width, scene.height) ||
         !m_impl->create_scene_pipelines()) {
-        if (whitty_wall_log::first(target_note))
-            whitty_wall_log::note("scene declined: target or pipelines");
+        if (manx_wall_log::first(target_note))
+            manx_wall_log::note("scene declined: target or pipelines");
         return false;
     }
     // Splits "the board produced no polygons" from "the polygons were drawn
     // invisibly" without another instrumentation round: a scene with zero
     // vertices is an emulation question, not a renderer one.
     static int content_note = 0;
-    if (whitty_wall_log::first(content_note, 5))
-        whitty_wall_log::note("scene: %zu vertices, text=%d",
+    if (manx_wall_log::first(content_note, 5))
+        manx_wall_log::note("scene: %zu vertices, text=%d",
                               scene.vertex_count, scene.draw_text ? 1 : 0);
 
     // The previous frame may still be reading the host-visible vertex and
@@ -3963,8 +3963,8 @@ bool alternate_presenter::render_model2_scene(const model2_scene& scene) {
         !m_impl->create_native_path() ||
         !m_impl->ensure_scene_target(scene.width, scene.height) ||
         !m_impl->create_model2_pipelines()) {
-        if (whitty_wall_log::first(declined_note))
-            whitty_wall_log::note(
+        if (manx_wall_log::first(declined_note))
+            manx_wall_log::note(
                 "model2 scene declined: impl=%d vulkan=%d size=%dx%d "
                 "native=%d target=%d pipelines=%d",
                 m_impl ? 1 : 0,
@@ -3993,8 +3993,8 @@ bool alternate_presenter::render_model2_scene(const model2_scene& scene) {
     // black screen, which is indistinguishable from the outside.
     static int geometry_note = 0;
     static std::size_t frames_seen = 0;
-    if (whitty_wall_log::first(geometry_note, 3) || ++frames_seen % 600 == 0)
-        whitty_wall_log::note("model2 geometry: %zu vertices (%zu triangles)",
+    if (manx_wall_log::first(geometry_note, 3) || ++frames_seen % 600 == 0)
+        manx_wall_log::note("model2 geometry: %zu vertices (%zu triangles)",
                               scene.vertex_count, scene.vertex_count / 3);
     m_impl->refresh_model2_descriptors();
     m_impl->model2_vertex_count = scene.vertex_count;
@@ -4047,7 +4047,7 @@ void alternate_presenter::arm_title_capture(std::string short_name,
     m_impl->title_capture_name = std::move(short_name);
     m_impl->title_capture_countdown = frames;
     m_impl->title_capture_due = false;
-    whitty_wall_log::note("title capture armed for %s",
+    manx_wall_log::note("title capture armed for %s",
                           m_impl->title_capture_name.c_str());
 }
 
@@ -4060,7 +4060,7 @@ void alternate_presenter::service_title_capture() {
     if (read_scene_image(rgba, width, height) &&
         title_capture_write(m_impl->title_capture_name, rgba.data(), width,
                             height, /*top_down=*/true))
-        whitty_wall_log::note("title captured for %s",
+        manx_wall_log::note("title captured for %s",
                               m_impl->title_capture_name.c_str());
     m_impl->title_capture_name.clear();
     m_impl->title_capture_countdown = -1;

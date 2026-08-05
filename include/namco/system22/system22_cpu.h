@@ -133,6 +133,11 @@ public:
     uint16_t gun_x() const { return m_gun_x; }
     uint16_t gun_y() const { return m_gun_y; }
     uint16_t cpu_led_data() const { return m_cpu_led_data; }
+    // Raw drive-board command published by Ridge/Rave/Ace/Victory Lap's
+    // external cabinet MCU in the low byte of shared word 0x40.
+    uint8_t wheel_motor_command() const {
+        return read_mcu_shared_byte(0x41);
+    }
 
 private:
     uint8_t read_mapped_byte(uint32_t address);

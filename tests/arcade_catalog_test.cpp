@@ -146,6 +146,9 @@ int main() {
     assert_registered(system16b::system16b_rom_loader::set_short_name(
                           system16b::system16b_rom_set::shinobi_us),
                       arcade_board_type::system16b);
+    assert_registered(system16b::system16b_rom_loader::set_short_name(
+                          system16b::system16b_rom_set::bay_route),
+                      arcade_board_type::system16b);
     assert_registered(gng::rom_loader::set_short_name(
                           gng::rom_set::world_set_1),
                       arcade_board_type::capcom_gng);
@@ -159,7 +162,7 @@ int main() {
     // Exercise the central probe using minimal directory fixtures. This
     // checks routing only; individual loaders have separate full-ROM tests.
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-catalog-test-" + std::to_string(test_process_id()));
+        ("manx-catalog-test-" + std::to_string(test_process_id()));
     fs::create_directories(root);
     const auto probe = [&](const char* name,
                            std::initializer_list<const char*> entries,
@@ -201,10 +204,61 @@ int main() {
           arcade_board_type::galaxian, "uniwars");
     probe("shinobi", {"epr-11360.a7"}, arcade_board_type::system16b,
           "shinobi4");
+    // Bay Route (set 1, US, unprotected) is identified by its plain
+    // 68000 pair; the encrypted parent set's epr-125xx chips must NOT
+    // match (the loader cannot decrypt FD1094 code).
+    probe("bayroute1", {"br.a1", "br.a4"},
+          arcade_board_type::system16b, "bayroute1");
+    // The encrypted parent set (FD1094 317-0116, epr-125xx chips) must
+    // NOT identify as anything: the loader cannot decrypt its 68000 code,
+    // and its chips share no name with the unprotected set 1.
+    {
+        const fs::path directory = root / "bayroute-parent-encrypted";
+        fs::create_directories(directory);
+        touch(directory / "epr-12517.a7");
+        touch(directory / "epr-12516.a5");
+        assert(!identify_arcade_game(directory.string()));
+    }
+    // E-SWAT is the pre-decrypted `eswatd` clone, identified by the two
+    // bootleg_-prefixed program chips that are the only thing separating
+    // it from its FD1094 parent.
+    probe("eswatd", {"bootleg_epr-12658.a1", "bootleg_epr-12659.a2"},
+          arcade_board_type::system16b, "eswatd");
+    // Galaga '88 shares the Namco System 1 board with Pac-Mania. Its ROM
+    // set is identified by CRC rather than by filename, so it cannot be
+    // probed with empty stand-in files the way the Sega sets can; assert
+    // the catalog registration instead and leave content checks to
+    // namco_rom_test, which runs against a real archive.
+    assert_registered("galaga88", arcade_board_type::namco_system1);
+    assert_registered("pacmania", arcade_board_type::namco_system1);
+
+    // Wonder Boy III is the pre-decrypted `wb33d`. Its near-namesake
+    // `wb31d` is a System 16A board, and keying on this set's own chips
+    // is what keeps the two apart.
+    probe("wb33d", {"bootleg_epr-12136.a5", "bootleg_epr-12137.a7"},
+          arcade_board_type::system16b, "wb33d");
+    {
+        const fs::path directory = root / "wb31d-system16a";
+        fs::create_directories(directory);
+        touch(directory / "bootleg_epr12082.bin");
+        touch(directory / "bootleg_epr12084.bin");
+        assert(!identify_arcade_game(directory.string()));
+    }
+    // The FD1094 317-0130 parent ships the same two sockets without the
+    // prefix. There is no decryptor here, so it must identify as nothing
+    // rather than being loaded and run as garbage.
+    {
+        const fs::path directory = root / "eswat-parent-encrypted";
+        fs::create_directories(directory);
+        touch(directory / "epr-12658.a1");
+        touch(directory / "epr-12659.a2");
+        touch(directory / "317-0130.key");
+        assert(!identify_arcade_game(directory.string()));
+    }
 
     // A missing path must never silently fall through to System 22. This is
     // the contract the application uses when deciding which session to build.
-    assert(!identify_arcade_game("/definitely/missing/whittyarcade.zip"));
+    assert(!identify_arcade_game("/definitely/missing/manx.zip"));
     fs::remove_all(root);
     return 0;
 }

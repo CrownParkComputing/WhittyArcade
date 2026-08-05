@@ -208,6 +208,113 @@ void board::mapper_reg_write(unsigned reg, uint8_t data) noexcept {
 }
 
 // =====================================================================
+// Sega custom chips on the 171-5797 ROM board
+// =====================================================================
+
+// 315-5248 multiplier. Word offsets 0 and 1 are the two signed 16-bit
+// inputs; offsets 2 and 3 read back the high and low halves of their
+// signed product. Bit 1 of the offset picks "operands" versus "result",
+// so writes only ever land in regs[0] and regs[1].
+uint16_t board::multiplier_chip::read(unsigned word_offset) const noexcept {
+    const int32_t product =
+        static_cast<int32_t>(static_cast<int16_t>(regs[0])) *
+        static_cast<int32_t>(static_cast<int16_t>(regs[1]));
+    switch (word_offset & 3u) {
+    case 0u: return regs[0];
+    case 1u: return regs[1];
+    case 2u: return static_cast<uint16_t>(product >> 16);
+    default: return static_cast<uint16_t>(product);
+    }
+}
+
+void board::multiplier_chip::write(unsigned word_offset, bool low_byte,
+                                   uint8_t data) noexcept {
+    uint16_t& reg = regs[word_offset & 1u];
+    reg = low_byte ? static_cast<uint16_t>((reg & 0xff00u) | data)
+                   : static_cast<uint16_t>((reg & 0x00ffu) |
+                                           (static_cast<uint16_t>(data) << 8));
+}
+
+// 315-5250 compare/timer. regs[0] and regs[1] are the two bounds (in
+// either order), regs[2] is the value under test. Comparing clamps the
+// value into range in regs[7] and reports which side it fell off in
+// regs[3]; regs[4] accumulates one history bit per compare that landed
+// inside the range.
+void board::compare_timer_chip::execute(bool update_history) noexcept {
+    const int16_t bound1 = static_cast<int16_t>(regs[0]);
+    const int16_t bound2 = static_cast<int16_t>(regs[1]);
+    const int16_t value  = static_cast<int16_t>(regs[2]);
+    const int16_t lo = bound1 < bound2 ? bound1 : bound2;
+    const int16_t hi = bound1 > bound2 ? bound1 : bound2;
+
+    if (value < lo) {
+        regs[7] = static_cast<uint16_t>(lo);
+        regs[3] = 0x8000u;
+    } else if (value > hi) {
+        regs[7] = static_cast<uint16_t>(hi);
+        regs[3] = 0x4000u;
+    } else {
+        regs[7] = static_cast<uint16_t>(value);
+        regs[3] = 0x0000u;
+    }
+    if (update_history)
+        regs[4] = static_cast<uint16_t>(
+            regs[4] | (static_cast<uint16_t>(regs[3] == 0u) << bit++));
+}
+
+uint16_t board::compare_timer_chip::read(unsigned word_offset) const noexcept {
+    switch (word_offset & 15u) {
+    case 0x0u: return regs[0];
+    case 0x1u: return regs[1];
+    case 0x2u: return regs[2];
+    case 0x3u: return regs[3];
+    case 0x4u: return regs[4];
+    // Offsets 5 and 6 alias the bounds/value rather than reading their
+    // own registers.
+    case 0x5u: return regs[1];
+    case 0x6u: return regs[2];
+    case 0x7u: return regs[7];
+    // 9 and 13 acknowledge the chip's 68000 interrupt, which this board
+    // never wires up; everything else is open bus.
+    default:   return 0xffffu;
+    }
+}
+
+void board::compare_timer_chip::write(unsigned word_offset, bool low_byte,
+                                      uint8_t data) noexcept {
+    const unsigned reg = word_offset & 15u;
+    // Which register a write lands in, or 16 for the write-only controls
+    // that ignore their data entirely.
+    static constexpr uint8_t target[16] = {
+        0, 1, 2, 16, 4, 16, 2, 16, 8, 16, 10, 11, 8, 16, 10, 11};
+    const unsigned slot = target[reg];
+    if (slot < 16u) {
+        uint16_t& value = regs[slot];
+        value = low_byte
+                    ? static_cast<uint16_t>((value & 0xff00u) | data)
+                    : static_cast<uint16_t>(
+                          (value & 0x00ffu) |
+                          (static_cast<uint16_t>(data) << 8));
+    }
+    // The register's side effect belongs to the word as a whole, so it
+    // runs once, on the completing low byte.
+    if (!low_byte) return;
+    switch (reg) {
+    case 0x0u:
+    case 0x1u:
+    case 0x6u: execute(); break;
+    case 0x2u: execute(true); break;
+    case 0x4u: regs[4] = 0; bit = 0; break;  // restart the bit history
+    default:   break;
+    }
+}
+
+void board::compare_timer_chip::reset() noexcept {
+    regs.fill(0);
+    bit = 0;
+}
+
+// =====================================================================
 // Memory map - System 16-B Shinobi (68000 bus, big-endian 16-bit words)
 // =====================================================================
 
@@ -250,6 +357,61 @@ uint8_t board::io_region_read(uint32_t offset) noexcept {
     }
 }
 
+// 171-5797 region 1. The board decodes only 16 KiB here and the mapper
+// mirrors it across whatever region size the game programmed, so fold the
+// offset into the window before splitting it: bits 13-12 choose the
+// multiplier, the first compare/timer or the tile bank register.
+uint8_t board::bank_math_read(uint32_t offset) noexcept {
+    const uint32_t window = offset & 0x3fffu;
+    const unsigned word   = window >> 1;
+    uint16_t value;
+    switch (window & 0x3000u) {
+    case 0x0000u: value = multiplier_.read(word); break;
+    case 0x1000u: value = compare_timers_[0].read(word); break;
+    // The tile bank register is write-only and 0x3000 decodes nothing.
+    default: return 0xFF;
+    }
+    return static_cast<uint8_t>((window & 1u) ? value : value >> 8);
+}
+
+void board::bank_math_write(uint32_t offset, uint8_t data) noexcept {
+    const uint32_t window = offset & 0x3fffu;
+    const unsigned word   = window >> 1;
+    const bool low_byte   = (window & 1u) != 0;
+    switch (window & 0x3000u) {
+    case 0x0000u: multiplier_.write(word, low_byte, data); break;
+    case 0x1000u: compare_timers_[0].write(word, low_byte, data); break;
+    case 0x2000u:
+        // Tile bank: word offset bit 0 picks the tilemap slot and only the
+        // low byte carries data, so the register sits at 0x2001/0x2003.
+        if (low_byte) {
+            tile_banks_[word & 1u] = data & 7u;
+            static const bool trace_bank =
+                std::getenv("SHINOBI_TRACE_BANK") != nullptr;
+            if (trace_bank) {
+                static int reported = 0;
+                if (reported < 64)
+                    std::fprintf(stderr, "tile bank #%d %04x = %02x\n",
+                                 ++reported, window, data);
+            }
+        }
+        break;
+    default: break;
+    }
+}
+
+// 171-5797 region 2: a second 315-5250 in a 64 KiB window.
+uint8_t board::cmp_timer2_read(uint32_t offset) noexcept {
+    const uint32_t window = offset & 0xffffu;
+    const uint16_t value  = compare_timers_[1].read(window >> 1);
+    return static_cast<uint8_t>((window & 1u) ? value : value >> 8);
+}
+
+void board::cmp_timer2_write(uint32_t offset, uint8_t data) noexcept {
+    const uint32_t window = offset & 0xffffu;
+    compare_timers_[1].write(window >> 1, (window & 1u) != 0, data);
+}
+
 uint8_t board::byte_read(uint32_t address) noexcept {
     address &= 0xFFFFFFu;
     if (mapper_decode_) {
@@ -263,6 +425,10 @@ uint8_t board::byte_read(uint32_t address) noexcept {
                 const uint32_t rom_base = mapper_rom_base_[region];
                 if (rom_base == kMapperTileBank)
                     return 0xFF; // 5704 tile bank register, write-only
+                if (rom_base == kMapperBankMath)
+                    return bank_math_read(offset);
+                if (rom_base == kMapperCmpTimer2)
+                    return cmp_timer2_read(offset);
                 return program_[(rom_base +
                                  (offset & mapper_rom_mask_)) &
                                 (kRomBytes - 1)];
@@ -339,8 +505,15 @@ void board::byte_write(uint32_t address, uint8_t data) noexcept {
         if (mapper_region(address, region, offset)) {
             switch (region) {
             case 0:
-            case 1: return; // ROM
+            case 1:
+                if (mapper_rom_base_[region] == kMapperBankMath)
+                    bank_math_write(offset, data);
+                return; // otherwise ROM
             case 2:
+                if (mapper_rom_base_[2] == kMapperCmpTimer2) {
+                    cmp_timer2_write(offset, data);
+                    return;
+                }
                 if (mapper_rom_base_[2] != kMapperTileBank)
                     return; // a third ROM window on the 5358
                 // 5704 tile bank register: word offset bit 0 picks the
@@ -453,6 +626,8 @@ void board::reset_extras() {
     sound_irq_pending_ = false;
     sound_bankoffs_ = 0;
     tile_banks_ = {0, 1};
+    multiplier_ = multiplier_chip{};
+    for (compare_timer_chip& chip : compare_timers_) chip.reset();
     high_scores_.reset();
 }
 

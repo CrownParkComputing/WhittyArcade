@@ -40,6 +40,10 @@ constexpr arcade_board_list boards{{
      "Namco Galaga hardware", "NAMCO GALAGA", "namco_galaga"},
     {arcade_board_type::namco_system1, "namco_system1",
      "Namco System 1", "NAMCO SYSTEM 1", "namco_system1"},
+    {arcade_board_type::taito_z, "taito_z",
+     "Taito Z System", "TAITO Z SYSTEM", "taito_z"},
+    {arcade_board_type::midway, "midway",
+     "Midway Wolf Unit", "MIDWAY WOLF UNIT", "midway"},
 }};
 
 constexpr std::array<rom_set_manifest, arcade_builtin_game_count> builtin_manifests{{
@@ -146,6 +150,9 @@ constexpr std::array<rom_set_manifest, arcade_builtin_game_count> builtin_manife
     {"uniwars", "UniWar S (Irem)", arcade_board_type::galaxian,
      "", "", true, arcade_multiplayer_mode::alternating,
      "Irem"},
+    {"warofbug", "War of the Bugs", arcade_board_type::galaxian,
+     "", "", true, arcade_multiplayer_mode::alternating,
+     "Armenia / Food and Fun"},
     {"aliensyn", "Alien Syndrome (System 16B)",
      arcade_board_type::system16b, "", "", true,
      arcade_multiplayer_mode::simultaneous,
@@ -174,11 +181,28 @@ constexpr std::array<rom_set_manifest, arcade_builtin_game_count> builtin_manife
      arcade_board_type::system16b, "tturf.zip", "", true,
      arcade_multiplayer_mode::simultaneous,
      "Sega / Sunsoft"},
+    {"bayroute1", "Bay Route (System 16B, set 1 US)",
+     arcade_board_type::system16b, "bayroute.zip",
+     "bayroute1.zip for the unprotected set-1 chips", true,
+     arcade_multiplayer_mode::simultaneous,
+     "Sunsoft / Sega"},
+    {"eswatd", "Cyber Police E-SWAT (System 16B)",
+     arcade_board_type::system16b, "eswat.zip", "", true,
+     arcade_multiplayer_mode::alternating,
+     "Sega"},
+    {"wb33d", "Wonder Boy III: Monster Lair (System 16B)",
+     arcade_board_type::system16b, "wb3.zip", "", true,
+     arcade_multiplayer_mode::simultaneous,
+     "Sega / Westone"},
     {"shinobi4", "Shinobi (System 16B, set 4)",
      arcade_board_type::system16b, "shinobi.zip",
      "shinobi6.zip for unencrypted sound ROM in split collections", true,
      arcade_multiplayer_mode::alternating,
      "Sega"},
+    {"contcirc", "Continental Circus (Taito Z System)",
+     arcade_board_type::taito_z, "", "", true,
+     arcade_multiplayer_mode::none,
+     "Taito"},
     {"gng", "Ghosts'n Goblins (World? set 1)",
      arcade_board_type::capcom_gng, "", "", true,
      arcade_multiplayer_mode::alternating,
@@ -187,12 +211,23 @@ constexpr std::array<rom_set_manifest, arcade_builtin_game_count> builtin_manife
      arcade_board_type::namco_galaga, "", "", true,
      arcade_multiplayer_mode::alternating,
      "Namco"},
+    {"galaga88", "Galaga '88 (World)",
+     arcade_board_type::namco_system1, "", "", true,
+     arcade_multiplayer_mode::alternating,
+     "Namco"},
     {"pacmania", "Pac-Mania (World)",
      arcade_board_type::namco_system1, "", "", true,
      arcade_multiplayer_mode::alternating,
      "Namco"},
+    {"kinst", "Killer Instinct (v1.5d)",
+     arcade_board_type::midway, "", "kinst.chd", true,
+     arcade_multiplayer_mode::simultaneous,
+     "Midway / Rare"},
+    {"kinst2", "Killer Instinct 2 (v1.4)",
+     arcade_board_type::midway, "", "kinst2.chd", true,
+     arcade_multiplayer_mode::simultaneous,
+     "Midway / Rare"},
 }};
-
 } // namespace
 
 const arcade_board_list& arcade_boards() {
@@ -329,7 +364,7 @@ void rebuild_catalogue() {
             "Recompiled native port; plays from your own copy of the game";
         row.working = true;
         // Local multiplayer is the title's own business - it is a whole game in
-        // its own process, so WhittyArcade cannot wire a second seat into it.
+        // its own process, so MANX cannot wire a second seat into it.
         row.multiplayer = arcade_multiplayer_mode::none;
         row.publisher = "";
 
@@ -403,7 +438,7 @@ bool supports_network_two_player(const rom_set_manifest& manifest) {
 
 bool supports_native_system_link(const rom_set_manifest& manifest) {
     // System Link means the original cabinet communication hardware, rather
-    // than WhittyArcade's shared two-player input/video transport.
+    // than MANX's shared two-player input/video transport.
     return manifest.working &&
            manifest.multiplayer == arcade_multiplayer_mode::native_link;
 }

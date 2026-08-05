@@ -3,6 +3,7 @@
 
 #include "arcade_catalog.h"
 #include "game_plugin_host.h"
+#include "native_title_library.h"
 
 #include "namco/galaxian/galaxian_rom.h"
 #include "capcom/gng/gng_rom.h"
@@ -10,9 +11,11 @@
 #include "sega/model2/model2_rom.h"
 #include "namco/namco_rom.h"
 #include "sega/system16b/system16b_rom.h"
+#include "taito/taitoz/taitoz_rom.h"
 #include "namco/system22/system22_rom.h"
 #include "system246_rom.h"
 #include "xbox360_rom.h"
+#include "midway/midway_rom.h"
 
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -68,6 +71,14 @@ std::optional<arcade_game_identity> identify_arcade_game(
         return arcade_game_identity{arcade_board_type::game_plugin,
                                     plugin->short_name};
 
+    // A converted Xbox 360 title, recognised by the owned game it runs against.
+    // Also checked before the ROM loaders: those know only the handful of
+    // titles compiled into them, so a package with a perfectly good conversion
+    // installed would otherwise be reported as an unrecognised game.
+    if (const native_title* converted = find_native_title_for_game(path))
+        return arcade_game_identity{arcade_board_type::xbox360,
+                                    converted->short_name};
+
     // Any other ".acgame" manifest is still a System 246/256 game -- the board
     // boots any manifest directly, so a collection title with no built-in enum
     // entry (e.g. Tekken 5) must route here too, keyed by its basename. Without
@@ -116,6 +127,13 @@ std::optional<arcade_game_identity> identify_arcade_game(
             arcade_board_type::capcom_gng,
             gng::rom_loader::set_short_name(gng_set)};
 
+    const taitoz::taitoz_rom_set taitoz_set =
+        taitoz::taitoz_rom_loader::identify_set(path);
+    if (taitoz_set != taitoz::taitoz_rom_set::unknown)
+        return arcade_game_identity{
+            arcade_board_type::taito_z,
+            taitoz::taitoz_rom_loader::set_short_name(taitoz_set)};
+
     const namco::rom_set namco_set = namco::rom_loader::identify_set(path);
     if (namco_set != namco::rom_set::unknown)
         return arcade_game_identity{
@@ -123,6 +141,12 @@ std::optional<arcade_game_identity> identify_arcade_game(
                 ? arcade_board_type::namco_galaga
                 : arcade_board_type::namco_system1,
             namco::rom_loader::set_short_name(namco_set)};
+
+    const midway_rom_set midway_set = midway_rom_loader::identify_set(path);
+    if (midway_set != midway_rom_set::unknown)
+        return arcade_game_identity{
+            arcade_board_type::midway,
+            midway_rom_loader::set_short_name(midway_set)};
 
     return std::nullopt;
 }

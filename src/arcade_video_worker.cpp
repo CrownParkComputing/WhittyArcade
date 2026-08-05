@@ -185,6 +185,12 @@ void arcade_video_worker::harvest_frontend(polygon_renderer_gpu& renderer) {
     }
 }
 
+void arcade_video_worker::set_host_window_visible(bool visible) {
+    enqueue([visible](polygon_renderer_gpu& renderer) {
+        renderer.set_window_visible(visible);
+    });
+}
+
 void arcade_video_worker::refresh_output() {
     enqueue([](polygon_renderer_gpu& renderer) {
         renderer.refresh_output();

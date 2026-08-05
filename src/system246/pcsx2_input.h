@@ -10,7 +10,7 @@
 // event pumping). Implemented in pcsx2_host.cpp (which has the ACJV headers).
 #pragma once
 
-namespace WhittyArcadeInput
+namespace MANXInput
 {
 	void SetSteerLeft(bool held);
 	void SetSteerRight(bool held);
@@ -43,4 +43,4 @@ namespace WhittyArcadeInput
 
 	// CPU-thread only: pushes the current held state + queued coins into ACJV.
 	void ApplyToJVS();
-} // namespace WhittyArcadeInput
+} // namespace MANXInput

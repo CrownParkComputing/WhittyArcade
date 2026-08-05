@@ -2,6 +2,8 @@
 #include "platform_paths.h"
 #include "xbox360_audio.h"
 #include "xbox360_rom.h"
+#include "arcade_catalog.h"
+#include "native_title_library.h"
 #include "xbox360_runtime_loader.h"
 
 #include <algorithm>
@@ -45,7 +47,7 @@ public:
             return false;
         }
         if (!m_gpu_renderer->initialize(settings)) {
-            std::fprintf(stderr, "Failed to initialize WhittyArcade video\n");
+            std::fprintf(stderr, "Failed to initialize MANX video\n");
             return false;
         }
         m_input = std::make_unique<arcade_input>();
@@ -53,12 +55,12 @@ public:
             std::fprintf(stderr,
                          "Robotron input failed; controls remain neutral\n");
 
-        fs::path config = whitty_platform::config_root();
-        fs::path data = whitty_platform::data_root();
+        fs::path config = manx_platform::config_root();
+        fs::path data = manx_platform::data_root();
         if (config.empty()) config = fs::current_path();
         if (data.empty()) data = config;
-        const fs::path user_root = config / "WhittyArcade" / "xbox360";
-        const fs::path cache_root = data / "WhittyArcade" / "cache" /
+        const fs::path user_root = config / "MANX" / "xbox360";
+        const fs::path cache_root = data / "MANX" / "cache" /
                                     "xbox360";
         std::error_code directory_error;
         fs::create_directories(user_root, directory_error);
@@ -75,7 +77,7 @@ public:
         if (!m_audio.initialize())
             std::fprintf(stderr,
                          "Robotron audio output unavailable; video will continue\n");
-        std::printf("Robotron: 2084 started offline through the WhittyArcade "
+        std::printf("Robotron: 2084 started offline through the MANX "
                     "renderer\n");
         return true;
     }
@@ -85,22 +87,26 @@ public:
         m_input->set_suppressed(m_gpu_renderer->input_suppressed());
         m_input->update();
         const input_state& state = m_input->state();
-        whitty_xbox360_input input{};
+        manx_xbox360_input input{};
         input.struct_size = sizeof(input);
         input.packet_number = ++m_input_packet;
         input.left_x = xbox_axis(state.left_stick_x, false);
         input.left_y = xbox_axis(state.left_stick_y, true);
         input.right_x = xbox_axis(state.right_stick_x, false);
         input.right_y = xbox_axis(state.right_stick_y, true);
-        if (state.start) input.buttons |= WHITTY_X360_START;
-        if (state.coin1 || state.view) input.buttons |= WHITTY_X360_BACK;
-        if (state.buttons[0]) input.buttons |= WHITTY_X360_A;
-        if (state.buttons[1]) input.buttons |= WHITTY_X360_B;
-        if (state.buttons[2]) input.buttons |= WHITTY_X360_X;
-        if (state.buttons[3]) input.buttons |= WHITTY_X360_Y;
-        if (state.shift_down) input.buttons |= WHITTY_X360_LEFT_SHOULDER;
-        if (state.shift_up) input.buttons |= WHITTY_X360_RIGHT_SHOULDER;
+        if (state.start) input.buttons |= MANX_X360_START;
+        if (state.coin1 || state.view) input.buttons |= MANX_X360_BACK;
+        if (state.buttons[0]) input.buttons |= MANX_X360_A;
+        if (state.buttons[1]) input.buttons |= MANX_X360_B;
+        if (state.buttons[2]) input.buttons |= MANX_X360_X;
+        if (state.buttons[3]) input.buttons |= MANX_X360_Y;
+        if (state.shift_down) input.buttons |= MANX_X360_LEFT_SHOULDER;
+        if (state.shift_up) input.buttons |= MANX_X360_RIGHT_SHOULDER;
         m_runtime.set_input(input);
+        manx_xbox360_vibration vibration{};
+        if (m_runtime.vibration(vibration))
+            m_input->set_rumble(vibration.left_motor_speed,
+                                vibration.right_motor_speed);
 
         int width = 0;
         int height = 0;
@@ -175,9 +181,17 @@ public:
 
     bool initialize(const std::string& rom_path, const std::string& bios_path,
                     const emulator_settings& settings) override {
+        // A converted title decides its own routing, before the ROM loader is
+        // consulted at all. The loader records which shape a title was dumped
+        // in and returns early when a copy is the other shape - leaving the set
+        // unidentified, so routing fell back to the in-process emulator for a
+        // game that has a working native port installed. Geometry Wars is
+        // exactly that case: the loader expects it extracted, this copy is a
+        // package, and the native port plays it either way.
+        const bool converted = find_native_title_for_game(rom_path) != nullptr;
         const xbox360_rom_set set =
             xbox360_rom_loader::inspect(rom_path, false).set;
-        m_delegate = served_by_native_runtime(set) ?
+        m_delegate = (converted || served_by_native_runtime(set)) ?
             make_xbox360_native_session(m_video, m_cabinet) :
             std::unique_ptr<emulator_session>(
                 std::make_unique<xbox360_emulator>(m_video, m_cabinet));
@@ -186,6 +200,13 @@ public:
 
     void run_frame() override {
         if (m_delegate) m_delegate->run_frame();
+    }
+    // Forwarded, like everything else here. Answering for the delegate rather
+    // than from it left the launcher's window on screen over a native title:
+    // this wrapper does not own a window, but the port behind it does, and the
+    // player is then looking at the game while the launcher holds the focus.
+    bool owns_its_own_window() const noexcept override {
+        return m_delegate && m_delegate->owns_its_own_window();
     }
     arcade_host_action process_events() override {
         return m_delegate ? m_delegate->process_events() :

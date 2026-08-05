@@ -3,7 +3,7 @@ name: Release
 # Builds every platform from the tagged commit and publishes them as one
 # GitHub release on this repository. Push a tag to run it:
 #
-#     git tag -a v0.3.0 -m "WhittyArcade v0.3.0"
+#     git tag -a v0.3.0 -m "MANX v0.3.0"
 #     git push origin v0.3.0
 #
 # It can also be started by hand from the Actions tab - choose the tag, not a
@@ -74,12 +74,12 @@ jobs:
           # A release missing a platform is worse than no release: it looks
           # complete and quietly leaves someone with nothing to download.
           for expected in \
-              WhittyArcade-windows-x86_64.zip \
-              WhittyArcade-cachyos-x86_64.tar.gz \
-              WhittyArcade-ubuntu-26.04-x86_64.tar.gz \
-              WhittyArcade-debian-13-x86_64.tar.gz \
-              WhittyArcade-fedora-43-x86_64.tar.gz \
-              WhittyArcade-opensuse-tumbleweed-x86_64.tar.gz; do
+              MANX-windows-x86_64.zip \
+              MANX-cachyos-x86_64.tar.gz \
+              MANX-ubuntu-26.04-x86_64.tar.gz \
+              MANX-debian-13-x86_64.tar.gz \
+              MANX-fedora-43-x86_64.tar.gz \
+              MANX-opensuse-tumbleweed-x86_64.tar.gz; do
             if [ ! -f "release/$expected" ]; then
               echo "missing from this build: $expected"
               exit 1
@@ -112,7 +112,7 @@ jobs:
             gh release upload "$TAG" release/* --clobber
           else
             gh release create "$TAG" \
-              --title "WhittyArcade $TAG" \
+              --title "MANX $TAG" \
               --generate-notes \
               $prerelease \
               release/*

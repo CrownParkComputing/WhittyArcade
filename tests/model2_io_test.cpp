@@ -8,7 +8,7 @@
 int main() {
     // Keep the test hermetic while exercising the real save/reload path.
     const std::filesystem::path config_root =
-        std::filesystem::temp_directory_path() / "whitty-model2-io-test";
+        std::filesystem::temp_directory_path() / "manx-model2-io-test";
     std::error_code cleanup_error;
     std::filesystem::remove_all(config_root, cleanup_error);
     if (!test_set_environment("XDG_CONFIG_HOME", config_root)) return 1;
@@ -209,7 +209,7 @@ int main() {
     assert(bus.read8(0x01a04000) == 0xfe);
     assert(bus.read8(0x01a04002) == 0xfe);
 
-    // Paired WhittyArcade processes use two localhost UDP endpoints. Exercise
+    // Paired MANX processes use two localhost UDP endpoints. Exercise
     // the same transport in-process: each cabinet receives the other
     // cabinet's complete preceding communication frame and reports a
     // two-node ring.
@@ -518,7 +518,7 @@ int main() {
     model2_game_profile gun_profile;
     gun_profile.io = model2_game_profile::io_kind::crx_gun;
     gun_profile.lightgun = true;
-    gun_profile.nvram_leaf = "whitty-model2-io-test";
+    gun_profile.nvram_leaf = "manx-model2-io-test";
     gun_bus.attach(gun_roms, gun_profile);
     const auto read_offscreen = [](model2_bus& target) {
         target.write8(0x01c00000 + 0x0a * 2, 8);

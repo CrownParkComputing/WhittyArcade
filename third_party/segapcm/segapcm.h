@@ -18,8 +18,8 @@
 //     chips' bank mode (BANK_256 / BANK_512 / BANK_12M).
 //   - Generator frequency = `clock / (16 * (count + 1))`.
 
-#ifndef WHITTYARCADE_SEGAPCM_H
-#define WHITTYARCADE_SEGAPCM_H
+#ifndef MANX_SEGAPCM_H
+#define MANX_SEGAPCM_H
 
 #include <cstdint>
 #include <cstddef>
@@ -66,4 +66,4 @@ private:
     unsigned       m_clock{4'000'000};
 };
 
-#endif // WHITTYARCADE_SEGAPCM_H
+#endif // MANX_SEGAPCM_H

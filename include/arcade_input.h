@@ -1,6 +1,7 @@
 // arcade_input.h - shared SDL keyboard and controller input adapter.
 #pragma once
 
+#include "arcade_feedback.h"
 #include "arcade_types.h"
 #include "input_mapping.h"
 
@@ -12,7 +13,7 @@
 #include <string_view>
 
 // True after the board-neutral two-computer input link has received a packet
-// from the other WhittyArcade instance. Native cabinet links (for example
+// from the other MANX instance. Native cabinet links (for example
 // Sega Rally's Model 2 board) report their own state instead.
 bool arcade_input_network_peer_seen();
 // Netplay, read by the host loop: true while this machine is waiting for the
@@ -35,6 +36,10 @@ uint32_t arcade_input_netplay_desync_frame();
 // cabinets are one session: when either app closes, the other has nothing
 // left to play against and should close too rather than sit waiting.
 bool arcade_input_netplay_peer_lost();
+// Sends a cooperative session-closing packet to the linked cabinet. The peer
+// leaves through its normal event loop, releasing video, audio and input
+// before the owner falls back to process signals.
+void arcade_input_netplay_request_shutdown();
 // Polls the netplay link without running a frame. A cabinet waiting on its
 // partner stops calling update(), so this is what still notices the partner
 // leaving. There is exactly one linked input per process, which registers
@@ -70,6 +75,13 @@ public:
     }
     void reload_mappings();
     void shutdown();
+    void request_peer_shutdown();
+    // Whole-pad force feedback. Continuous effects are refreshed often
+    // enough to survive SDL's finite timeout without flooding a wireless
+    // controller; pulses always restart immediately.
+    void set_rumble(uint16_t low_frequency, uint16_t high_frequency);
+    void pulse_rumble(uint16_t low_frequency, uint16_t high_frequency,
+                      uint32_t duration_ms);
     void update();
     // Drains the link and ages the peer without merging or advancing a
     // frame. A stalled cabinet stops calling update(), so this is what lets
@@ -95,9 +107,12 @@ private:
     bool initialize_network_link();
     void shutdown_network_link();
     void exchange_network_input(const input_state& local_state);
-    void send_link_packet(const input_state& local_state);
+    void send_link_packet(const input_state& local_state,
+                          bool shutting_down = false);
     bool drain_network_input();
     void wait_for_peer_frame(uint32_t frame);
+    bool apply_rumble(uint16_t low_frequency, uint16_t high_frequency,
+                      uint32_t duration_ms);
 
     SDL_Gamepad* m_controller{nullptr};
     input_mapping_config m_mappings{};
@@ -105,6 +120,17 @@ private:
     input_binding_table m_keyboard_bindings{};
     input_binding_table m_controller_bindings{};
     std::array<int, SDL_GAMEPAD_AXIS_COUNT> m_axis_centers{};
+    arcade_feedback::profile m_feedback_profile{};
+    uint16_t m_rumble_low{};
+    uint16_t m_rumble_high{};
+    uint16_t m_applied_rumble_low{};
+    uint16_t m_applied_rumble_high{};
+    uint16_t m_audio_impact_low{};
+    uint16_t m_audio_impact_high{};
+    uint64_t m_audio_impact_until{};
+    uint64_t m_rumble_refresh_count{};
+    bool m_rumble_supported{};
+    bool m_rumble_error_reported{};
     // SDL3 joystick instance ids are unsigned; 0 is the "no controller"
     // sentinel (SDL3 never assigns instance id 0).
     std::atomic<SDL_JoystickID> m_controller_instance{0};

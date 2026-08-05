@@ -139,7 +139,7 @@ bool multiplayer_lobby::peer_has_game(std::string_view short_name) const {
 
 std::string multiplayer_lobby::status_text() const {
     if (!connected())
-        return "Searching automatically for another WhittyArcade...";
+        return "Searching automatically for another MANX...";
     return node() == 1 ?
         "Player 2 connected. This cabinet chooses the game." :
         "Connected as Player 2. Player 1 chooses the game.";

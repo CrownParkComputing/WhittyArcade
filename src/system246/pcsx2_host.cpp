@@ -63,12 +63,12 @@
 // work inline (if already on the CPU thread) or enqueues it.
 // ---------------------------------------------------------------------------
 
-namespace WhittyArcadeHost
+namespace MANXHost
 {
 	void SetRenderWindow(const WindowInfo& wi);
 	void ClearRenderWindow();
 	void SetCPUThreadId(std::thread::id id);
-} // namespace WhittyArcadeHost
+} // namespace MANXHost
 
 namespace
 {
@@ -91,7 +91,7 @@ namespace
 	std::uint64_t s_wa_frame_sequence = 0;
 } // namespace
 
-bool WhittyArcadeHost::WaitForFrame(std::uint64_t last_sequence, int timeout_ms,
+bool MANXHost::WaitForFrame(std::uint64_t last_sequence, int timeout_ms,
 	std::vector<std::uint32_t>& out_pixels, int& out_width, int& out_height,
 	std::uint64_t& out_sequence)
 {
@@ -110,7 +110,7 @@ bool WhittyArcadeHost::WaitForFrame(std::uint64_t last_sequence, int timeout_ms,
 	return true;
 }
 
-bool WhittyArcadeHost::GetLatestFrame(std::uint64_t last_sequence,
+bool MANXHost::GetLatestFrame(std::uint64_t last_sequence,
 	std::vector<std::uint32_t>& out_pixels, int& out_width, int& out_height,
 	std::uint64_t& out_sequence)
 {
@@ -128,12 +128,12 @@ bool WhittyArcadeHost::GetLatestFrame(std::uint64_t last_sequence,
 namespace
 {
 	std::atomic<int> s_boot_stage{
-		static_cast<int>(WhittyArcadeHost::BootStage::Starting)};
+		static_cast<int>(MANXHost::BootStage::Starting)};
 	std::atomic<std::uint64_t> s_captured_frames{0};
 	std::atomic<std::uint64_t> s_captured_with_content{0};
 } // namespace
 
-void WhittyArcadeHost::SetBootStage(BootStage stage)
+void MANXHost::SetBootStage(BootStage stage)
 {
 	// Only ever forward: the capture path reports "drawing" from the GS thread
 	// while the CPU thread is still walking its own start-up steps.
@@ -146,12 +146,12 @@ void WhittyArcadeHost::SetBootStage(BootStage stage)
 	}
 }
 
-WhittyArcadeHost::BootStage WhittyArcadeHost::GetBootStage()
+MANXHost::BootStage MANXHost::GetBootStage()
 {
 	return static_cast<BootStage>(s_boot_stage.load(std::memory_order_relaxed));
 }
 
-void WhittyArcadeHost::NoteCapturedFrame(bool has_content)
+void MANXHost::NoteCapturedFrame(bool has_content)
 {
 	s_captured_frames.fetch_add(1, std::memory_order_relaxed);
 	if (has_content)
@@ -161,26 +161,26 @@ void WhittyArcadeHost::NoteCapturedFrame(bool has_content)
 	}
 }
 
-void WhittyArcadeHost::GetCaptureCounts(std::uint64_t& frames,
+void MANXHost::GetCaptureCounts(std::uint64_t& frames,
 	std::uint64_t& with_content)
 {
 	frames = s_captured_frames.load(std::memory_order_relaxed);
 	with_content = s_captured_with_content.load(std::memory_order_relaxed);
 }
 
-void WhittyArcadeHost::SetRenderWindow(const WindowInfo& wi)
+void MANXHost::SetRenderWindow(const WindowInfo& wi)
 {
 	std::lock_guard<std::mutex> lock(s_wa_window_mutex);
 	s_wa_render_window = wi;
 }
 
-void WhittyArcadeHost::ClearRenderWindow()
+void MANXHost::ClearRenderWindow()
 {
 	std::lock_guard<std::mutex> lock(s_wa_window_mutex);
 	s_wa_render_window.reset();
 }
 
-void WhittyArcadeHost::SetCPUThreadId(std::thread::id id)
+void MANXHost::SetCPUThreadId(std::thread::id id)
 {
 	s_wa_cpu_thread_id = id;
 	s_wa_cpu_thread_id_valid.store(true, std::memory_order_release);
@@ -228,19 +228,19 @@ namespace
 	std::atomic<bool> s_in_gun_offscreen[kPlayers]{};
 } // namespace
 
-void WhittyArcadeInput::SetSteerLeft(bool held) { s_in_steer_left.store(held, std::memory_order_relaxed); }
-void WhittyArcadeInput::SetSteerRight(bool held) { s_in_steer_right.store(held, std::memory_order_relaxed); }
-void WhittyArcadeInput::SetGas(bool held) { s_in_gas.store(held, std::memory_order_relaxed); }
-void WhittyArcadeInput::SetBrake(bool held) { s_in_brake.store(held, std::memory_order_relaxed); }
-void WhittyArcadeInput::SetStart(bool held) { s_in_start.store(held, std::memory_order_relaxed); }
-void WhittyArcadeInput::SetService(bool held) { s_in_service.store(held, std::memory_order_relaxed); }
-void WhittyArcadeInput::SetGearUp(bool held) { s_in_gear_up.store(held, std::memory_order_relaxed); }
-void WhittyArcadeInput::SetGearDown(bool held) { s_in_gear_down.store(held, std::memory_order_relaxed); }
-void WhittyArcadeInput::SetView(bool held) { s_in_view.store(held, std::memory_order_relaxed); }
-void WhittyArcadeInput::InsertCoin() { s_in_pending_coins.fetch_add(1, std::memory_order_relaxed); }
-void WhittyArcadeInput::SetTest(bool held) { s_in_test.store(held, std::memory_order_relaxed); }
+void MANXInput::SetSteerLeft(bool held) { s_in_steer_left.store(held, std::memory_order_relaxed); }
+void MANXInput::SetSteerRight(bool held) { s_in_steer_right.store(held, std::memory_order_relaxed); }
+void MANXInput::SetGas(bool held) { s_in_gas.store(held, std::memory_order_relaxed); }
+void MANXInput::SetBrake(bool held) { s_in_brake.store(held, std::memory_order_relaxed); }
+void MANXInput::SetStart(bool held) { s_in_start.store(held, std::memory_order_relaxed); }
+void MANXInput::SetService(bool held) { s_in_service.store(held, std::memory_order_relaxed); }
+void MANXInput::SetGearUp(bool held) { s_in_gear_up.store(held, std::memory_order_relaxed); }
+void MANXInput::SetGearDown(bool held) { s_in_gear_down.store(held, std::memory_order_relaxed); }
+void MANXInput::SetView(bool held) { s_in_view.store(held, std::memory_order_relaxed); }
+void MANXInput::InsertCoin() { s_in_pending_coins.fetch_add(1, std::memory_order_relaxed); }
+void MANXInput::SetTest(bool held) { s_in_test.store(held, std::memory_order_relaxed); }
 
-void WhittyArcadeInput::SetLever(int player, bool up, bool down, bool left, bool right)
+void MANXInput::SetLever(int player, bool up, bool down, bool left, bool right)
 {
 	if (player < 0 || player >= kPlayers)
 		return;
@@ -250,14 +250,14 @@ void WhittyArcadeInput::SetLever(int player, bool up, bool down, bool left, bool
 	s_in_lever_right[player].store(right, std::memory_order_relaxed);
 }
 
-void WhittyArcadeInput::SetAttack(int player, int index, bool held)
+void MANXInput::SetAttack(int player, int index, bool held)
 {
 	if (player < 0 || player >= kPlayers || index < 0 || index >= kAttacks)
 		return;
 	s_in_attack[player][index].store(held, std::memory_order_relaxed);
 }
 
-void WhittyArcadeInput::SetPlayerStart(int player, bool held)
+void MANXInput::SetPlayerStart(int player, bool held)
 {
 	if (player < 0 || player >= kPlayers)
 		return;
@@ -266,7 +266,7 @@ void WhittyArcadeInput::SetPlayerStart(int player, bool held)
 		s_in_start.store(held, std::memory_order_relaxed);
 }
 
-void WhittyArcadeInput::SetGunAim(int player, bool aimed, float x, float y)
+void MANXInput::SetGunAim(int player, bool aimed, float x, float y)
 {
 	if (player < 0 || player >= kPlayers)
 		return;
@@ -277,25 +277,25 @@ void WhittyArcadeInput::SetGunAim(int player, bool aimed, float x, float y)
 	s_in_gun_y[player].store(y, std::memory_order_relaxed);
 }
 
-void WhittyArcadeInput::SetGunTrigger(int player, bool held)
+void MANXInput::SetGunTrigger(int player, bool held)
 {
 	if (player >= 0 && player < kPlayers)
 		s_in_gun_trigger[player].store(held, std::memory_order_relaxed);
 }
 
-void WhittyArcadeInput::SetGunPedal(int player, bool held)
+void MANXInput::SetGunPedal(int player, bool held)
 {
 	if (player >= 0 && player < kPlayers)
 		s_in_gun_pedal[player].store(held, std::memory_order_relaxed);
 }
 
-void WhittyArcadeInput::SetGunOffscreen(int player, bool held)
+void MANXInput::SetGunOffscreen(int player, bool held)
 {
 	if (player >= 0 && player < kPlayers)
 		s_in_gun_offscreen[player].store(held, std::memory_order_relaxed);
 }
 
-void WhittyArcadeInput::InsertCoinSlot(int slot)
+void MANXInput::InsertCoinSlot(int slot)
 {
 	if (slot <= 0)
 		s_in_pending_coins.fetch_add(1, std::memory_order_relaxed);
@@ -303,7 +303,7 @@ void WhittyArcadeInput::InsertCoinSlot(int slot)
 		s_in_pending_coins_p2.fetch_add(1, std::memory_order_relaxed);
 }
 
-void WhittyArcadeInput::ApplyToJVS()
+void MANXInput::ApplyToJVS()
 {
 	const auto held = [](const std::atomic<bool>& flag) {
 		return flag.load(std::memory_order_relaxed);
@@ -347,11 +347,11 @@ void WhittyArcadeInput::ApplyToJVS()
 				const float aim_y = s_in_gun_y[player].load(std::memory_order_relaxed);
 				ACJV::SetGunRelativeAim(slot, aim_x, aim_y);
 
-				// WHITTY_GUN_TRACE=1: the aim as the board receives it, next
+				// MANX_GUN_TRACE=1: the aim as the board receives it, next
 				// to the switches. Pair this with the host-side line to see
 				// whether a bad shot position came from the measurement or
 				// from the conversion.
-				static const bool trace_gun = std::getenv("WHITTY_GUN_TRACE") != nullptr;
+				static const bool trace_gun = std::getenv("MANX_GUN_TRACE") != nullptr;
 				static u32 trace_counter = 0;
 				if (trace_gun && player == 0 && (trace_counter++ % 30) == 0)
 				{
@@ -572,7 +572,7 @@ void Host::ReleaseRenderWindow()
 
 void Host::BeginPresentFrame()
 {
-	// Surfaceless: snapshot the current GS frame into memory so the WhittyArcade
+	// Surfaceless: snapshot the current GS frame into memory so the MANX
 	// video worker can present it. Runs on the GS thread inside the present path;
 	// GSSaveSnapshotToMemory does a synchronous read-back (same call the built-in
 	// screenshot path uses here), returning tightly-packed RGBA u32 pixels.
@@ -580,13 +580,13 @@ void Host::BeginPresentFrame()
 	u32 height = 0;
 	std::vector<u32> pixels;
 
-	// WHITTY_PCSX2_CAPTURE_RAW=1 grabs the display texture at its own internal
+	// MANX_PCSX2_CAPTURE_RAW=1 grabs the display texture at its own internal
 	// resolution with no aspect correction and no border crop. The default
 	// path asks for a 640x480 window-fitted, cropped image, which is what a
 	// cabinet wants - but if a game's picture survives the raw grab and not
 	// the fitted one, the fitting is what lost it.
 	static const bool raw_capture = []() {
-		const char* value = std::getenv("WHITTY_PCSX2_CAPTURE_RAW");
+		const char* value = std::getenv("MANX_PCSX2_CAPTURE_RAW");
 		return value && *value && *value != '0';
 	}();
 
@@ -599,7 +599,7 @@ void Host::BeginPresentFrame()
 
 	// Rate-limited capture diagnostics. When a game boots to a black screen but
 	// has audio, this distinguishes "GS produced no displayable frame"
-	// (snapshot keeps failing -> nothing published -> WhittyArcade shows black)
+	// (snapshot keeps failing -> nothing published -> MANX shows black)
 	// from "frames captured fine" (the problem is downstream of capture). Logs
 	// the first few calls and then one line every ~180 frames (~3s).
 	{
@@ -646,7 +646,7 @@ void Host::BeginPresentFrame()
 				break;
 			}
 		}
-		WhittyArcadeHost::NoteCapturedFrame(has_content);
+		MANXHost::NoteCapturedFrame(has_content);
 		{
 			std::lock_guard<std::mutex> lock(s_wa_frame_mutex);
 			s_wa_frame_pixels = std::move(pixels);
@@ -897,7 +897,7 @@ void Host::PumpMessagesOnCPUThread()
 		fn();
 
 	// Push the latest cabinet-input state into ACJV each VSync (CPU thread).
-	WhittyArcadeInput::ApplyToJVS();
+	MANXInput::ApplyToJVS();
 }
 
 // ---------------------------------------------------------------------------

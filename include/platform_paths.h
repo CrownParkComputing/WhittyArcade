@@ -9,7 +9,7 @@
 #include <cwchar>
 #endif
 
-namespace whitty_platform {
+namespace manx_platform {
 namespace fs = std::filesystem;
 
 inline fs::path environment_path(const char* name) {
@@ -18,7 +18,7 @@ inline fs::path environment_path(const char* name) {
 }
 
 inline int cabinet_node() {
-    const char* value = std::getenv("WHITTY_CABINET_NODE");
+    const char* value = std::getenv("MANX_CABINET_NODE");
     if (!value || !*value) return 0;
     const int node = std::atoi(value);
     return node == 1 || node == 2 ? node : 0;
@@ -86,7 +86,7 @@ inline char path_list_separator() {
 }
 
 inline bool video_available() {
-    if (const char* headless = std::getenv("WHITTYARCADE_HEADLESS")) {
+    if (const char* headless = std::getenv("MANX_HEADLESS")) {
         if (*headless && std::string(headless) != "0" &&
             std::string(headless) != "false")
             return false;
@@ -113,8 +113,11 @@ inline std::vector<fs::path> font_paths() {
         "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/google-noto-sans/NotoSans-Regular.ttf",
     };
 #endif
 }
 
-} // namespace whitty_platform
+} // namespace manx_platform

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# launch_raveracer_linked.sh — Spin up two WhittyArcade cabinets linked via
+# launch_raveracer_linked.sh — Spin up two MANX cabinets linked via
 # the Namco System 22 C139 cabinet-to-cabinet link protocol.
 #
 # Usage:
 #   ./scripts/launch_raveracer_linked.sh
 #
 # Requirements:
-#   - WhittyArcade built at build/WhittyArcade
-#   - Rave Racer ROM in Downloads/WhittyArcade-Roms/raverace.zip
+#   - MANX built at build/MANX
+#   - Rave Racer ROM in Downloads/MANX-Roms/raverace.zip
 #   - System 22 BIOS files (namcoc71.zip, namcoc74.zip) in the same dir
 #
 # What happens:
@@ -19,14 +19,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BINARY="$PROJECT_DIR/build/WhittyArcade"
-ROM_DIR="$HOME/Downloads/WhittyArcade-Roms"
+BINARY="$PROJECT_DIR/build/MANX"
+ROM_DIR="$HOME/Downloads/MANX-Roms"
 ROM="$ROM_DIR/raverace.zip"
 BIOS="$ROM_DIR"  # namcoc71.zip + namcoc74.zip live beside the ROM
 
 # ---- preflight checks -------------------------------------------------
 if [[ ! -x "$BINARY" ]]; then
-    echo "ERROR: WhittyArcade binary not found at $BINARY" >&2
+    echo "ERROR: MANX binary not found at $BINARY" >&2
     echo "Build it first: cd $PROJECT_DIR/build && make -j$(nproc)" >&2
     exit 1
 fi
@@ -36,7 +36,7 @@ if [[ ! -f "$ROM" ]]; then
     exit 1
 fi
 
-echo "=== WhittyArcade Rave Racer Linked-Cabinet Launcher ==="
+echo "=== MANX Rave Racer Linked-Cabinet Launcher ==="
 echo "ROM:      $ROM"
 echo "Binary:   $BINARY"
 echo ""

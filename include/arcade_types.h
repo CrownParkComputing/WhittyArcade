@@ -17,6 +17,8 @@ enum class arcade_board_type : uint8_t {
     capcom_gng,
     namco_galaga,
     namco_system1,
+    taito_z,
+    midway,
     // Not a machine: a game that ships as a plugin and is discovered beside its
     // data rather than compiled in.
     game_plugin,

@@ -1,6 +1,7 @@
 // Sega System 16B / Shinobi runtime session.
 
 #include "arcade_session_internal.h"
+#include "arcade_feedback.h"
 #include "arcade_frontend.h"
 #include "sega/system16b/system16b_audio.h"
 #include "sega/system16b/system16b_machine.h"
@@ -49,6 +50,11 @@ public:
             m_machine->set_sound_write_callback(
                 [this](unsigned port, uint8_t data) {
                     if (m_audio) m_audio->write_control(port, data);
+                    // System 16B sends discrete sampled effects through the
+                    // uPD7759 data port. Surface the trigger as a semantic
+                    // impact; the shared feedback layer owns motor shaping.
+                    if (port == 0x80u && data != 0)
+                        arcade_feedback::publish_impact(0.65f);
                 });
             m_machine->set_sound_status_callback(
                 [this]() -> uint8_t {

@@ -264,6 +264,11 @@ public:
     void reset_session_ui();
     void set_single_screen_only(bool enabled);
     void set_cabinet_status(std::string status);
+
+    // Shows or hides the launcher's own window. Used when a game runs in a
+    // window of its own: two windows on screen means the game draws in one
+    // while the launcher keeps the focus in the other, and the pad looks dead.
+    void set_window_visible(bool visible);
     // Arms the one-shot title capture for this session's game. Does
     // nothing when an icon for the game already exists.
     void arm_title_capture(const std::string& short_name);

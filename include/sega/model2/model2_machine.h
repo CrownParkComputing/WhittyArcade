@@ -16,7 +16,7 @@ public:
     static constexpr int screen_width = 496;
     static constexpr int screen_height = 384;
     // Model 2's 16 MHz video clock spans 656 by 424 total clocks. Keep this
-    // physical vblank cadence separate from WhittyArcade's 60 Hz presentation
+    // physical vblank cadence separate from MANX's 60 Hz presentation
     // cap: the i960 and TGP still need their full work budget between vblanks.
     static constexpr double hardware_refresh_rate =
         16000000.0 / (656.0 * 424.0);

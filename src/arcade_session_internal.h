@@ -12,7 +12,7 @@
 #include <utility>
 
 inline bool session_trace_enabled() {
-    const char* value = std::getenv("WHITTYARCADE_TRACE");
+    const char* value = std::getenv("MANX_TRACE");
     return value && *value && std::strcmp(value, "0") != 0;
 }
 
@@ -117,6 +117,13 @@ std::unique_ptr<emulator_session> make_xbox360_native_session(
 std::unique_ptr<emulator_session> make_xbox_burnout3_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);
+// The DXVK-backed session — spawns Burnout3StandaloneDXVK as a child process.
+// Prefer this over the kernel-shim session when the DXVK binary is available.
+std::unique_ptr<emulator_session> make_xbox_burnout3_dxvk_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);
+// True when Burnout3StandaloneDXVK can be found on this machine.
+bool burnout3_dxvk_available();
 std::unique_ptr<emulator_session> make_model1_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);
@@ -139,8 +146,15 @@ std::unique_ptr<emulator_session> make_namco_galaga_session(
 std::unique_ptr<emulator_session> make_namco_system1_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);
+std::unique_ptr<emulator_session> make_taitoz_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);
 // A game plugin. Which game is decided by the bundle path the launcher passes
 // to initialize(), the same way a board is given its ROM.
 std::unique_ptr<emulator_session> make_plugin_session(
+    std::shared_ptr<arcade_video_worker> video,
+    std::shared_ptr<arcade_cabinet_state> cabinet);
+// Midway Wolf Unit (Killer Instinct).
+std::unique_ptr<emulator_session> make_midway_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet);

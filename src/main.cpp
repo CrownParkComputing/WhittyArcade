@@ -31,6 +31,7 @@
 #endif
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -97,7 +98,7 @@ struct runtime_options {
 // This process and the one that started it. Windows has no getppid, and a
 // wall column there has no parent to name in its log - the diagnostic still
 // works, it just cannot say who spawned it.
-int whitty_process_id() {
+int manx_process_id() {
 #if defined(_WIN32)
     return static_cast<int>(GetCurrentProcessId());
 #else
@@ -105,7 +106,7 @@ int whitty_process_id() {
 #endif
 }
 
-int whitty_parent_process_id() {
+int manx_parent_process_id() {
 #if defined(_WIN32)
     return 0;
 #else
@@ -212,24 +213,43 @@ child_handle spawn_child(const std::string& executable,
 #endif
 }
 
-// Asks the child to exit, then insists. Returns once it is gone.
-void terminate_child(child_handle child) {
+// Asks the child to exit, then insists. Every wait is bounded: a process in
+// uninterruptible driver/I/O teardown must never freeze the launcher too.
+void terminate_child(child_handle child, bool cooperative_grace = false) {
     if (child == no_child) return;
 #if defined(_WIN32)
     HANDLE handle = reinterpret_cast<HANDLE>(child);
+    if (cooperative_grace &&
+        WaitForSingleObject(handle, 1500) == WAIT_OBJECT_0) {
+        CloseHandle(handle);
+        return;
+    }
     TerminateProcess(handle, 0);
     WaitForSingleObject(handle, 2000);
     CloseHandle(handle);
 #else
     int status = 0;
-    if (waitpid(child, &status, WNOHANG) == child) return;
+    const auto exited = [&] {
+        const pid_t result = waitpid(child, &status, WNOHANG);
+        return result == child || (result < 0 && errno == ECHILD);
+    };
+    const auto wait_bounded = [&](int attempts) {
+        for (int attempt = 0; attempt < attempts; ++attempt) {
+            if (exited()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return exited();
+    };
+    if (exited()) return;
+    if (cooperative_grace && wait_bounded(30)) return;
     kill(child, SIGTERM);
-    for (int attempt = 0; attempt < 20; ++attempt) {
-        if (waitpid(child, &status, WNOHANG) == child) return;
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
+    if (wait_bounded(20)) return;
     kill(child, SIGKILL);
-    waitpid(child, &status, 0);
+    if (!wait_bounded(20))
+        std::fprintf(stderr,
+                     "MANX cabinet process %d did not exit after shutdown; "
+                     "continuing without blocking\n",
+                     static_cast<int>(child));
 #endif
 }
 
@@ -259,18 +279,18 @@ public:
         // longer spare.
         // A new wall starts with no cabinet claimed, so it opens in equal
         // columns rather than inheriting whichever one was played last time.
-        whitty_wall_log::begin(0, static_cast<int>(columns));
-        whitty_wall_log::note("wall of %zu columns, this process is column 0",
+        manx_wall_log::begin(0, static_cast<int>(columns));
+        manx_wall_log::note("wall of %zu columns, this process is column 0",
                               columns);
-        whitty_window::forget_wall_focus();
+        manx_window::forget_wall_focus();
         // Before any column exists, so the first one is never tiled even
         // briefly.
-        whitty_window::register_wall_window_rules();
+        manx_window::register_wall_window_rules();
 #if defined(__linux__)
-        m_workspace = whitty_window::find_spare_workspace();
+        m_workspace = manx_window::find_spare_workspace();
 #endif
         if (m_workspace > 0)
-            set_environment("WHITTY_WALL_WORKSPACE",
+            set_environment("MANX_WALL_WORKSPACE",
                             std::to_string(m_workspace));
         for (std::size_t index = 1; index < columns; ++index) {
             std::vector<std::string> arguments{
@@ -284,11 +304,11 @@ public:
                 std::fprintf(stderr,
                              "Could not start arcade wall column %zu (%s)\n",
                              index, rom_paths[index].c_str());
-                whitty_wall_log::note("column %zu FAILED TO SPAWN (%s)",
+                manx_wall_log::note("column %zu FAILED TO SPAWN (%s)",
                                       index, rom_paths[index].c_str());
                 continue;
             }
-            whitty_wall_log::note("spawned column %zu pid %d (%s)", index,
+            manx_wall_log::note("spawned column %zu pid %d (%s)", index,
                                   static_cast<int>(child),
                                   rom_paths[index].c_str());
             m_children.push_back(child);
@@ -299,8 +319,8 @@ public:
     void stop() {
         for (child_handle child : m_children) terminate_child(child);
         m_children.clear();
-        whitty_window::forget_wall_focus();
-        if (m_workspace > 0) unset_environment("WHITTY_WALL_WORKSPACE");
+        manx_window::forget_wall_focus();
+        if (m_workspace > 0) unset_environment("MANX_WALL_WORKSPACE");
         m_workspace = 0;
     }
 
@@ -308,7 +328,7 @@ public:
     // the desktop does not flick between workspaces as each one starts.
     void show() const {
 #if defined(__linux__)
-        whitty_window::show_workspace(m_workspace);
+        manx_window::show_workspace(m_workspace);
 #endif
     }
 
@@ -324,8 +344,8 @@ void configure_cabinet_environment(int node, int count, uint16_t port_base,
                                    bool generic_input_link = false) {
     count = std::clamp(count, 2, 8);
     if (node < 1 || node > count) {
-        unset_environment("WHITTY_CABINET_NODE");
-        unset_environment("WHITTY_CABINET_COUNT");
+        unset_environment("MANX_CABINET_NODE");
+        unset_environment("MANX_CABINET_COUNT");
         unset_environment("MODEL2_COMM_NODE");
         unset_environment("MODEL2_COMM_COUNT");
         unset_environment("MODEL2_COMM_LOCAL_PORT");
@@ -335,11 +355,11 @@ void configure_cabinet_environment(int node, int count, uint16_t port_base,
         unset_environment("SYSTEM22_C139_LOCAL_PORT");
         unset_environment("SYSTEM22_C139_PEER_PORT");
         unset_environment("SYSTEM22_C139_NETWORK");
-        unset_environment("WHITTY_INPUT_LINK");
-        unset_environment("WHITTY_INPUT_LOCAL_PORT");
-        unset_environment("WHITTY_INPUT_PEER_PORT");
-        unset_environment("WHITTY_VIDEO_ROLE");
-        unset_environment("WHITTY_VIDEO_PORT");
+        unset_environment("MANX_INPUT_LINK");
+        unset_environment("MANX_INPUT_LOCAL_PORT");
+        unset_environment("MANX_INPUT_PEER_PORT");
+        unset_environment("MANX_VIDEO_ROLE");
+        unset_environment("MANX_VIDEO_PORT");
         unset_environment("RRACER_CONTROLLER");
         return;
     }
@@ -347,8 +367,8 @@ void configure_cabinet_environment(int node, int count, uint16_t port_base,
         static_cast<uint16_t>(port_base + (node == 2 ? 1 : 0));
     const uint16_t peer_port =
         static_cast<uint16_t>(port_base + (node == 1 ? 1 : 0));
-    set_environment("WHITTY_CABINET_NODE", std::to_string(node));
-    set_environment("WHITTY_CABINET_COUNT", std::to_string(count));
+    set_environment("MANX_CABINET_NODE", std::to_string(node));
+    set_environment("MANX_CABINET_COUNT", std::to_string(count));
     if (linked_model2) {
         // The comm board is a ring of up to 8 cabinets: node N listens on
         // base+N-1 and transmits to its successor, wrapping back to the
@@ -387,24 +407,24 @@ void configure_cabinet_environment(int node, int count, uint16_t port_base,
         unset_environment("SYSTEM22_C139_NETWORK");
     }
     if (generic_input_link) {
-        set_environment("WHITTY_INPUT_LINK", "1");
-        set_environment("WHITTY_INPUT_LOCAL_PORT",
+        set_environment("MANX_INPUT_LINK", "1");
+        set_environment("MANX_INPUT_LOCAL_PORT",
                         std::to_string(local_port));
-        set_environment("WHITTY_INPUT_PEER_PORT",
+        set_environment("MANX_INPUT_PEER_PORT",
                         std::to_string(peer_port));
         // Netplay: both machines simulate the whole board from the same
         // inputs, so no picture is sent. The video link stays in the tree
         // for the streaming path but is not started here.
-        set_environment("WHITTY_NETPLAY", "1");
-        unset_environment("WHITTY_VIDEO_ROLE");
-        unset_environment("WHITTY_VIDEO_PORT");
+        set_environment("MANX_NETPLAY", "1");
+        unset_environment("MANX_VIDEO_ROLE");
+        unset_environment("MANX_VIDEO_PORT");
     } else {
-        unset_environment("WHITTY_INPUT_LINK");
-        unset_environment("WHITTY_INPUT_LOCAL_PORT");
-        unset_environment("WHITTY_INPUT_PEER_PORT");
-        unset_environment("WHITTY_NETPLAY");
-        unset_environment("WHITTY_VIDEO_ROLE");
-        unset_environment("WHITTY_VIDEO_PORT");
+        unset_environment("MANX_INPUT_LINK");
+        unset_environment("MANX_INPUT_LOCAL_PORT");
+        unset_environment("MANX_INPUT_PEER_PORT");
+        unset_environment("MANX_NETPLAY");
+        unset_environment("MANX_VIDEO_ROLE");
+        unset_environment("MANX_VIDEO_PORT");
     }
     set_environment("RRACER_CONTROLLER", std::to_string(node - 1));
 }
@@ -457,8 +477,9 @@ public:
         return all_started && !m_processes.empty();
     }
 
-    void stop() {
-        for (child_handle& process : m_processes) terminate_child(process);
+    void stop(bool cooperative_grace = false) {
+        for (child_handle& process : m_processes)
+            terminate_child(process, cooperative_grace);
         m_processes.clear();
     }
 
@@ -471,11 +492,13 @@ public:
 #if defined(_WIN32)
         return false;
 #else
-        for (child_handle process : m_processes) {
+        for (child_handle& process : m_processes) {
             int status = 0;
             if (process != no_child &&
-                waitpid(process, &status, WNOHANG) == process)
+                waitpid(process, &status, WNOHANG) == process) {
+                process = no_child;
                 return true;
+            }
         }
         return false;
 #endif
@@ -516,7 +539,7 @@ int run_session_factory_test() {
         cabinet->system22_dip_switches = static_cast<uint16_t>(0xff00 | round);
         for (const arcade_board_descriptor& board : arcade_boards()) {
             {
-#if defined(WHITTY_SYSTEM246_STUBBED)
+#if defined(MANX_SYSTEM246_STUBBED)
                 // This build has no PCSX2 core - no prebuilt libraries, or a
                 // target it has no backend for - so System 246 is present in
                 // the catalog but cannot open a session. Skipping it keeps
@@ -555,7 +578,7 @@ int run_session_factory_test() {
     if (!rejected_missing_video) return 5;
     std::printf("Session factory: %zu construct/destroy boundaries passed\n",
                 sessions_created);
-#if defined(WHITTY_SYSTEM246_STUBBED)
+#if defined(MANX_SYSTEM246_STUBBED)
     constexpr std::size_t buildable_boards = arcade_board_count - 1;
 #else
     constexpr std::size_t buildable_boards = arcade_board_count;
@@ -568,7 +591,7 @@ int run_session_factory_test() {
 // instances on real UDP loopback, drives a known frame from cabinet 1's
 // TX FIFO, and asserts that cabinet 2's RX FIFO receives it with the
 // expected bit-9 sync mark. No ROM load, no GPU, no display — pure
-// network + bus path. Run as `WhittyArcade --c139-link-test`.
+// network + bus path. Run as `MANX --c139-link-test`.
 int run_c139_link_test() {
     system22_bus cabinet1;
     system22_bus cabinet2;
@@ -643,6 +666,23 @@ int run_c139_link_test() {
     return 0;
 }
 
+int run_controller_rumble_test() {
+    arcade_input input;
+    if (!input.initialize("controller_test")) return 1;
+    if (!input.controller_connected()) {
+        std::fprintf(stderr, "No SDL gamepad is connected\n");
+        input.shutdown();
+        return 1;
+    }
+    std::printf("Controller rumble test: low motor, then high motor\n");
+    input.pulse_rumble(0xa000, 0, 350);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    input.pulse_rumble(0, 0xa000, 350);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    input.shutdown();
+    return 0;
+}
+
 int audit_roms(int argc, char* argv[]) {
     std::vector<rom_choice> choices;
     if (argc > 2) {
@@ -684,7 +724,7 @@ int audit_native_titles() {
         std::printf("No converted-title catalogue found. Looked for:\n");
         for (const std::string& candidate : native_title_catalog_candidates())
             std::printf("  %s\n", candidate.c_str());
-        std::printf("Set WHITTY_XBOX_TITLES to point at one.\n");
+        std::printf("Set MANX_XBOX_TITLES to point at one.\n");
         return 1;
     }
     native_title_library library;
@@ -740,6 +780,8 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
         return run_session_factory_test();
     if (command == "--c139-link-test")
         return run_c139_link_test();
+    if (command == "--rumble-test")
+        return run_controller_rumble_test();
     if (command == "--list-roms") {
         std::printf("%s\n", required_rom_sets_text().c_str());
         return 0;
@@ -748,7 +790,7 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
     if (command == "--audit-titles") return audit_native_titles();
     if (command == "--extract-title") {
         if (argc < 4) {
-            std::printf("usage: WhittyArcade --extract-title <package> "
+            std::printf("usage: MANX --extract-title <package> "
                         "<directory>\n\nUnpacks your own game into ordinary "
                         "files. A recompiled title can then run from the\n"
                         "directory instead of mounting the signed package - "
@@ -764,7 +806,7 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
     }
     if (command == "--import-title") {
         if (argc < 4) {
-            std::printf("usage: WhittyArcade --import-title <package> "
+            std::printf("usage: MANX --import-title <package> "
                         "<bundle directory>\n\nTakes the artwork and sound "
                         "effects out of your own Xbox 360 game and writes them\n"
                         "into a native bundle, so the game no longer needs the "
@@ -775,7 +817,7 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
         // asks the installed game rather than assuming a list.
         std::vector<std::string> cues;
         game_plugin_library plugins;
-        plugins.scan((whitty_platform::data_root() / "WhittyArcade" / "games")
+        plugins.scan((manx_platform::data_root() / "MANX" / "games")
                          .string());
         const std::string wanted = fs::path(argv[3]).filename().string();
         if (const discovered_game* game = plugins.find(wanted)) {
@@ -821,7 +863,7 @@ int main(int argc, char* argv[]) {
     {
         game_plugin_library plugins;
         const std::filesystem::path root =
-            whitty_platform::data_root() / "WhittyArcade" / "games";
+            manx_platform::data_root() / "MANX" / "games";
         plugins.scan(root.string());
         for (const rejected_plugin& rejected : plugins.rejected())
             std::fprintf(stderr, "game plugin ignored: %s\n  %s\n",
@@ -892,19 +934,19 @@ int main(int argc, char* argv[]) {
     int wall_audible_applied = -1;
     settings.wall_slot = runtime.wall_slot;
     settings.wall_count = runtime.wall_count;
-    whitty_wall_log::begin(runtime.wall_slot, runtime.wall_count);
+    manx_wall_log::begin(runtime.wall_slot, runtime.wall_count);
     // A cabinet of a linked pair keeps its own file for the same reason a
     // wall column does - nobody can read the second one's stderr.
-    whitty_wall_log::begin_cabinet(runtime.cabinet_node);
+    manx_wall_log::begin_cabinet(runtime.cabinet_node);
     // Whatever this launch turns out to be, it writes somewhere.
-    whitty_wall_log::begin_session();
+    manx_wall_log::begin_session();
     if (runtime.wall_count > 1)
-        whitty_wall_log::note("spawned column, rom=%s pid=%d ppid=%d",
+        manx_wall_log::note("spawned column, rom=%s pid=%d ppid=%d",
                               runtime.positional.empty()
                                   ? "(none)"
                                   : runtime.positional.front().c_str(),
-                              static_cast<int>(whitty_process_id()),
-                              static_cast<int>(whitty_parent_process_id()));
+                              static_cast<int>(manx_process_id()),
+                              static_cast<int>(manx_parent_process_id()));
 #if defined(__linux__)
     // SDL turns SIGINT/SIGTERM into SDL_EVENT_QUIT, which is how a wall
     // column that is signalled looks exactly like one the user closed. Taking
@@ -914,7 +956,7 @@ int main(int argc, char* argv[]) {
         struct sigaction action {};
         action.sa_flags = SA_SIGINFO;
         action.sa_sigaction = [](int number, siginfo_t* info, void*) {
-            whitty_wall_log::note("SIGNAL %d from pid %d uid %d", number,
+            manx_wall_log::note("SIGNAL %d from pid %d uid %d", number,
                                   info ? static_cast<int>(info->si_pid) : -1,
                                   info ? static_cast<int>(info->si_uid) : -1);
             std::_Exit(0);
@@ -984,7 +1026,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        whitty_wall_log::note("identifying %s", rom_path.c_str());
+        manx_wall_log::note("identifying %s", rom_path.c_str());
         const std::optional<arcade_game_identity> identity =
             identify_arcade_game(rom_path);
         if (!identity) {
@@ -1044,7 +1086,7 @@ int main(int argc, char* argv[]) {
             if (SDL_DisplayID* displays = SDL_GetDisplays(&display_count))
                 SDL_free(displays);
             if (display_count > 0 && display_count < cabinet_count) {
-                whitty_wall_log::note(
+                manx_wall_log::note(
                     "only %d display(s) for %d cabinets: sharing one screen",
                     display_count, cabinet_count);
                 one_screen_pair = true;
@@ -1056,8 +1098,8 @@ int main(int argc, char* argv[]) {
             // start is exactly the case worth having a file for, and if this
             // file is missing afterwards then this process never took the
             // linked-pair path at all - which is an answer in itself.
-            whitty_wall_log::begin_cabinet(1);
-            whitty_wall_log::note("linked launch: spawning cabinets 2-%d, "
+            manx_wall_log::begin_cabinet(1);
+            manx_wall_log::note("linked launch: spawning cabinets 2-%d, "
                                   "port base %u, one screen %d",
                                   cabinet_count, pair_port_base,
                                   one_screen_pair ? 1 : 0);
@@ -1067,15 +1109,15 @@ int main(int argc, char* argv[]) {
                                  cabinet_count)) {
                 std::fprintf(stderr,
                              "Could not start the second cabinet process (execv"
-                             "p failed). WhittyArcade was launched as \"%s\". "
+                             "p failed). MANX was launched as \"%s\". "
                              "Make sure the executable is found via PATH, or "
-                             "use an absolute path (e.g. ./WhittyArcade).\n",
+                             "use an absolute path (e.g. ./MANX).\n",
                              argv[0] ? argv[0] : "(null)");
                 launch_mode = cabinet_launch_mode::single;
                 one_screen_pair = false;
             } else {
                 cabinet_node = 1;
-                whitty_wall_log::note("cabinet 2 started");
+                manx_wall_log::note("cabinet 2 started");
             }
         }
         // Every launch that began as two-player says so, whether the two
@@ -1085,9 +1127,9 @@ int main(int argc, char* argv[]) {
             launch_mode == cabinet_launch_mode::independent_pair ||
             launch_mode == cabinet_launch_mode::linked_pair ||
             launch_mode == cabinet_launch_mode::linked_network)
-            set_environment("WHITTY_TWO_PLAYER", "1");
+            set_environment("MANX_TWO_PLAYER", "1");
         else
-            unset_environment("WHITTY_TWO_PLAYER");
+            unset_environment("MANX_TWO_PLAYER");
         configure_cabinet_environment(
             cabinet_node, cabinet_count, pair_port_base,
             native_model2_link &&
@@ -1098,7 +1140,8 @@ int main(int argc, char* argv[]) {
                  launch_mode == cabinet_launch_mode::linked_network),
             launch_mode == cabinet_launch_mode::linked_network,
             !native_hardware_link &&
-                launch_mode == cabinet_launch_mode::linked_network);
+                (launch_mode == cabinet_launch_mode::linked_pair ||
+                 launch_mode == cabinet_launch_mode::linked_network));
         settings.output =
             launch_mode == cabinet_launch_mode::independent_pair ?
                 output_mode::dual : output_mode::single;
@@ -1129,7 +1172,7 @@ int main(int argc, char* argv[]) {
         // presentation fault and a window that never appears look the same.
         // Forcing fullscreen maps the window up front and tells the two
         // apart.
-        if (const char* force = std::getenv("WHITTY_FORCE_FULLSCREEN"))
+        if (const char* force = std::getenv("MANX_FORCE_FULLSCREEN"))
             if (*force == '1' && settings.wall_count <= 1)
                 settings.fullscreen = true;
         // Two linked cabinets sharing one display, half the desktop each.
@@ -1183,14 +1226,15 @@ int main(int argc, char* argv[]) {
 
         std::unique_ptr<emulator_session> emu = create_emulator_session(
             identity->board, shared_video, cabinet_state);
-        whitty_wall_log::note("initialising board for %s",
+        manx_wall_log::note("initialising board for %s",
                               identity->short_name.c_str());
         if (!emu->initialize(rom_path, bios_path, session_settings)) {
-            whitty_wall_log::note("initialise FAILED");
+            manx_wall_log::note("initialise FAILED");
             return 1;
         }
-        whitty_wall_log::note("board running");
-        if (launch_mode == cabinet_launch_mode::linked_network &&
+        manx_wall_log::note("board running");
+        if ((launch_mode == cabinet_launch_mode::linked_network ||
+             launch_mode == cabinet_launch_mode::linked_pair) &&
             !native_hardware_link) {
             // Netplay starts from identical memory or not at all. The 2D
             // boards keep nothing between sessions and hash to zero, so
@@ -1226,6 +1270,12 @@ int main(int argc, char* argv[]) {
             shared_video->set_cabinet_status(
                 "PLAYER " + std::to_string(cabinet_node) +
                 "  |  WAITING FOR NETWORK PLAYER...");
+        } else if (cabinet_node &&
+                   launch_mode == cabinet_launch_mode::linked_pair &&
+                   !native_hardware_link) {
+            shared_video->set_cabinet_status(
+                "LOCAL PLAYER " + std::to_string(cabinet_node) +
+                "  |  CONNECTED TO THIS MACHINE");
         }
         const std::vector<rom_choice> installed_games =
             cabinet_node == 2 ? std::vector<rom_choice>{} :
@@ -1439,14 +1489,14 @@ int main(int argc, char* argv[]) {
             }
 
             if (++wall_frames <= 3 || wall_frames % 600 == 0)
-                whitty_wall_log::note("frame %lld", wall_frames);
+                manx_wall_log::note("frame %lld", wall_frames);
             // Closing any cabinet of a linked session closes the session:
             // the ring is cut the moment one member dies, so the rest are
             // ghosts. Checked at a walking pace - it is a waitpid per
             // child.
             if (companion.running() && wall_frames % 30 == 0 &&
                 companion.any_exited()) {
-                whitty_wall_log::note(
+                manx_wall_log::note(
                     "a linked cabinet exited: closing the session");
                 host_action = arcade_host_action::return_to_menu;
                 break;
@@ -1540,7 +1590,7 @@ int main(int argc, char* argv[]) {
                     const double measured =
                         wall_window_frames / seconds;
                     const double target = 1.0 / paced_seconds;
-                    whitty_wall_log::note("%.1f fps (target %.1f)%s",
+                    manx_wall_log::note("%.1f fps (target %.1f)%s",
                                           measured, target,
                                           wall_column_is_struggling(
                                               measured, target) ?
@@ -1564,8 +1614,19 @@ int main(int argc, char* argv[]) {
         // is the menu or an exit path.
         if (game_owns_the_window && shared_video)
             shared_video->set_host_window_visible(true);
-        whitty_wall_log::note("event loop ended, action=%d",
+        manx_wall_log::note("event loop ended, action=%d",
                               static_cast<int>(host_action));
+        const bool cooperative_pair = arcade_input_netplay_active();
+        if (cooperative_pair)
+            arcade_input_netplay_request_shutdown();
+        if (companion.running()) {
+            // Let the peer receive the close packet and unwind normally
+            // before escalating to TERM/KILL. Do this while `emu` still owns
+            // the sender socket; destroying the board first loses the only
+            // cooperative shutdown channel.
+            companion.stop(cooperative_pair);
+            cabinet_node = 0;
+        }
         if (host_action == arcade_host_action::return_to_menu) {
             // A spawned cabinet has no launcher to go back to: leaving the
             // game means leaving the process. Only cabinet 1 owns the menu.
@@ -1577,7 +1638,6 @@ int main(int argc, char* argv[]) {
             // it. A newly selected board starts with fresh CPU/RAM/audio.
             emu.reset();
             shared_video->shutdown();
-            companion.stop();
             wall.stop();
             arcade_audio_output::set_output_muted(false);
             settings.wall_count = 0;

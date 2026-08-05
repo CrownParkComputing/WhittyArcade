@@ -57,7 +57,7 @@ void write_stub(const fs::path& path, const char* body) {
 
 int main() {
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-xbox360-native-test-" +
+        ("manx-xbox360-native-test-" +
          std::to_string(test_process_id()));
     fs::create_directories(root);
     // The search includes the runtime checkout under the user's home, so point
@@ -67,8 +67,8 @@ int main() {
 
     // A title with no runtime installed reports it, and names what it looked
     // for - a launcher that just says "failed" leaves nowhere to go.
-    ::unsetenv("WHITTY_XENON_RUNTIME");
-    ::unsetenv("WHITTY_XENON_ROOT");
+    ::unsetenv("MANX_XENON_RUNTIME");
+    ::unsetenv("MANX_XENON_ROOT");
     const xbox360_native_launch absent = plan_xbox360_native_launch(
         "nosuchtitle", xbox360_native_content::extracted(
                            (root / "default.xex").string(), root.string()));
@@ -82,7 +82,7 @@ int main() {
         assert(absent.error.find(candidate) != std::string::npos);
 
     // The runtime's build tree layout: build/recompiled/<title>/<title>.
-    ::setenv("WHITTY_XENON_ROOT", (root / "runtime").string().c_str(), 1);
+    ::setenv("MANX_XENON_ROOT", (root / "runtime").string().c_str(), 1);
     const std::vector<std::string> rooted =
         xbox360_native_runtime_candidates("geometrywars");
     const std::string expected =
@@ -102,7 +102,7 @@ int main() {
     fs::remove_all(root / "runtime");
     const fs::path unreadable = root / "not-executable";
     std::ofstream(unreadable) << "text";
-    ::setenv("WHITTY_XENON_RUNTIME", unreadable.string().c_str(), 1);
+    ::setenv("MANX_XENON_RUNTIME", unreadable.string().c_str(), 1);
     fs::permissions(unreadable, fs::perms::owner_read,
                     fs::perm_options::replace);
     assert(!plan_xbox360_native_launch(
@@ -113,10 +113,10 @@ int main() {
     // that order, and the play.sh defaults come with it.
     const fs::path stub = root / "geometrywars";
     write_stub(stub, "sleep 30\n");
-    ::setenv("WHITTY_XENON_RUNTIME", stub.string().c_str(), 1);
-    ::unsetenv("WHITTY_WINDOW");
-    ::unsetenv("WHITTY_FPS");
-    ::unsetenv("WHITTY_XMA_BYPASS");
+    ::setenv("MANX_XENON_RUNTIME", stub.string().c_str(), 1);
+    ::unsetenv("MANX_WINDOW");
+    ::unsetenv("MANX_FPS");
+    ::unsetenv("MANX_XMA_BYPASS");
     const std::string game_root = root.string();
     const std::string xex = (root / "default.xex").string();
     const xbox360_native_launch launch = plan_xbox360_native_launch(
@@ -127,22 +127,22 @@ int main() {
     assert(launch.arguments[0] == stub.string());
     assert(launch.arguments[1] == xex);
     assert(launch.arguments[2] == game_root);
-    assert(has_variable(launch, "WHITTY_WINDOW", "1"));
-    assert(has_variable(launch, "WHITTY_FPS", "60"));
+    assert(has_variable(launch, "MANX_WINDOW", "1"));
+    assert(has_variable(launch, "MANX_FPS", "60"));
     // The XMA bypass plays the decoder's output beside the title's own mix, so
     // supplying it would play every sound twice. It is a diagnostic the runtime
     // keeps, not something a launch may turn on behind the player's back.
-    assert(!mentions_variable(launch, "WHITTY_XMA_BYPASS"));
+    assert(!mentions_variable(launch, "MANX_XMA_BYPASS"));
 
-    // A value the user exported before WhittyArcade started is theirs to keep:
+    // A value the user exported before MANX started is theirs to keep:
     // the plan supplies defaults, it does not impose them.
-    ::setenv("WHITTY_FPS", "30", 1);
+    ::setenv("MANX_FPS", "30", 1);
     const xbox360_native_launch overridden = plan_xbox360_native_launch(
         "geometrywars", xbox360_native_content::extracted(xex, game_root));
     assert(overridden);
-    assert(!mentions_variable(overridden, "WHITTY_FPS"));
-    assert(has_variable(overridden, "WHITTY_WINDOW", "1"));
-    ::unsetenv("WHITTY_FPS");
+    assert(!mentions_variable(overridden, "MANX_FPS"));
+    assert(has_variable(overridden, "MANX_WINDOW", "1"));
+    ::unsetenv("MANX_FPS");
 
     // A packaged title is handed to the runtime whole: <binary> <package>, two
     // arguments rather than three, because the package is both the executable
@@ -167,8 +167,8 @@ int main() {
     assert(packaged.arguments.size() == 2);
     assert(packaged.arguments[0] == stub.string());
     assert(packaged.arguments[1] == package);
-    assert(has_variable(packaged, "WHITTY_WINDOW", "1"));
-    assert(has_variable(packaged, "WHITTY_FPS", "60"));
+    assert(has_variable(packaged, "MANX_WINDOW", "1"));
+    assert(has_variable(packaged, "MANX_FPS", "60"));
 
     // One runtime binary, two shapes. Space Giraffe was dumped both ways, so it
     // is the first title where the same runtime is handed either a package or a
@@ -177,7 +177,7 @@ int main() {
     {
         const fs::path giraffe = root / "spacegiraffe";
         write_stub(giraffe, "sleep 30\n");
-        ::setenv("WHITTY_XENON_RUNTIME", giraffe.string().c_str(), 1);
+        ::setenv("MANX_XENON_RUNTIME", giraffe.string().c_str(), 1);
         const xbox360_native_launch from_package = plan_xbox360_native_launch(
             "spacegiraffe", xbox360_native_content::package(package));
         assert(from_package);
@@ -190,7 +190,7 @@ int main() {
         assert(from_extraction.arguments.size() == 3);
         assert(from_extraction.arguments[1] == xex);
         assert(from_extraction.arguments[2] == game_root);
-        ::setenv("WHITTY_XENON_RUNTIME", stub.string().c_str(), 1);
+        ::setenv("MANX_XENON_RUNTIME", stub.string().c_str(), 1);
     }
 
     // Content that is neither shape, or claims to be both, is not a title.
@@ -211,7 +211,7 @@ int main() {
                                  report.string() + "'\n";
         const fs::path reporter = root / "reporter";
         write_stub(reporter, body.c_str());
-        ::setenv("WHITTY_XENON_RUNTIME", reporter.string().c_str(), 1);
+        ::setenv("MANX_XENON_RUNTIME", reporter.string().c_str(), 1);
         const auto run = [&](const xbox360_native_content& content) {
             std::error_code remove_error;
             fs::remove(report, remove_error);
@@ -240,7 +240,7 @@ int main() {
             run(xbox360_native_content::extracted(xex, game_root));
         assert(extracted_count == "2");
         assert(extracted_first == xex);
-        ::setenv("WHITTY_XENON_RUNTIME", stub.string().c_str(), 1);
+        ::setenv("MANX_XENON_RUNTIME", stub.string().c_str(), 1);
     }
 
     // Starting, noticing, and stopping a title.
@@ -258,7 +258,7 @@ int main() {
     {
         const fs::path quick = root / "quick";
         write_stub(quick, "exit 0\n");
-        ::setenv("WHITTY_XENON_RUNTIME", quick.string().c_str(), 1);
+        ::setenv("MANX_XENON_RUNTIME", quick.string().c_str(), 1);
         const xbox360_native_launch brief = plan_xbox360_native_launch(
             "geometrywars", xbox360_native_content::extracted(xex, game_root));
         assert(brief);
@@ -283,8 +283,8 @@ int main() {
         assert(!process.running());
     }
 
-    ::unsetenv("WHITTY_XENON_RUNTIME");
-    ::unsetenv("WHITTY_XENON_ROOT");
+    ::unsetenv("MANX_XENON_RUNTIME");
+    ::unsetenv("MANX_XENON_ROOT");
     fs::remove_all(root);
     std::puts("Xbox 360 native runtime launch: plan and process paths passed");
     return 0;

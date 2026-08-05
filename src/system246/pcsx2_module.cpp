@@ -6,7 +6,7 @@
 // MANX binary (GCC) never links any PCSX2 symbol; it dlopen()s this .so
 // and drives it purely through the flat C ABI declared in pcsx2_module.h. This
 // keeps PCSX2's bundled glad GL loader and static initialisers out of the main
-// binary, where they collided with WhittyArcade's GLEW-based OpenGL renderer.
+// binary, where they collided with MANX's GLEW-based OpenGL renderer.
 //
 // The boot/threading sequence here (initialize_pcsx2_config / apply_boot_settings
 // / cpu_thread_main) is lifted verbatim from the previous in-process session so
@@ -15,6 +15,7 @@
 
 #include "pcsx2/PrecompiledHeader.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -32,9 +33,11 @@
 #include "pcsx2/Host.h"
 #include "pcsx2/ImGui/ImGuiManager.h"
 #include "pcsx2/VMManager.h"
+#include "pcsx2/SPU2/spu2.h"
 
-#include "pcsx2_host.h"   // WhittyArcadeHost frame capture + CPU-thread id hook
-#include "pcsx2_input.h"  // WhittyArcadeInput cabinet setters
+#include "audio_impact_detector.h"
+#include "pcsx2_host.h"   // MANXHost frame capture + CPU-thread id hook
+#include "pcsx2_input.h"  // MANXInput cabinet setters
 #include "pcsx2_module.h" // the flat C ABI we export
 
 namespace {
@@ -67,6 +70,18 @@ std::string g_acgame;
 // returned pointer stays valid until the next wa_pcsx2_get_frame call.
 std::vector<std::uint32_t> g_host_frame;
 std::uint64_t g_host_frame_seq = 0;
+audio_impact_detector g_impact_detector;
+std::atomic<unsigned> g_pending_impact{0};
+
+void observe_audio_chunk(const float* samples, unsigned frames) {
+    const float strength = g_impact_detector.consume_float(samples, frames, 2);
+    const unsigned wanted = static_cast<unsigned>(
+        std::clamp(strength, 0.0f, 1.0f) * 65535.0f);
+    unsigned current = g_pending_impact.load(std::memory_order_relaxed);
+    while (current < wanted && !g_pending_impact.compare_exchange_weak(
+               current, wanted, std::memory_order_release,
+               std::memory_order_relaxed)) {}
+}
 
 bool initialize_pcsx2_config() {
     // Force the app root at the PCSX2 arcade build tree so resources/, bios/,
@@ -83,7 +98,7 @@ bool initialize_pcsx2_config() {
         return false;
     }
     // Portable mode is detected from the *executable's* directory, which is now
-    // WhittyArcade's (no portable.ini) -- so DataRoot defaults to the system
+    // MANX's (no portable.ini) -- so DataRoot defaults to the system
     // data dir and PCSX2 can't find the BIOS/memcards/dongle in the pcsx2x6
     // build tree. Pin DataRoot at that tree so every EmuFolders::LoadConfig
     // (including the one ApplySettings runs later) resolves bios/, memcards/,
@@ -126,10 +141,10 @@ void apply_boot_settings() {
     MemorySettingsInterface& si = g_settings;
 
     // Vulkan hardware renderer, drawing offscreen (no registered window).
-    // WHITTY_PCSX2_RENDERER=sw switches to the software rasteriser: if a game
+    // MANX_PCSX2_RENDERER=sw switches to the software rasteriser: if a game
     // draws under software but not hardware, the fault is in GS hardware
     // emulation rather than in the game, the media or our frame capture.
-    const char* renderer_override = std::getenv("WHITTY_PCSX2_RENDERER");
+    const char* renderer_override = std::getenv("MANX_PCSX2_RENDERER");
     const bool software_renderer =
         renderer_override && (*renderer_override == 's' || *renderer_override == 'S');
     si.SetIntValue("EmuCore/GS", "Renderer",
@@ -159,7 +174,7 @@ void apply_boot_settings() {
     si.SetFloatValue("EmuCore/GS", "upscale_multiplier", 1.0f);
     si.SetIntValue("EmuCore/GS", "texture_preloading", 2);
 
-    // WhittyArcade owns the keyboard/pad; PCSX2's own SDL input source must not
+    // MANX owns the keyboard/pad; PCSX2's own SDL input source must not
     // pump SDL events on the CPU thread.
     si.SetBoolValue("InputSources", "SDL", false);
     si.SetBoolValue("InputSources", "XInput", false);
@@ -179,7 +194,7 @@ void apply_boot_settings() {
 }
 
 void cpu_thread_main(VMBootParameters params) {
-    WhittyArcadeHost::SetCPUThreadId(std::this_thread::get_id());
+    MANXHost::SetCPUThreadId(std::this_thread::get_id());
     rrv_diag("cpu_thread: start");
 
     if (VMManager::Internal::CPUThreadInitialize()) {
@@ -191,7 +206,7 @@ void cpu_thread_main(VMBootParameters params) {
         rrv_diag("cpu_thread: calling VMManager::Initialize");
         if (VMManager::Initialize(params, &error) == VMBootResult::StartupSuccess) {
             rrv_diag("cpu_thread: VMManager::Initialize OK -> running");
-            WhittyArcadeHost::SetBootStage(WhittyArcadeHost::BootStage::LoadingGame);
+            MANXHost::SetBootStage(MANXHost::BootStage::LoadingGame);
             g_vm_running.store(true, std::memory_order_release);
             VMManager::SetState(VMState::Running);
             while (VMManager::GetState() == VMState::Running)
@@ -231,6 +246,9 @@ extern "C" int wa_pcsx2_start(const char* acgame, const char* bios_dir,
     g_acgame = acgame ? acgame : "";
     g_bios_dir = bios_dir ? bios_dir : "";
     g_bin_dir = bin_dir ? bin_dir : "";
+    g_impact_detector.reset();
+    g_pending_impact.store(0, std::memory_order_release);
+    SPU2::SetAudioChunkObserver(observe_audio_chunk);
 
     // Process-global set-up: resource and data folders, the hardware checks,
     // the ImGui font and the base settings layer. It must run exactly once.
@@ -250,10 +268,10 @@ extern "C" int wa_pcsx2_start(const char* acgame, const char* bios_dir,
     } else {
         rrv_diag("wa_pcsx2_start: PCSX2 already configured; reusing");
     }
-    WhittyArcadeHost::SetBootStage(WhittyArcadeHost::BootStage::Configuring);
+    MANXHost::SetBootStage(MANXHost::BootStage::Configuring);
     apply_boot_settings();
     rrv_diag("wa_pcsx2_start: boot settings applied, spawning CPU thread");
-    WhittyArcadeHost::SetBootStage(WhittyArcadeHost::BootStage::StartingMachine);
+    MANXHost::SetBootStage(MANXHost::BootStage::StartingMachine);
 
     VMBootParameters params;
     params.filename = g_acgame; // VMManager auto-detects the .acgame
@@ -269,7 +287,7 @@ extern "C" int wa_pcsx2_get_frame(const unsigned int** pixels, int* w, int* h,
     int width = 0;
     int height = 0;
     std::uint64_t sequence = 0;
-    if (!WhittyArcadeHost::GetLatestFrame(g_host_frame_seq, g_host_frame, width,
+    if (!MANXHost::GetLatestFrame(g_host_frame_seq, g_host_frame, width,
                                           height, sequence) ||
         width <= 0 || height <= 0) {
         return 0;
@@ -286,7 +304,7 @@ extern "C" int wa_pcsx2_get_frame(const unsigned int** pixels, int* w, int* h,
 
 extern "C" void wa_pcsx2_set_input(const wa_pcsx2_input* in) {
     if (!in) return;
-    using namespace WhittyArcadeInput;
+    using namespace MANXInput;
     SetSteerLeft(in->steer_left != 0);
     SetSteerRight(in->steer_right != 0);
     SetGas(in->gas != 0);
@@ -323,16 +341,21 @@ extern "C" void wa_pcsx2_set_input(const wa_pcsx2_input* in) {
         InsertCoinSlot(1);
 }
 
+extern "C" float wa_pcsx2_take_impact(void) {
+    return static_cast<float>(
+        g_pending_impact.exchange(0, std::memory_order_acq_rel)) / 65535.0f;
+}
+
 extern "C" const char* wa_pcsx2_boot_status(unsigned long long* frames,
                                             unsigned long long* drawing) {
     std::uint64_t captured = 0;
     std::uint64_t with_content = 0;
-    WhittyArcadeHost::GetCaptureCounts(captured, with_content);
+    MANXHost::GetCaptureCounts(captured, with_content);
     if (frames) *frames = captured;
     if (drawing) *drawing = with_content;
 
-    using Stage = WhittyArcadeHost::BootStage;
-    switch (WhittyArcadeHost::GetBootStage()) {
+    using Stage = MANXHost::BootStage;
+    switch (MANXHost::GetBootStage()) {
     case Stage::Starting:        return "Starting the emulated board";
     case Stage::Configuring:     return "Loading BIOS and dongle";
     case Stage::StartingMachine: return "Starting the virtual machine";
@@ -352,11 +375,14 @@ extern "C" void wa_pcsx2_set_paused(int paused) {
 }
 
 extern "C" void wa_pcsx2_stop(void) {
-    if (!g_cpu_thread.joinable())
+    if (!g_cpu_thread.joinable()) {
+        SPU2::SetAudioChunkObserver(nullptr);
         return;
+    }
     rrv_diag("wa_pcsx2_stop: stopping VM");
     VMManager::SetState(VMState::Stopping);
     g_cpu_thread.join();
+    SPU2::SetAudioChunkObserver(nullptr);
     g_vm_running.store(false, std::memory_order_release);
     rrv_diag("wa_pcsx2_stop: CPU thread joined");
 }

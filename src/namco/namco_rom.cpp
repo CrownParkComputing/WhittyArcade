@@ -55,6 +55,43 @@ constexpr file_spec pac_mask{"pn2_c8.bin", 0x10000, 0xf3afd65d};
 constexpr file_spec pac_sprite0{"pn_obj-0.bin", 0x20000, 0xfda57e8b};
 constexpr file_spec pac_sprite1{"pnx_obj1.bin", 0x20000, 0x4c08affe};
 
+// Galaga '88 (MAME `galaga88`, the World parent). The five main ROMs are
+// 64 KiB chips that MAME replicates across a 512 KiB slot (ROM_LOAD_512),
+// and the six voice chips are 64 KiB replicated across 128 KiB
+// (ROM_LOAD_HS); the machine core performs both expansions.
+constexpr file_spec g88_program0{"g81_p0.bin", 0x10000, 0x0f0778ca};
+constexpr file_spec g88_program1{"g81_p1.bin", 0x10000, 0xe68cb351};
+constexpr file_spec g88_program5{"g81_p5.bin", 0x10000, 0x4fbd3f6c};
+constexpr file_spec g88_program6{"g82_p6.bin", 0x10000, 0x403d01c1};
+constexpr file_spec g88_program7{"g82_p7.bin", 0x10000, 0xdf75b7fc};
+constexpr file_spec g88_sound0{"g81_s0.bin", 0x10000, 0x164a3fdc};
+constexpr file_spec g88_sound1{"g81_s1.bin", 0x10000, 0x16a4b784};
+// The HD63701 MCU chip is shared with Pac-Mania.
+constexpr file_spec g88_mcu{"cus64-64a1.mcu", 0x1000, 0xffb5c0bd};
+constexpr file_spec g88_voices[] = {
+    {"g81_v0.bin", 0x10000, 0x86921dd4},
+    {"g81_v1.bin", 0x10000, 0x9c300e16},
+    {"g81_v2.bin", 0x10000, 0x5316b4b0},
+    {"g81_v3.bin", 0x10000, 0xdc077af4},
+    {"g81_v4.bin", 0x10000, 0xac0279a7},
+    {"g81_v5.bin", 0x10000, 0x014ddba1},
+};
+constexpr file_spec g88_chars[] = {
+    {"g8_chr-0.bin", 0x20000, 0x68559c78},
+    {"g8_chr-1.bin", 0x20000, 0x3dc0f93f},
+    {"g8_chr-2.bin", 0x20000, 0xdbf26f1f},
+    {"g8_chr-3.bin", 0x20000, 0xf5d6cac5},
+};
+constexpr file_spec g88_mask{"g8_chr-8.bin", 0x20000, 0x3862ed0a};
+constexpr file_spec g88_sprites[] = {
+    {"g8_obj-0.bin", 0x20000, 0xd7112e3f},
+    {"g8_obj-1.bin", 0x20000, 0x680db8e7},
+    {"g8_obj-2.bin", 0x20000, 0x13c97512},
+    {"g8_obj-3.bin", 0x20000, 0x3ed3941b},
+    {"g8_obj-4.bin", 0x20000, 0x370ff4ad},
+    {"g8_obj-5.bin", 0x20000, 0xb0645169},
+};
+
 bool read_zip(const std::string& path, const char* wanted,
               std::vector<uint8_t>& out) {
     unzFile zip = unzOpen64(path.c_str());
@@ -166,18 +203,25 @@ rom_set rom_loader::identify_set(const std::string& path) {
         crc32(0, bytes.data(), static_cast<uInt>(bytes.size())) ==
             pac_program6.crc)
         return rom_set::pacmania;
+    if (read_file(path, g88_program0.name, bytes) &&
+        bytes.size() == g88_program0.size &&
+        crc32(0, bytes.data(), static_cast<uInt>(bytes.size())) ==
+            g88_program0.crc)
+        return rom_set::galaga88;
     return rom_set::unknown;
 }
 
 const char* rom_loader::set_short_name(rom_set set) noexcept {
     if (set == rom_set::galaga) return "galaga";
     if (set == rom_set::pacmania) return "pacmania";
+    if (set == rom_set::galaga88) return "galaga88";
     return "";
 }
 
 const char* rom_loader::set_display_name(rom_set set) noexcept {
     if (set == rom_set::galaga) return "Galaga (Namco rev. B)";
     if (set == rom_set::pacmania) return "Pac-Mania (World)";
+    if (set == rom_set::galaga88) return "Galaga '88 (Namco System 1)";
     return "Unknown Namco set";
 }
 
@@ -213,6 +257,31 @@ load_result rom_loader::load(const std::string& path) {
                            result.error))
             return result;
         result.galaga.valid = true;
+        return result;
+    }
+
+    if (result.set == rom_set::galaga88) {
+        galaga88_roms& g = result.galaga88;
+        if (!checked(path, g88_program0, g.program0, result.error) ||
+            !checked(path, g88_program1, g.program1, result.error) ||
+            !checked(path, g88_program5, g.program5, result.error) ||
+            !checked(path, g88_program6, g.program6, result.error) ||
+            !checked(path, g88_program7, g.program7, result.error) ||
+            !checked(path, g88_sound0, g.sound0, result.error) ||
+            !checked(path, g88_sound1, g.sound1, result.error) ||
+            !checked(path, g88_mcu, g.mcu, result.error) ||
+            !checked(path, g88_mask, g.mask, result.error))
+            return result;
+        for (std::size_t i = 0; i < g.voices.size(); ++i)
+            if (!checked(path, g88_voices[i], g.voices[i], result.error))
+                return result;
+        for (std::size_t i = 0; i < g.chars.size(); ++i)
+            if (!checked(path, g88_chars[i], g.chars[i], result.error))
+                return result;
+        for (std::size_t i = 0; i < g.sprites.size(); ++i)
+            if (!checked(path, g88_sprites[i], g.sprites[i], result.error))
+                return result;
+        g.valid = true;
         return result;
     }
 

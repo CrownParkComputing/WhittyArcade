@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 3 ]]; then
-    echo "usage: $0 <WhittyArcade.exe> <stage-directory> <debug-file>" >&2
+    echo "usage: $0 <MANX.exe> <stage-directory> <debug-file>" >&2
     exit 2
 fi
 
@@ -24,7 +24,7 @@ if [[ -z "${MINGW_PREFIX:-}" || ! -d "$MINGW_PREFIX/bin" ]]; then
 fi
 
 mkdir -p "$stage" "$(dirname "$debug_file")"
-cp "$executable" "$stage/WhittyArcade.exe"
+cp "$executable" "$stage/MANX.exe"
 cp WINDOWS_README.md "$stage/README.md"
 cp LICENSE "$stage/LICENSE.txt"
 cp THIRD_PARTY_NOTICES.md "$stage/THIRD_PARTY_NOTICES.md"
@@ -97,9 +97,9 @@ for package in "${license_packages[@]}"; do
     done < <(pacman -Qlq "$package")
 done
 
-objcopy --only-keep-debug "$stage/WhittyArcade.exe" "$debug_file"
-strip --strip-unneeded "$stage/WhittyArcade.exe"
-objcopy --add-gnu-debuglink="$debug_file" "$stage/WhittyArcade.exe"
+objcopy --only-keep-debug "$stage/MANX.exe" "$debug_file"
+strip --strip-unneeded "$stage/MANX.exe"
+objcopy --add-gnu-debuglink="$debug_file" "$stage/MANX.exe"
 
 if find "$stage" -maxdepth 1 -iname 'msys-2.0.dll' | grep -q .; then
     echo "Unexpected MSYS2 runtime in staged package." >&2

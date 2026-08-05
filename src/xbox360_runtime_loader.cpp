@@ -39,13 +39,13 @@ fs::path executable_directory() {
 
 fs::path runtime_library_path() {
     if (const char* override_path =
-            std::getenv("WHITTY_XBOX360_RUNTIME")) {
+            std::getenv("MANX_XBOX360_RUNTIME")) {
         if (*override_path) return fs::path(override_path);
     }
 #if defined(_WIN32)
-    constexpr const char* filename = "whitty_robotron_runtime.dll";
+    constexpr const char* filename = "manx_robotron_runtime.dll";
 #else
-    constexpr const char* filename = "libwhitty_robotron_runtime.so";
+    constexpr const char* filename = "libmanx_robotron_runtime.so";
 #endif
     return executable_directory() / filename;
 }
@@ -66,7 +66,7 @@ void* load_library(const fs::path& path, std::string& error) {
     return module;
 #else
     // ReXGlue contains a private static SDL3. Deep binding keeps its internal
-    // SDL calls ahead of WhittyArcade's already-loaded SDL3 symbols, while a
+    // SDL calls ahead of MANX's already-loaded SDL3 symbols, while a
     // normal namespace is required by proprietary Vulkan drivers that load
     // helper DSOs internally and are not safe under dlmopen(LM_ID_NEWLM).
     int flags = RTLD_NOW | RTLD_LOCAL;
@@ -115,29 +115,29 @@ bool xbox360_runtime_loader::initialize(
     if (!fs::is_regular_file(library_path, type_error)) {
         error = "Robotron runtime module is not installed: " +
                 library_path.string() +
-                ". Configure WHITTY_ENABLE_XBOX360=ON to build it.";
+                ". Configure MANX_ENABLE_XBOX360=ON to build it.";
         return false;
     }
     m_library = load_library(library_path, error);
     if (!m_library) return false;
-    const auto get_api = reinterpret_cast<whitty_xbox360_get_api_fn>(
-        load_symbol(m_library, "whitty_xbox360_get_api"));
+    const auto get_api = reinterpret_cast<manx_xbox360_get_api_fn>(
+        load_symbol(m_library, "manx_xbox360_get_api"));
     if (!get_api) {
-        error = "Robotron runtime module has no WhittyArcade API entrypoint.";
+        error = "Robotron runtime module has no MANX API entrypoint.";
         shutdown();
         return false;
     }
-    m_api = get_api(WHITTY_XBOX360_RUNTIME_ABI);
-    if (!m_api || m_api->abi_version != WHITTY_XBOX360_RUNTIME_ABI ||
-        m_api->struct_size < sizeof(whitty_xbox360_api) || !m_api->create ||
+    m_api = get_api(MANX_XBOX360_RUNTIME_ABI);
+    if (!m_api || m_api->abi_version != MANX_XBOX360_RUNTIME_ABI ||
+        m_api->struct_size < sizeof(manx_xbox360_api) || !m_api->create ||
         !m_api->destroy || !m_api->set_input || !m_api->capture_frame ||
-        !m_api->read_audio) {
+        !m_api->get_vibration || !m_api->read_audio) {
         error = "Robotron runtime module uses an incompatible API version.";
         shutdown();
         return false;
     }
-    const whitty_xbox360_config config{
-        sizeof(whitty_xbox360_config), game_root.c_str(), user_root.c_str(),
+    const manx_xbox360_config config{
+        sizeof(manx_xbox360_config), game_root.c_str(), user_root.c_str(),
         cache_root.c_str()};
     std::array<char, 1024> detail{};
     m_runtime = m_api->create(&config, detail.data(), detail.size());
@@ -159,15 +159,23 @@ void xbox360_runtime_loader::shutdown() {
 }
 
 void xbox360_runtime_loader::set_input(
-        const whitty_xbox360_input& input) {
+        const manx_xbox360_input& input) {
     if (m_runtime && m_api) m_api->set_input(m_runtime, &input);
+}
+
+bool xbox360_runtime_loader::vibration(
+        manx_xbox360_vibration& output) const {
+    output = {};
+    output.struct_size = sizeof(output);
+    return m_runtime && m_api && m_api->get_vibration &&
+           m_api->get_vibration(m_runtime, &output) != 0;
 }
 
 bool xbox360_runtime_loader::capture_frame(
         std::vector<std::uint8_t>& rgba, int& width, int& height,
         std::uint64_t& sequence) {
     if (!m_runtime || !m_api) return false;
-    whitty_xbox360_frame frame{};
+    manx_xbox360_frame frame{};
     frame.struct_size = sizeof(frame);
     if (!m_api->capture_frame(m_runtime, &frame) || !frame.rgba ||
         frame.width == 0 || frame.height == 0 ||
@@ -204,7 +212,7 @@ bool xbox360_runtime_loader::running() const {
 }
 
 xbox360_runtime_achievement xbox360_runtime_loader::copy_achievement(
-        const whitty_xbox360_achievement& value) {
+        const manx_xbox360_achievement& value) {
     xbox360_runtime_achievement result;
     result.id = value.id;
     result.gamerscore = value.gamerscore;
@@ -224,7 +232,7 @@ xbox360_runtime_loader::achievements() const {
         m_api->achievement_count(m_runtime), 1024);
     result.reserve(count);
     for (std::size_t index = 0; index < count; ++index) {
-        whitty_xbox360_achievement value{};
+        manx_xbox360_achievement value{};
         value.struct_size = sizeof(value);
         if (m_api->achievement_at(m_runtime, index, &value))
             result.push_back(copy_achievement(value));
@@ -236,7 +244,7 @@ bool xbox360_runtime_loader::take_unlocked_achievement(
         xbox360_runtime_achievement& achievement) {
     if (!m_runtime || !m_api || !m_api->take_unlocked_achievement)
         return false;
-    whitty_xbox360_achievement value{};
+    manx_xbox360_achievement value{};
     value.struct_size = sizeof(value);
     if (!m_api->take_unlocked_achievement(m_runtime, &value)) return false;
     achievement = copy_achievement(value);

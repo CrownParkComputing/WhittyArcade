@@ -1,6 +1,7 @@
 // system22_audio.cpp - Standalone C352 emulation and OpenAL streaming
 #include "namco/system22/system22_audio.h"
 #include "arcade_audio_output.h"
+#include "arcade_feedback.h"
 
 #include <AL/al.h>
 #include <AL/alc.h>
@@ -132,7 +133,8 @@ void c352_audio::write(uint16_t offset, uint16_t data) {
     for (std::size_t index = 0; index < m_voices.size(); ++index) {
         voice& channel = m_voices[index];
         if (channel.flags & FLAG_KEYON) {
-            if (std::getenv("RRACER_AUDIO_TRACE")) {
+            if (std::getenv("RRACER_AUDIO_TRACE") ||
+                std::getenv("RRACER_FEEDBACK_TRACE")) {
                 std::printf("C352 keyon voice=%zu flags=%04x vol=%04x/%04x "
                             "freq=%04x bank=%04x start=%04x end=%04x loop=%04x\n",
                             index, channel.flags, channel.volume_front,
@@ -313,12 +315,34 @@ bool audio_system::write_c352(uint16_t offset, uint16_t data) {
     if (offset < m_register_snapshot.size())
         m_register_snapshot[offset].store(data, std::memory_order_release);
     if (offset == 0x202) {
+        float driving_effect = 0.0f;
         // Key execution changes the flag registers immediately from the
         // sound CPU's point of view.  Publish that transition before the
         // asynchronous audio thread consumes the command.
         for (int voice = 0; voice < SYSTEM22_C352_VOICE_COUNT; ++voice) {
+            const uint16_t base = static_cast<uint16_t>(voice * 8);
             auto& flag_register = m_register_snapshot[voice * 8 + 3];
             uint16_t flags = flag_register.load(std::memory_order_acquire);
+            if (m_driving_feedback.load(std::memory_order_acquire) &&
+                (flags & 0x4000) != 0 && (flags & 0x0002) == 0 &&
+                (voice == 27 || voice == 28 ||
+                 voice == 30 || voice == 31)) {
+                const uint16_t front =
+                    m_register_snapshot[base].load(std::memory_order_acquire);
+                const uint16_t rear =
+                    m_register_snapshot[base + 1].load(
+                        std::memory_order_acquire);
+                const unsigned volume = std::max({
+                    static_cast<unsigned>(front >> 8),
+                    static_cast<unsigned>(front & 0xff),
+                    static_cast<unsigned>(rear >> 8),
+                    static_cast<unsigned>(rear & 0xff)});
+                if (volume >= 2) {
+                    const float strength = voice >= 30 ?
+                        0.88f : std::min(0.80f, 0.36f + volume / 128.0f);
+                    driving_effect = std::max(driving_effect, strength);
+                }
+            }
             if (flags & 0x4000)
                 flags = static_cast<uint16_t>((flags | 0x8000) &
                                                ~(0x4000 | 0x0800));
@@ -326,6 +350,8 @@ bool audio_system::write_c352(uint16_t offset, uint16_t data) {
                 flags = static_cast<uint16_t>(flags & ~(0x8000 | 0x2000));
             flag_register.store(flags, std::memory_order_release);
         }
+        if (driving_effect > 0.0f)
+            arcade_feedback::publish_impact(driving_effect);
     }
 
     const uint32_t write = m_command_write.load(std::memory_order_relaxed);

@@ -1,6 +1,6 @@
 # MANX on Windows
 
-MANX (formerly WhittyArcade) builds on Windows with MSVC + vcpkg + the
+MANX (formerly MANX) builds on Windows with MSVC + vcpkg + the
 Vulkan SDK.
 
 ## Prerequisites
@@ -25,8 +25,8 @@ cmake -S . -B build-release ^
 cmake --build build-release --config Release -j
 ```
 
-The build produces `build-release/Release/WhittyArcade.exe`. The binary
-name keeps the legacy `WhittyArcade` filename for Phase 1; the rename
+The build produces `build-release/Release/MANX.exe`. The binary
+name keeps the legacy `MANX` filename for Phase 1; the rename
 lands in Phase 2.
 
 ## Burning the standalone

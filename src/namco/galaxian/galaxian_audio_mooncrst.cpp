@@ -7,6 +7,7 @@
 // FIRE oscillators, and the HIT/FIRE analogue envelopes.
 
 #include "namco/galaxian/galaxian_audio.h"
+#include "arcade_feedback.h"
 
 #include <algorithm>
 #include <array>
@@ -223,9 +224,13 @@ public:
         if (port == mooncrst_audio_port::pitch) {
             m_pitch_latch = data;
         } else if ((port & ~0x07u) == mooncrst_audio_port::sound_base) {
-            m_sound_lines[port & 0x07u] = value;
-            if ((port & 0x07u) == kHitLine && value != 0)
+            const unsigned line = port & 0x07u;
+            const bool rising = value != 0 && m_sound_lines[line] == 0;
+            m_sound_lines[line] = value;
+            if (line == kHitLine && value != 0) {
                 m_hit_envelope = std::max(m_hit_envelope, 1.0);
+                if (rising) arcade_feedback::publish_impact(0.92f);
+            }
         } else if ((port & ~0x03u) == mooncrst_audio_port::lfo_base) {
             m_background_bits[port & 0x03u] = value;
         }

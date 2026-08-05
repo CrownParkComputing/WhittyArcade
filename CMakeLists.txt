@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(WhittyArcade LANGUAGES C CXX)
+project(MANX LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -18,54 +18,46 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
         Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-option(WHITTY_ENABLE_XBOX360
+option(MANX_ENABLE_XBOX360
     "Build the isolated ReXGlue Robotron: 2084 runtime module" OFF)
-set(WHITTY_REXGLUE_SDK_DIR "$ENV{REXSDK_DIR}" CACHE PATH
+set(MANX_REXGLUE_SDK_DIR "$ENV{REXSDK_DIR}" CACHE PATH
     "ReXGlue SDK source directory used for the Xbox 360 runtime")
-set(WHITTY_REXGLUE_RUNTIME_DIR "" CACHE PATH
+set(MANX_REXGLUE_RUNTIME_DIR "" CACHE PATH
     "Directory containing the ReXGlue Release shared libraries")
-set(WHITTY_ROBOTRON_GENERATED_DIR "" CACHE PATH
+set(MANX_ROBOTRON_GENERATED_DIR "" CACHE PATH
     "Directory containing Robotron ReXGlue-generated sources.cmake")
-set(WHITTY_REXGLUE_CXX_COMPILER "" CACHE FILEPATH
+set(MANX_REXGLUE_CXX_COMPILER "" CACHE FILEPATH
     "Clang 20+ compiler used for the generated Xbox 360 code")
 
-if(WHITTY_ENABLE_XBOX360)
+if(MANX_ENABLE_XBOX360)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
         message(FATAL_ERROR
-            "The isolated WhittyArcade/ReXGlue bridge currently supports Linux")
+            "The isolated MANX/ReXGlue bridge currently supports Linux")
     endif()
-    if(NOT WHITTY_REXGLUE_SDK_DIR)
+    if(NOT MANX_REXGLUE_SDK_DIR)
         message(FATAL_ERROR
-            "WHITTY_ENABLE_XBOX360 requires WHITTY_REXGLUE_SDK_DIR")
+            "MANX_ENABLE_XBOX360 requires MANX_REXGLUE_SDK_DIR")
     endif()
-    if(NOT WHITTY_REXGLUE_RUNTIME_DIR)
-        set(WHITTY_REXGLUE_RUNTIME_DIR
-            "${WHITTY_REXGLUE_SDK_DIR}/out/linux-amd64/Release"
+    if(NOT MANX_REXGLUE_RUNTIME_DIR)
+        set(MANX_REXGLUE_RUNTIME_DIR
+            "${MANX_REXGLUE_SDK_DIR}/out/linux-amd64/Release"
             CACHE PATH "Directory containing ReXGlue Release libraries" FORCE)
     endif()
-    if(NOT EXISTS "${WHITTY_ROBOTRON_GENERATED_DIR}/sources.cmake")
+    if(NOT EXISTS "${MANX_ROBOTRON_GENERATED_DIR}/sources.cmake")
         message(FATAL_ERROR
-            "WHITTY_ENABLE_XBOX360 requires WHITTY_ROBOTRON_GENERATED_DIR "
+            "MANX_ENABLE_XBOX360 requires MANX_ROBOTRON_GENERATED_DIR "
             "to contain Robotron's generated sources.cmake")
     endif()
-    if(NOT WHITTY_REXGLUE_CXX_COMPILER)
-        find_program(WHITTY_REXGLUE_CXX_COMPILER
+    if(NOT MANX_REXGLUE_CXX_COMPILER)
+        find_program(MANX_REXGLUE_CXX_COMPILER
             NAMES clang++-22 clang++
             REQUIRED)
     endif()
 endif()
 
 if(NOT WIN32)
-    set(WHITTY_MATH_LIB m)
+    set(MANX_MATH_LIB m)
 endif()
-
-# IGDB application credentials for cover artwork. Configure with
-#   -DWHITTY_IGDB_CLIENT_ID=... -DWHITTY_IGDB_CLIENT_SECRET=...
-# or leave empty to ship without keys; the matching WHITTY_IGDB_CLIENT_ID and
-# WHITTY_IGDB_CLIENT_SECRET environment variables override both for one run.
-# A build with no keys simply shows no cover art.
-set(WHITTY_IGDB_CLIENT_ID "" CACHE STRING "IGDB (Twitch) client id")
-set(WHITTY_IGDB_CLIENT_SECRET "" CACHE STRING "IGDB (Twitch) client secret")
 
 # Find required libraries
 find_package(OpenGL REQUIRED)
@@ -86,11 +78,11 @@ pkg_check_modules(CURL IMPORTED_TARGET libcurl)
 # config package. Prefer its imported target because openSUSE's config does
 # not populate the legacy GLEW_LIBRARIES variable.
 if(TARGET GLEW::GLEW)
-    set(WHITTY_GLEW_TARGET GLEW::GLEW)
+    set(MANX_GLEW_TARGET GLEW::GLEW)
 elseif(TARGET GLEW::glew)
-    set(WHITTY_GLEW_TARGET GLEW::glew)
+    set(MANX_GLEW_TARGET GLEW::glew)
 else()
-    set(WHITTY_GLEW_TARGET ${GLEW_LIBRARIES})
+    set(MANX_GLEW_TARGET ${GLEW_LIBRARIES})
 endif()
 
 # Standalone MC68020 core. Musashi's 020 effective-address implementation
@@ -263,33 +255,35 @@ target_include_directories(model1_io SYSTEM PUBLIC
 target_compile_options(model1_io PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(model1_io PUBLIC chips_z80)
 
-# Wall-clock-paced FMV playback (include/whitty_fmv.h). A framework module,
+# Wall-clock-paced FMV playback (include/manx_fmv.h). A framework module,
 # not a Burnout one: it decodes any container ffmpeg handles into BGRA or
 # RGBA frames, paced by the stream's own per-frame timestamps because
 # container frame-rate metadata cannot be trusted (Xbox XMV claims 1000 fps).
 # The target only exists when the ffmpeg dev libraries are present, so a
 # consumer gates its call sites on its own HAVE define and skips FMVs
 # cleanly on a build without them.
-pkg_check_modules(WHITTY_FFMPEG IMPORTED_TARGET
-    libavformat libavcodec libavutil libswscale)
-if(WHITTY_FFMPEG_FOUND)
-    add_library(whitty_fmv STATIC src/fmv/whitty_fmv.c)
-    target_include_directories(whitty_fmv PUBLIC ${CMAKE_SOURCE_DIR}/include)
-    target_link_libraries(whitty_fmv PUBLIC PkgConfig::WHITTY_FFMPEG)
+pkg_check_modules(MANX_FFMPEG IMPORTED_TARGET
+    libavformat libavcodec libavutil libswscale libswresample)
+if(MANX_FFMPEG_FOUND)
+    add_library(manx_fmv STATIC src/fmv/manx_fmv.c)
+    target_include_directories(manx_fmv PUBLIC ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(manx_fmv PUBLIC PkgConfig::MANX_FFMPEG)
 endif()
 
-# Original-Xbox (NV2A) texture decoding (include/whitty_xbox_texture.h).
+# Original-Xbox (NV2A) texture decoding (include/manx_xbox_texture.h).
 # A framework module, not a Burnout one: every original-Xbox title stores
 # its textures in the same NV2A surface formats, Morton-swizzled or
 # linear, and a port only has to know which container holds them. Format
 # codes in, upload-ready bytes for a Vulkan image out. VkFormat is the
 # only Vulkan surface it touches — no device, no allocator, no linkage
 # beyond the headers.
-add_library(whitty_xbox_texture STATIC src/xbox_texture/whitty_xbox_texture.c)
-target_include_directories(whitty_xbox_texture PUBLIC
+add_library(manx_xbox_texture STATIC src/xbox_texture/manx_xbox_texture.c)
+target_include_directories(manx_xbox_texture BEFORE PUBLIC
+    ${CMAKE_SOURCE_DIR}/third_party/vulkan_stub)
+target_include_directories(manx_xbox_texture PUBLIC
     ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(whitty_xbox_texture PUBLIC Vulkan::Vulkan)
-target_compile_options(whitty_xbox_texture PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(manx_xbox_texture PUBLIC Vulkan::Vulkan)
+target_compile_options(manx_xbox_texture PRIVATE -Wall -Wextra -Wpedantic)
 
 # Burnout 3: Takedown — Xbox kernel (minimal shim or full port)
 #
@@ -349,13 +343,14 @@ else()
         # Game code (render bridge, 3D renderer — frontend lives in native code)
         ${BURNOUT3_GAME_DIR}/rw_bridge.c
         ${BURNOUT3_GAME_DIR}/rw_renderer.c
+        ${BURNOUT3_GAME_DIR}/fe_menu.c
     )
-    # Boot intro FMVs (ovid/*.xmv, WMV2) play through the shared whitty_fmv
+    # Boot intro FMVs (ovid/*.xmv, WMV2) play through the shared manx_fmv
     # module when the ffmpeg dev libraries are present; without them the
     # intro is skipped and the frontend boots straight to the title screen.
-    if(WHITTY_FFMPEG_FOUND)
+    if(MANX_FFMPEG_FOUND)
         target_compile_definitions(burnout3_recomp PRIVATE B3_HAVE_FFMPEG)
-        target_link_libraries(burnout3_recomp PUBLIC whitty_fmv)
+        target_link_libraries(burnout3_recomp PUBLIC manx_fmv)
     else()
         message(WARNING "ffmpeg dev libs not found — Burnout 3 intro FMVs disabled")
     endif()
@@ -363,6 +358,7 @@ else()
         src/xbox
         ${BURNOUT3_D3D_DIR}
         ${BURNOUT3_GAME_DIR}
+        ${BURNOUT3_GAME_DIR}/recomp
         ${BURNOUT3_KERNEL_DIR}
     )
     # Force kernel stub windows.h before system headers
@@ -384,7 +380,7 @@ else()
     target_link_libraries(burnout3_recomp PUBLIC Vulkan::Vulkan)
     # Track (static.dat) and menu (.txd) textures both decode through the
     # shared NV2A module; the loaders keep only the container parsing.
-    target_link_libraries(burnout3_recomp PUBLIC whitty_xbox_texture)
+    target_link_libraries(burnout3_recomp PUBLIC manx_xbox_texture)
     set(BURNOUT3_KERNEL_LIB burnout3_recomp)
 endif()
 
@@ -408,9 +404,16 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${SDL3_INCLUDE_DIRS})
 include_directories(${GLEW_INCLUDE_DIRS})
 
+add_library(arcade_feedback STATIC src/arcade_feedback.cpp)
+target_include_directories(arcade_feedback PUBLIC
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(arcade_feedback PRIVATE
+    -Wall -Wextra -Wpedantic)
+
 add_library(arcade_audio_output STATIC src/arcade_audio_output.cpp)
 target_include_directories(arcade_audio_output PUBLIC
     ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(arcade_audio_output PUBLIC arcade_feedback)
 target_compile_options(arcade_audio_output PRIVATE
     -Wall -Wextra -Wpedantic)
 
@@ -421,8 +424,6 @@ set(SOURCES
     src/banner_library.cpp
     src/system16_data.cpp
     src/bezel_artwork.cpp
-    src/igdb_artwork.cpp
-    src/igdb_cover_library.cpp
     src/bezel_library.cpp
     src/stb_image_impl.cpp
     src/arcade_session.cpp
@@ -431,6 +432,11 @@ set(SOURCES
     src/sega/model2/model2_session.cpp
     src/namco/galaxian/galaxian_session.cpp
     src/sega/system16b/system16b_session.cpp
+    src/taito/taitoz/taitoz_session.cpp
+    src/taito/taitoz/taitoz_rom.cpp
+    src/taito/taitoz/taitoz_machine.cpp
+    src/taito/taitoz/taitoz_video.cpp
+    src/taito/taitoz/taitoz_audio.cpp
     src/capcom/gng/gng_session.cpp
     src/game_plugin_host.cpp
     src/plugin_session.cpp
@@ -445,6 +451,7 @@ set(SOURCES
     src/multiplayer_lobby.cpp
     src/input_mapping.cpp
     src/input_mapper.cpp
+    src/media_library.cpp
     src/arcade_frontend.cpp
     src/launcher_menu.cpp
     src/arcade_settings.cpp
@@ -502,9 +509,14 @@ set(SOURCES
     src/capcom/gng/gng_machine.cpp
     src/capcom/gng/gng_audio.cpp
     src/namco/namco_rom.cpp
+    src/midway/midway_rom.cpp
+    src/midway/midway_chd.cpp
+    src/midway/mips_cpu.cpp
+    src/midway/wolfunit_session.cpp
     src/namco/galaga/galaga_machine.cpp
     src/namco/galaga/galaga_audio.cpp
     src/namco/system1/system1_machine.cpp
+    src/namco/system1/pacmania_feedback.cpp
     src/namco/system1/system1_audio.cpp
     src/namco/system1/system1_ym2151.cpp
 )
@@ -513,7 +525,7 @@ if(WIN32)
     enable_language(RC)
     list(APPEND SOURCES
         src/platform_file_dialog_windows.cpp
-        resources/windows/WhittyArcade.rc
+        resources/windows/MANX.rc
     )
 else()
     list(APPEND SOURCES src/platform_file_dialog_unix.cpp)
@@ -528,20 +540,20 @@ endif()
 # a fallback: a build that silently produced headerless SPIR-V would fail at
 # the first #include instead of here.
 if(TARGET Vulkan::glslangValidator)
-    set(WHITTY_GLSL_COMPILER $<TARGET_FILE:Vulkan::glslangValidator>)
+    set(MANX_GLSL_COMPILER $<TARGET_FILE:Vulkan::glslangValidator>)
 else()
-    find_program(WHITTY_GLSLANG_EXECUTABLE glslangValidator)
-    if(NOT WHITTY_GLSLANG_EXECUTABLE)
+    find_program(MANX_GLSLANG_EXECUTABLE glslangValidator)
+    if(NOT MANX_GLSLANG_EXECUTABLE)
         message(FATAL_ERROR
             "glslangValidator not found. Install glslang to build the Vulkan "
             "shaders.")
     endif()
-    set(WHITTY_GLSL_COMPILER ${WHITTY_GLSLANG_EXECUTABLE})
+    set(MANX_GLSL_COMPILER ${MANX_GLSLANG_EXECUTABLE})
 endif()
 
-set(WHITTY_SHADER_HEADER_DIR ${CMAKE_BINARY_DIR}/generated/shaders)
-file(MAKE_DIRECTORY ${WHITTY_SHADER_HEADER_DIR})
-set(WHITTY_SHADER_HEADERS "")
+set(MANX_SHADER_HEADER_DIR ${CMAKE_BINARY_DIR}/generated/shaders)
+file(MAKE_DIRECTORY ${MANX_SHADER_HEADER_DIR})
+set(MANX_SHADER_HEADERS "")
 foreach(shader
         arcade_post.vert arcade_post.frag
         arcade_overlay.vert arcade_overlay.frag
@@ -551,8 +563,8 @@ foreach(shader
         model2_polygon.vert model2_polygon.frag model2_overlay.frag)
     string(REPLACE "." "_" shader_symbol ${shader})
     set(shader_source ${CMAKE_SOURCE_DIR}/shaders/${shader})
-    set(shader_header ${WHITTY_SHADER_HEADER_DIR}/${shader_symbol}.h)
-    set(shader_command ${WHITTY_GLSL_COMPILER}
+    set(shader_header ${MANX_SHADER_HEADER_DIR}/${shader_symbol}.h)
+    set(shader_command ${MANX_GLSL_COMPILER}
         --target-env vulkan1.0 --vn ${shader_symbol}_spirv
         -o ${shader_header} ${shader_source})
     add_custom_command(
@@ -561,31 +573,32 @@ foreach(shader
         DEPENDS ${shader_source}
         COMMENT "Compiling ${shader} to SPIR-V"
         VERBATIM)
-    list(APPEND WHITTY_SHADER_HEADERS ${shader_header})
+    list(APPEND MANX_SHADER_HEADERS ${shader_header})
 endforeach()
-add_custom_target(whitty_shaders DEPENDS ${WHITTY_SHADER_HEADERS})
+add_custom_target(manx_shaders DEPENDS ${MANX_SHADER_HEADERS})
 
 # Build executable
 if(WIN32)
-    add_executable(WhittyArcade WIN32 ${SOURCES})
+    add_executable(MANX WIN32 ${SOURCES})
 else()
-    add_executable(WhittyArcade ${SOURCES})
+    add_executable(MANX ${SOURCES})
 endif()
-add_dependencies(WhittyArcade whitty_shaders)
-target_include_directories(WhittyArcade PRIVATE ${WHITTY_SHADER_HEADER_DIR})
-target_include_directories(WhittyArcade PRIVATE
+set_target_properties(MANX PROPERTIES OUTPUT_NAME MANX)
+add_dependencies(MANX manx_shaders)
+target_include_directories(MANX PRIVATE ${MANX_SHADER_HEADER_DIR})
+target_include_directories(MANX PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party/stb
     ${CMAKE_SOURCE_DIR}/third_party/json
     ${CMAKE_SOURCE_DIR}/third_party/moira/Moira)
 
 # Link libraries
-target_link_libraries(WhittyArcade
+target_link_libraries(MANX
     PRIVATE
     ${OPENGL_LIBRARIES}
     SDL3::SDL3
     ${OPENAL_LIBRARY}
-    ${WHITTY_GLEW_TARGET}
+    ${MANX_GLEW_TARGET}
     mcs51
     musashi
     m37710
@@ -612,47 +625,47 @@ target_link_libraries(WhittyArcade
     PkgConfig::SDL3_TTF
     ZLIB::ZLIB
     Vulkan::Vulkan
-    ${WHITTY_MATH_LIB}
+    ${MANX_MATH_LIB}
     ${CMAKE_DL_LIBS}
 )
 # Cabinet bezels are fetched over HTTP when libcurl is available; without it
 # the bezel library reports itself unconfigured and no bezel ever appears.
 if(TARGET PkgConfig::CURL)
-    target_link_libraries(WhittyArcade PRIVATE PkgConfig::CURL)
-    target_compile_definitions(WhittyArcade PRIVATE WHITTY_HAVE_CURL)
+    target_link_libraries(MANX PRIVATE PkgConfig::CURL)
+    target_compile_definitions(MANX PRIVATE MANX_HAVE_CURL)
 endif()
-
-# Cover artwork needs libcurl too, and the credentials configured above.
-if(TARGET PkgConfig::CURL)
-    target_compile_definitions(WhittyArcade PRIVATE
-        WHITTY_IGDB_CLIENT_ID="${WHITTY_IGDB_CLIENT_ID}"
-        WHITTY_IGDB_CLIENT_SECRET="${WHITTY_IGDB_CLIENT_SECRET}")
+# Cover-flow video playback (manx_fmv). Only present when ffmpeg dev
+# libraries were found; without them the cover-flow view still works with
+# still artwork alone.
+if(TARGET manx_fmv)
+    target_link_libraries(MANX PRIVATE manx_fmv)
+    target_compile_definitions(MANX PRIVATE MANX_HAVE_FFMPEG)
 endif()
 
 if(WIN32)
-    target_link_libraries(WhittyArcade PRIVATE ole32 shell32 uuid ws2_32)
+    target_link_libraries(MANX PRIVATE ole32 shell32 uuid ws2_32)
 endif()
 
 # Compiler flags
-target_compile_options(WhittyArcade PRIVATE
+target_compile_options(MANX PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:-O2;-Wall;-Wextra;-Wpedantic>"
 )
 
-if(WHITTY_ENABLE_XBOX360)
+if(MANX_ENABLE_XBOX360)
     include(ExternalProject)
-    ExternalProject_Add(whitty_robotron_runtime_project
+    ExternalProject_Add(manx_robotron_runtime_project
         SOURCE_DIR "${CMAKE_SOURCE_DIR}/src/xbox360/bridge"
         BINARY_DIR "${CMAKE_BINARY_DIR}/xbox360-bridge"
         CMAKE_ARGS
             -DCMAKE_BUILD_TYPE=Release
-            -DCMAKE_CXX_COMPILER=${WHITTY_REXGLUE_CXX_COMPILER}
-            -DWHITTY_HOST_INCLUDE_DIR=${CMAKE_SOURCE_DIR}/include
-            -DWHITTY_REXGLUE_SDK_DIR=${WHITTY_REXGLUE_SDK_DIR}
-            -DWHITTY_REXGLUE_RUNTIME_DIR=${WHITTY_REXGLUE_RUNTIME_DIR}
-            -DWHITTY_ROBOTRON_GENERATED_DIR=${WHITTY_ROBOTRON_GENERATED_DIR}
-            -DWHITTY_OUTPUT_DIR=${CMAKE_BINARY_DIR}
+            -DCMAKE_CXX_COMPILER=${MANX_REXGLUE_CXX_COMPILER}
+            -DMANX_HOST_INCLUDE_DIR=${CMAKE_SOURCE_DIR}/include
+            -DMANX_REXGLUE_SDK_DIR=${MANX_REXGLUE_SDK_DIR}
+            -DMANX_REXGLUE_RUNTIME_DIR=${MANX_REXGLUE_RUNTIME_DIR}
+            -DMANX_ROBOTRON_GENERATED_DIR=${MANX_ROBOTRON_GENERATED_DIR}
+            -DMANX_OUTPUT_DIR=${CMAKE_BINARY_DIR}
         BUILD_BYPRODUCTS
-            "${CMAKE_BINARY_DIR}/libwhitty_robotron_runtime.so"
+            "${CMAKE_BINARY_DIR}/libmanx_robotron_runtime.so"
             "${CMAKE_BINARY_DIR}/librexruntime.so"
             "${CMAKE_BINARY_DIR}/librexgpu-xenos.so"
             "${CMAKE_BINARY_DIR}/libTracyClient.so"
@@ -661,24 +674,24 @@ if(WHITTY_ENABLE_XBOX360)
         INSTALL_COMMAND ""
         BUILD_ALWAYS TRUE
         USES_TERMINAL_BUILD TRUE)
-    add_dependencies(WhittyArcade whitty_robotron_runtime_project)
+    add_dependencies(MANX manx_robotron_runtime_project)
 endif()
 
 enable_testing()
 add_test(NAME video_session_lifecycle_test
-    COMMAND WhittyArcade --video-lifecycle-test)
+    COMMAND MANX --video-lifecycle-test)
 set_tests_properties(video_session_lifecycle_test PROPERTIES
-    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;WHITTYARCADE_HEADLESS=1")
+    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;MANX_HEADLESS=1")
 
 add_test(NAME arcade_session_factory_test
-    COMMAND WhittyArcade --session-factory-test)
+    COMMAND MANX --session-factory-test)
 # Constructs and destroys every board in turn, which reaches the video layer.
 # On a build machine there is no display to reach, so it runs headless like
 # video_session_lifecycle_test above rather than failing for want of a screen.
 set_tests_properties(arcade_session_factory_test PROPERTIES
-    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;WHITTYARCADE_HEADLESS=1")
+    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;MANX_HEADLESS=1")
 add_test(NAME c139_link_test
-    COMMAND WhittyArcade --c139-link-test)
+    COMMAND MANX --c139-link-test)
 set_tests_properties(c139_link_test PROPERTIES TIMEOUT 60)
 
 add_executable(arcade_audio_output_test tests/arcade_audio_output_test.cpp)
@@ -686,6 +699,27 @@ target_link_libraries(arcade_audio_output_test PRIVATE arcade_audio_output)
 target_compile_options(arcade_audio_output_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME arcade_audio_output_test COMMAND arcade_audio_output_test)
+
+add_executable(audio_impact_detector_test tests/audio_impact_detector_test.cpp)
+target_include_directories(audio_impact_detector_test PRIVATE include)
+target_compile_options(audio_impact_detector_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+add_test(NAME audio_impact_detector_test COMMAND audio_impact_detector_test)
+
+add_executable(arcade_feedback_test tests/arcade_feedback_test.cpp)
+target_link_libraries(arcade_feedback_test PRIVATE arcade_feedback)
+target_compile_options(arcade_feedback_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+add_test(NAME arcade_feedback_test COMMAND arcade_feedback_test)
+
+add_executable(pacmania_feedback_test
+    tests/pacmania_feedback_test.cpp
+    src/namco/system1/pacmania_feedback.cpp)
+target_include_directories(pacmania_feedback_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(pacmania_feedback_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+add_test(NAME pacmania_feedback_test COMMAND pacmania_feedback_test)
 
 add_executable(arcade_settings_test
     tests/arcade_settings_test.cpp
@@ -695,19 +729,28 @@ target_include_directories(arcade_settings_test PRIVATE ${CMAKE_SOURCE_DIR}/incl
 target_compile_options(arcade_settings_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME arcade_settings_test COMMAND arcade_settings_test)
 
+add_executable(media_library_test
+    tests/media_library_test.cpp
+    src/media_library.cpp
+)
+target_include_directories(media_library_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests)
+target_compile_options(media_library_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME media_library_test COMMAND media_library_test)
+
 # Renders the Vulkan presentation shaders into an offscreen image and checks
 # the pixels. Needs a Vulkan device; it skips cleanly when there is none.
 add_executable(vulkan_post_pipeline_test tests/vulkan_post_pipeline_test.cpp)
-add_dependencies(vulkan_post_pipeline_test whitty_shaders)
+add_dependencies(vulkan_post_pipeline_test manx_shaders)
 target_include_directories(vulkan_post_pipeline_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include ${WHITTY_SHADER_HEADER_DIR})
+    ${CMAKE_SOURCE_DIR}/include ${MANX_SHADER_HEADER_DIR})
 target_link_libraries(vulkan_post_pipeline_test PRIVATE Vulkan::Vulkan)
 target_compile_options(vulkan_post_pipeline_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME vulkan_post_pipeline_test COMMAND vulkan_post_pipeline_test)
 
 # Drives the real presenter through a System 22 frame under the Vulkan
 # validation layers. Opens a window, so it is not wired into ctest; run it
-# directly with WHITTY_PRESENTER_HARNESS=1.
+# directly with MANX_PRESENTER_HARNESS=1.
 add_executable(vulkan_presenter_harness
     tests/vulkan_presenter_harness.cpp
     src/arcade_presenter.cpp
@@ -720,25 +763,15 @@ add_executable(vulkan_presenter_harness
     src/sega/model2/model2_draw_list.cpp
     src/sega/model2/model2_video.cpp
 )
-add_dependencies(vulkan_presenter_harness whitty_shaders)
+add_dependencies(vulkan_presenter_harness manx_shaders)
 target_include_directories(vulkan_presenter_harness PRIVATE
     ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party/i960
-    ${WHITTY_SHADER_HEADER_DIR})
+    ${MANX_SHADER_HEADER_DIR})
 target_link_libraries(vulkan_presenter_harness PRIVATE SDL3::SDL3
     Vulkan::Vulkan i960 mb86233 system24_video model1_io
-    PkgConfig::MINIZIP ZLIB::ZLIB ${WHITTY_MATH_LIB})
+    PkgConfig::MINIZIP ZLIB::ZLIB ${MANX_MATH_LIB})
 target_compile_options(vulkan_presenter_harness PRIVATE -Wall -Wextra)
-
-add_executable(igdb_artwork_test
-    tests/igdb_artwork_test.cpp
-    src/igdb_artwork.cpp
-    src/igdb_cover_library.cpp
-)
-target_include_directories(igdb_artwork_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/third_party/json)
-target_compile_options(igdb_artwork_test PRIVATE -Wall -Wextra -Wpedantic)
-add_test(NAME igdb_artwork_test COMMAND igdb_artwork_test)
 
 add_executable(wall_workspace_test
     tests/wall_workspace_test.cpp
@@ -822,6 +855,8 @@ add_executable(native_title_test
     src/game_plugin_host.cpp
     src/arcade_catalog.cpp
     src/arcade_game_probe.cpp
+    src/taito/taitoz/taitoz_rom.cpp
+    src/midway/midway_rom.cpp
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/xbox360_rom.cpp
@@ -921,7 +956,7 @@ add_executable(plugin_audio_test
     src/plugin_audio.cpp
     src/arcade_audio_output.cpp)
 target_include_directories(plugin_audio_test PRIVATE include)
-target_link_libraries(plugin_audio_test PRIVATE OpenAL::OpenAL)
+target_link_libraries(plugin_audio_test PRIVATE OpenAL::OpenAL arcade_feedback)
 add_test(NAME plugin_audio_test COMMAND plugin_audio_test)
 
 add_executable(game_plugin_test
@@ -929,6 +964,8 @@ add_executable(game_plugin_test
     src/game_plugin_host.cpp
     src/arcade_catalog.cpp
     src/arcade_game_probe.cpp
+    src/midway/midway_rom.cpp
+    src/taito/taitoz/taitoz_rom.cpp
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/xbox360_rom.cpp
@@ -954,7 +991,9 @@ add_test(NAME game_plugin_test COMMAND game_plugin_test)
 add_executable(arcade_catalog_test
     tests/arcade_catalog_test.cpp
     src/arcade_catalog.cpp
+    src/midway/midway_rom.cpp
     src/arcade_game_probe.cpp
+    src/taito/taitoz/taitoz_rom.cpp
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/xbox360_rom.cpp
@@ -977,8 +1016,10 @@ add_executable(rom_library_test
     tests/rom_library_test.cpp
     src/arcade_catalog.cpp
     src/native_title_library.cpp
+    src/midway/midway_rom.cpp
     src/arcade_settings.cpp
     src/arcade_game_probe.cpp
+    src/taito/taitoz/taitoz_rom.cpp
     src/rom_library.cpp
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
@@ -1007,9 +1048,12 @@ set(NAMCO_GALAGA_TEST_ROM "" CACHE FILEPATH
     "Optional galaga.zip used by the Namco ROM integration test")
 set(NAMCO_PACMANIA_TEST_ROM "" CACHE FILEPATH
     "Optional pacmania.zip used by the Namco ROM integration test")
+set(NAMCO_GALAGA88_TEST_ROM "" CACHE FILEPATH
+    "Optional galaga88.zip used by the Namco ROM integration test")
 if(NAMCO_GALAGA_TEST_ROM AND NAMCO_PACMANIA_TEST_ROM)
     add_test(NAME namco_rom_test COMMAND namco_rom_test
-        "${NAMCO_GALAGA_TEST_ROM}" "${NAMCO_PACMANIA_TEST_ROM}")
+        "${NAMCO_GALAGA_TEST_ROM}" "${NAMCO_PACMANIA_TEST_ROM}"
+        "${NAMCO_GALAGA88_TEST_ROM}")
 else()
     add_test(NAME namco_rom_test COMMAND namco_rom_test)
 endif()
@@ -1071,7 +1115,7 @@ if(NOT WIN32)
         LABELS "xbox360;runtime" TIMEOUT 60)
 endif()
 
-if(WHITTY_ENABLE_XBOX360)
+if(MANX_ENABLE_XBOX360)
     add_executable(xbox360_runtime_smoke_test
         tests/xbox360_runtime_smoke_test.cpp
         src/xbox360_runtime_loader.cpp)
@@ -1082,7 +1126,7 @@ if(WHITTY_ENABLE_XBOX360)
     target_compile_options(xbox360_runtime_smoke_test PRIVATE
         -Wall -Wextra -Wpedantic -UNDEBUG)
     add_dependencies(xbox360_runtime_smoke_test
-        whitty_robotron_runtime_project)
+        manx_robotron_runtime_project)
     if(XBOX360_TEST_GAME)
         add_test(NAME xbox360_runtime_smoke_test
             COMMAND xbox360_runtime_smoke_test
@@ -1121,7 +1165,7 @@ add_executable(system22_cpu_test
 )
 target_include_directories(system22_cpu_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(system22_cpu_test PRIVATE
-    musashi Threads::Threads ${WHITTY_MATH_LIB})
+    musashi Threads::Threads ${MANX_MATH_LIB})
 target_compile_options(system22_cpu_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME system22_cpu_test COMMAND system22_cpu_test)
 
@@ -1133,7 +1177,7 @@ add_executable(c139_transport_test
 )
 target_include_directories(c139_transport_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(c139_transport_test PRIVATE
-    musashi Threads::Threads ${WHITTY_MATH_LIB})
+    musashi Threads::Threads ${MANX_MATH_LIB})
 # The cabinet link is a UDP transport, and Windows keeps sockets in a library
 # of their own - the same line the two Model 2 tests already carry.
 if(WIN32)
@@ -1179,7 +1223,7 @@ endforeach()
 add_executable(i960_test tests/i960_test.cpp)
 target_include_directories(i960_test PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/i960)
-target_link_libraries(i960_test PRIVATE i960 ${WHITTY_MATH_LIB})
+target_link_libraries(i960_test PRIVATE i960 ${MANX_MATH_LIB})
 target_compile_options(i960_test PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME i960_test COMMAND i960_test)
 
@@ -1204,7 +1248,7 @@ target_include_directories(model2_audio_test PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/musashi)
 target_link_libraries(model2_audio_test PRIVATE
     musashi arcade_audio_output ${OPENAL_LIBRARY} Threads::Threads
-    ${WHITTY_MATH_LIB})
+    ${MANX_MATH_LIB})
 target_compile_options(model2_audio_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME model2_audio_test COMMAND model2_audio_test)
@@ -1277,7 +1321,7 @@ target_include_directories(model2_boot_test PRIVATE
 )
 target_link_libraries(model2_boot_test PRIVATE
     i960 mb86233 system24_video model1_io PkgConfig::MINIZIP ZLIB::ZLIB
-    ${WHITTY_MATH_LIB})
+    ${MANX_MATH_LIB})
 if(WIN32)
     target_link_libraries(model2_boot_test PRIVATE ws2_32)
 endif()
@@ -1302,7 +1346,7 @@ add_executable(model2_video_test
 target_include_directories(model2_video_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(model2_video_test PRIVATE
-    system24_video ${WHITTY_MATH_LIB})
+    system24_video ${MANX_MATH_LIB})
 target_compile_options(model2_video_test PRIVATE
     -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME model2_video_test COMMAND model2_video_test)
@@ -1583,7 +1627,7 @@ endif()
 # Copy ROMs and data files
 if(EXISTS "${CMAKE_SOURCE_DIR}/roms")
     add_custom_target(copy_roms COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/roms $<TARGET_FILE_DIR:WhittyArcade>/roms)
+        ${CMAKE_SOURCE_DIR}/roms $<TARGET_FILE_DIR:MANX>/roms)
 endif()
 
 # Shinobi (Sega System 16-B) host boot test. Loads a Shinobi US ROM
@@ -1642,6 +1686,87 @@ if(SHINOBI_TEST_ROM)
         COMMAND system16b_audio_integration_test ${SHINOBI_TEST_ROM} 900)
 endif()
 
+# Bay Route (set 1 US, unprotected) ROM-backed boot regression. The loader
+# and the 171-5358 board config are exercised end-to-end against a real
+# archive; like SHINOBI_TEST_ROM this never ships in-tree.
+set(BAYROUTE_TEST_ROM "" CACHE FILEPATH
+    "Optional Bay Route (set 1 US) archive for the ROM-backed boot test")
+if(BAYROUTE_TEST_ROM)
+    add_test(NAME system16b_bayroute_boot_test
+        COMMAND system16b_boot_test ${BAYROUTE_TEST_ROM} 60)
+endif()
+
+# Taito Z System ROM loader test. Without arguments it checks only the
+# metadata contract so CI can run it; with a legal archive (and optionally a
+# directory of MAME region dumps) it validates every assembled region.
+add_executable(taitoz_rom_test
+    tests/taitoz_rom_test.cpp
+    src/taito/taitoz/taitoz_rom.cpp
+)
+target_include_directories(taitoz_rom_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(taitoz_rom_test PRIVATE PkgConfig::MINIZIP)
+set(TAITOZ_TEST_ROM "" CACHE FILEPATH
+    "Optional Continental Circus archive for the Taito Z ROM test")
+set(TAITOZ_MAME_REGIONS "" CACHE PATH
+    "Optional directory of MAME region dumps to byte-compare the loader against")
+if(TAITOZ_TEST_ROM)
+    add_test(NAME taitoz_rom_test COMMAND taitoz_rom_test
+        "${TAITOZ_TEST_ROM}" "${TAITOZ_MAME_REGIONS}")
+else()
+    add_test(NAME taitoz_rom_test COMMAND taitoz_rom_test)
+endif()
+
+# Taito Z boot/frame test: dual-68000 execution plus the full video
+# composite against a real archive.
+add_executable(taitoz_boot_test
+    tests/taitoz_boot_test.cpp
+    src/taito/taitoz/taitoz_rom.cpp
+    src/taito/taitoz/taitoz_machine.cpp
+    src/taito/taitoz/taitoz_video.cpp
+    src/taito/taitoz/taitoz_audio.cpp
+)
+target_include_directories(taitoz_boot_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(taitoz_boot_test SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/chips)
+target_link_libraries(taitoz_boot_test PRIVATE m68000_cpu chips_z80 ymfm
+    arcade_audio_output OpenAL::OpenAL Threads::Threads PkgConfig::MINIZIP)
+if(TAITOZ_TEST_ROM)
+    add_test(NAME taitoz_boot_test
+        COMMAND taitoz_boot_test "${TAITOZ_TEST_ROM}" 60)
+endif()
+
+# ROM board 171-5797 contract test: the mapper region layout, the
+# 315-5248 multiplier, both 315-5250 compare/timers and the tile bank
+# register E-SWAT introduced. Needs no ROMs, so it runs in CI.
+add_executable(system16b_5797_test
+    tests/system16b_5797_test.cpp
+    src/high_scores.cpp
+    src/sega/system16b/system16b_rom.cpp
+    src/sega/system16b/system16b_machine_shinobi.cpp
+)
+target_include_directories(system16b_5797_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(system16b_5797_test PRIVATE mcs51 Threads::Threads
+    PkgConfig::MINIZIP)
+add_test(NAME system16b_5797_test COMMAND system16b_5797_test)
+
+# E-SWAT (pre-decrypted `eswatd` clone) ROM-backed boot regression, which
+# is the only way to exercise the 5797 mapper decode against real code.
+set(ESWAT_TEST_ROM "" CACHE FILEPATH
+    "Optional E-SWAT (eswatd) archive for the ROM-backed boot test")
+if(ESWAT_TEST_ROM)
+    add_test(NAME system16b_eswat_boot_test
+        COMMAND system16b_boot_test ${ESWAT_TEST_ROM} 60)
+endif()
+
+# Wonder Boy III: Monster Lair (pre-decrypted `wb33d`) boot regression.
+set(WB3_TEST_ROM "" CACHE FILEPATH
+    "Optional Wonder Boy III (wb33d) archive for the ROM-backed boot test")
+if(WB3_TEST_ROM)
+    add_test(NAME system16b_wb3_boot_test
+        COMMAND system16b_boot_test ${WB3_TEST_ROM} 60)
+endif()
+
 # Dual-instance 68000 core test: two m68000_cpu objects must not share any
 # state (the Musashi limitation this core replaces).
 add_executable(m68000_cpu_test tests/m68000_cpu_test.cpp)
@@ -1662,7 +1787,7 @@ target_include_directories(burnout3_boot_test PRIVATE
 target_link_libraries(burnout3_boot_test PRIVATE
     burnout3_recomp
     SDL3::SDL3
-    ${WHITTY_MATH_LIB}
+    ${MANX_MATH_LIB}
     ${CMAKE_DL_LIBS}
 )
 target_compile_definitions(burnout3_boot_test PRIVATE
@@ -1675,6 +1800,39 @@ target_compile_options(burnout3_boot_test PRIVATE -Wall -Wextra)
 
 set(BURNOUT3_TEST_GAME_DATA "" CACHE FILEPATH
     "Optional Burnout 3 game data directory for integration tests")
+
+# Asset-build conversion for desktop and Android packages. The retail XMV
+# files are video-only; movie.xwb contains standalone ASF/WMA audio streams.
+# This target converts them once to H.264/AAC MP4 plus indexed M4A files, so
+# the shipped runtime needs no Xbox codec or plugin loader.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+find_program(MANX_FFMPEG_CLI NAMES ffmpeg)
+if(BURNOUT3_TEST_GAME_DATA AND Python3_Interpreter_FOUND AND MANX_FFMPEG_CLI)
+    set(BURNOUT3_PORTABLE_MEDIA_DIR
+        "${CMAKE_BINARY_DIR}/generated/burnout3_media" CACHE PATH
+        "Output directory for converted Burnout 3 media assets")
+    set(_b3_media_manifest "${BURNOUT3_PORTABLE_MEDIA_DIR}/manifest.json")
+    add_custom_command(
+        OUTPUT "${_b3_media_manifest}"
+        BYPRODUCTS
+            "${BURNOUT3_PORTABLE_MEDIA_DIR}/movies/cri_rw30.mp4"
+            "${BURNOUT3_PORTABLE_MEDIA_DIR}/movies/englis30.mp4"
+            "${BURNOUT3_PORTABLE_MEDIA_DIR}/movies/Titles30.mp4"
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/burnout3_media_import.py"
+            --game-dir "${BURNOUT3_TEST_GAME_DATA}"
+            --output "${BURNOUT3_PORTABLE_MEDIA_DIR}"
+            --ffmpeg "${MANX_FFMPEG_CLI}"
+        DEPENDS
+            "${CMAKE_SOURCE_DIR}/tools/burnout3_media_import.py"
+            "${BURNOUT3_TEST_GAME_DATA}/ovid/movie.xwb"
+            "${BURNOUT3_TEST_GAME_DATA}/ovid/cri_rw30.xmv"
+            "${BURNOUT3_TEST_GAME_DATA}/ovid/englis30.xmv"
+            "${BURNOUT3_TEST_GAME_DATA}/ovid/Titles30.xmv"
+        COMMENT "Converting Burnout 3 boot media to Android-ready H.264/AAC"
+        VERBATIM)
+    add_custom_target(burnout3_media_import DEPENDS "${_b3_media_manifest}")
+endif()
 # Registered only when there is game data to run it against. Without the
 # argument the test prints its usage and exits non-zero, so registering it
 # unconditionally made the suite permanently red for a missing file rather than
@@ -1742,8 +1900,29 @@ set_tests_properties(burnout3_gameplay_unit_test PROPERTIES
 # 64-bit only and the Xbox mapping must be 4GB-aligned; both are pinned
 # by burnout3_native_env_test and explained in native/README.md.
 set(BURNOUT3_NATIVE_DIR $ENV{HOME}/Burnout3Recomp/src/game/recomp/native)
+set(BURNOUT3_GEN_DIR   $ENV{HOME}/Burnout3Recomp/src/game/recomp/gen)
+set(BURNOUT3_FULLAD_DIR $ENV{HOME}/Burnout3Recomp/src/game/recomp/fullad)
+# B3_FULL_LIFT=ON: replace the hand-promoted per-function subset with the
+# full 22k-function lift in gen/ (monolith chunks + stubs + full dispatch
+# table). The ~45 hand adapters are compiled from fullad/ wrappers that
+# rename them to b3ad_* so the retail symbols stay owned by gen/, and the
+# bridge sources compile with b3ad_rename.h so the manual dispatch list
+# binds the adapters. gen/recomp_dispatch.c provides the strong full-table
+# recomp_lookup that overrides the weak stub in b3_native_runtime.c, so
+# every indirect call resolves with no B3_DISPATCH env.
+option(B3_FULL_LIFT "Build Burnout 3 against the full 22k-function lift" ON)
 if(EXISTS ${BURNOUT3_NATIVE_DIR}/b3_native_env.c)
-    file(GLOB BURNOUT3_NATIVE_FUNCS ${BURNOUT3_NATIVE_DIR}/f_*.c)
+    if(B3_FULL_LIFT AND EXISTS ${BURNOUT3_GEN_DIR}/recomp_dispatch.c)
+        file(GLOB BURNOUT3_GEN_CHUNKS ${BURNOUT3_GEN_DIR}/recomp_00*.c)
+        file(GLOB BURNOUT3_FULLAD_FUNCS ${BURNOUT3_FULLAD_DIR}/f_*.c)
+        set(BURNOUT3_NATIVE_FUNCS
+            ${BURNOUT3_GEN_CHUNKS}
+            ${BURNOUT3_GEN_DIR}/recomp_stubs.c
+            ${BURNOUT3_GEN_DIR}/recomp_dispatch.c
+            ${BURNOUT3_FULLAD_FUNCS})
+    else()
+        file(GLOB BURNOUT3_NATIVE_FUNCS ${BURNOUT3_NATIVE_DIR}/f_*.c)
+    endif()
     add_library(burnout3_native STATIC
         ${BURNOUT3_NATIVE_DIR}/b3_native_env.c
         ${BURNOUT3_NATIVE_DIR}/b3_native_runtime.c
@@ -1755,6 +1934,35 @@ if(EXISTS ${BURNOUT3_NATIVE_DIR}/b3_native_env.c)
     target_compile_options(burnout3_native PRIVATE -w
         "SHELL:-include ${BURNOUT3_NATIVE_DIR}/msvc_compat.h"
         "SHELL:-include ${BURNOUT3_NATIVE_DIR}/b3_decls.h")
+    if(B3_FULL_LIFT AND EXISTS ${BURNOUT3_FULLAD_DIR}/b3ad_rename.h)
+        # Bridge + adapters see the rename map; gen chunks must not (they
+        # own the retail symbols). b3_native_env.c / runtime.c call adapter
+        # entry points directly, so they need the map too.
+        # Source-file (not target) properties, so they apply in every
+        # target these files are compiled into (burnout3_native, the intro
+        # and pixels test executables, the standalone).
+        set_source_files_properties(
+            ${BURNOUT3_NATIVE_DIR}/b3_native_env.c
+            ${BURNOUT3_NATIVE_DIR}/b3_native_runtime.c
+            ${BURNOUT3_NATIVE_DIR}/b3_native_dispatch.c
+            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_backend.cpp
+            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_geometry.cpp
+            ${BURNOUT3_NATIVE_DIR}/b3_dxvk_bindings.c
+            ${BURNOUT3_FULLAD_FUNCS}
+            PROPERTIES COMPILE_FLAGS
+                "-include ${BURNOUT3_FULLAD_DIR}/b3ad_rename.h")
+        # NOTE: the gen chunks must NOT force-include recomp_funcs.h here —
+        # they define RECOMP_GENERATED_CODE before including it themselves,
+        # and a premature include trips the header guard and leaves the
+        # register macros (esp g_esp, etc.) undefined. Declaring the stub
+        # symbols is safe though: the header is a flat decl list.
+        set_source_files_properties(
+            ${BURNOUT3_GEN_CHUNKS}
+            ${BURNOUT3_GEN_DIR}/recomp_stubs.c
+            ${BURNOUT3_GEN_DIR}/recomp_dispatch.c
+            PROPERTIES COMPILE_FLAGS
+                "-include ${BURNOUT3_GEN_DIR}/recomp_stub_decls.h")
+    endif()
     target_include_directories(burnout3_native PUBLIC
         ${BURNOUT3_NATIVE_DIR}
         $ENV{HOME}/Burnout3Recomp/src/game/recomp
@@ -1794,6 +2002,10 @@ if(EXISTS ${BURNOUT3_NATIVE_DIR}/b3_native_env.c)
             burnout3_native ${DXVK_D3D8_LIB} SDL3::SDL3 m pthread ${CMAKE_DL_LIBS})
         add_executable(burnout3_intro_test
             tests/burnout3_intro_test.c
+            # The original XBE imports xboxkrnl ordinals through its thunk
+            # table.  Use the same native bridge as the portable standalone;
+            # leaving raw 0x800000xx values made every kernel call return 0.
+            src/xbox/burnout3_kernel_shim.c
             ${BURNOUT3_NATIVE_DIR}/b3_dxvk_backend.cpp
             ${BURNOUT3_NATIVE_DIR}/b3_dxvk_geometry.cpp
             ${BURNOUT3_NATIVE_DIR}/b3_dxvk_bindings.c
@@ -1817,12 +2029,12 @@ if(EXISTS ${BURNOUT3_NATIVE_DIR}/b3_native_env.c)
         endif()
 
         # FMV playback test — plays an XMV file through the shared
-        # whitty_fmv module without booting the game.  Only built when
+        # manx_fmv module without booting the game.  Only built when
         # ffmpeg is available (same guard as the FMV module itself).
-        if(TARGET whitty_fmv)
+        if(TARGET manx_fmv)
             add_executable(burnout3_fmv_test tests/burnout3_fmv_test.c)
             target_link_libraries(burnout3_fmv_test PRIVATE
-                whitty_fmv SDL3::SDL3)
+                manx_fmv SDL3::SDL3)
         endif()
 
         if(BURNOUT3_TEST_GAME_DATA)
@@ -1838,68 +2050,28 @@ if(EXISTS ${BURNOUT3_NATIVE_DIR}/b3_native_env.c)
         # Same DXVK backend as the intro test, but with a visible SDL3
         # window that displays the read-back frame continuously.
         # Not registered with ctest — interactive; Esc to quit.
-        # Xbox kernel replacement layer (Burnout3Recomp/src/kernel), its
-        # own library so kernel.h's <windows.h> resolves to the kernel
-        # layer's own cross-platform shim (src/kernel/windows.h, which
-        # pulls d3d8_portable.h) instead of DXVK's windows.h — the DXVK
-        # backend headers must keep seeing DXVK's.  The game indirect-calls
-        # through the 147-slot kernel thunk table at 0x36B7C0; b3_env_init
-        # loads it as raw unresolved ordinals (slot 21 = 0x800000A6 =
-        # MmAllocateContiguousMemoryEx), so every kernel call returned 0
-        # and the block cache zeroed garbage into the code section.
-        # xbox_kernel_init()/xbox_kernel_bridge_init() resolve the table,
-        # and kernel_bridge.c's strong recomp_lookup_kernel overrides the
-        # weak stub in b3_native_runtime.c.  LINKED FIRST for that reason:
-        # the strong definition must land before burnout3_native's archive
-        # is scanned, or the weak one in the already-linked runtime object
-        # would win and the standalone would keep calling unresolved
-        # ordinals.
-        if(NOT BURNOUT3_KERNEL_DIR)
-            set(BURNOUT3_KERNEL_DIR "$ENV{HOME}/Burnout3Recomp/src/kernel")
-        endif()
-        add_library(burnout3_kernel_layer STATIC
-            ${BURNOUT3_KERNEL_DIR}/xbox_memory_layout.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_bridge.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_thunks.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_path.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_memory.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_file.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_thread.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_sync.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_hal.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_xbox.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_ob.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_io.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_crypto.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_rtl.c
-            ${BURNOUT3_KERNEL_DIR}/kernel_pool.c)
-        target_include_directories(burnout3_kernel_layer PRIVATE
-            ${BURNOUT3_KERNEL_DIR}
-            ${BURNOUT3_D3D_DIR})
-        target_compile_options(burnout3_kernel_layer PRIVATE -w -O2
-            "SHELL:-include ${BURNOUT3_NATIVE_DIR}/msvc_compat.h")
-        target_compile_definitions(burnout3_kernel_layer PRIVATE
-            _GNU_SOURCE WIN32_LEAN_AND_MEAN)
-
-        add_executable(Burnout3StandaloneDXVK
+        add_executable(Burnout3Standalone
             src/burnout3_dxvk_standalone.c
+            # Keep the exact Linux-native kernel boundary used by the
+            # passing retail-XBE regression. The larger Windows API port is
+            # neither required nor linked into the Burnout 3 runtime.
+            src/xbox/burnout3_kernel_shim.c
             ${BURNOUT3_NATIVE_DIR}/b3_dxvk_backend.cpp
             ${BURNOUT3_NATIVE_DIR}/b3_dxvk_geometry.cpp
             ${BURNOUT3_NATIVE_DIR}/b3_dxvk_bindings.c
             ${BURNOUT3_NATIVE_DIR}/b3_native_dispatch.c)
-        target_include_directories(Burnout3StandaloneDXVK PRIVATE
+        target_include_directories(Burnout3Standalone PRIVATE
             ${DXVK_NATIVE_DIR}/include/native
             ${DXVK_NATIVE_DIR}/include/native/directx
             ${DXVK_NATIVE_DIR}/include/native/windows)
-        target_compile_options(Burnout3StandaloneDXVK PRIVATE -w -rdynamic
+        target_compile_options(Burnout3Standalone PRIVATE -w -rdynamic
             "SHELL:-include ${BURNOUT3_NATIVE_DIR}/msvc_compat.h")
-        target_link_options(Burnout3StandaloneDXVK PRIVATE -rdynamic)
-        target_link_libraries(Burnout3StandaloneDXVK PRIVATE
-            burnout3_kernel_layer burnout3_native ${DXVK_D3D8_LIB}
-            SDL3::SDL3 m pthread ${CMAKE_DL_LIBS})
-        if(TARGET whitty_fmv)
-            target_link_libraries(Burnout3StandaloneDXVK PRIVATE whitty_fmv)
-        endif()
+        target_link_options(Burnout3Standalone PRIVATE -rdynamic)
+        target_link_libraries(Burnout3Standalone PRIVATE
+            burnout3_native ${DXVK_D3D8_LIB}
+            manx_fmv SDL3::SDL3 m pthread ${CMAKE_DL_LIBS})
+        target_compile_definitions(Burnout3Standalone PRIVATE
+            B3_BUILD_MEDIA_DIR="${CMAKE_BINARY_DIR}/generated/burnout3_media")
     endif()
 
     # Pixels: the game's own D3D8 calls forwarded to the Vulkan backend.
@@ -1934,13 +2106,13 @@ if(EXISTS ${BURNOUT3_NATIVE_DIR}/b3_native_env.c)
 endif()
 
 # Burnout 3 menu test — pump-only, no game thread. Boots the real game
-# through the same init sequence Burnout3Standalone uses (XBE load,
+# through the legacy pump init sequence (XBE load,
 # kernel thunks, Vulkan D3D8, texture dictionaries, RenderWare), then
 # pumps game_frame_pump() in a visible SDL3 window. The game's own
 # thread (sub_00156400) is never spawned, so the indirect-call crash
 # after menu reach is avoided entirely.
 add_executable(burnout3_menu_test tests/burnout3_menu_test.c)
-target_link_libraries(burnout3_menu_test PRIVATE burnout3_recomp SDL3::SDL3 ${WHITTY_MATH_LIB})
+target_link_libraries(burnout3_menu_test PRIVATE burnout3_recomp SDL3::SDL3 ${MANX_MATH_LIB})
 
 # Collision: the broad-phase grid over the per-object bounds in
 # streamed.dat, and the wall/ground split by triangle normal. Runs against
@@ -1960,138 +2132,61 @@ set_tests_properties(burnout3_collision_unit_test PROPERTIES
 # docs/burnout3_standalone.md. The renderer's in-game furniture (game
 # picker, ROM identification for the importer path) is what pulls in the
 # catalog and ROM probes below; they are dormant here but must link.
-# The game's own recompiled code (sub_00156400 = WinMain → real frontend menu).
-# Compiled directly into the executable so its strong D3D8 bindings override
-# the weak recording stubs in burnout3_native's runtime.
-set(BURNOUT3_NATIVE_DIR "$ENV{HOME}/Burnout3Recomp/src/game/recomp/native")
-
-add_executable(Burnout3Standalone
-    src/burnout3_standalone_main.cpp
-    src/xbox/burnout3_session.cpp
-    src/xbox/burnout3_bridge.c
-    src/xbox/burnout3_importer.c
-    # Game's own D3D8 bindings (strong, overrides stubs in burnout3_native)
-    ${BURNOUT3_NATIVE_DIR}/b3_native_d3d.c
-    ${BURNOUT3_NATIVE_DIR}/b3_native_dispatch.c
-    src/arcade_video_worker.cpp
-    src/arcade_renderer.cpp
-    src/arcade_presenter.cpp
-    src/arcade_settings.cpp
-    src/arcade_input.cpp
-    src/input_mapping.cpp
-    src/network_video_link.cpp
-    src/bezel_library.cpp
-    src/stb_image_impl.cpp
-    src/rom_library.cpp
-    src/native_title_library.cpp
-    src/arcade_catalog.cpp
-    src/arcade_game_probe.cpp
-    # The renderer decodes Model 2 frames on its present path, so the draw
-    # list builder and the geometry helpers it clips with link even though
-    # this session never submits one.
-    src/sega/model2/model2_draw_list.cpp
-    src/sega/model2/model2_geometry.cpp
-    src/namco/system22/system22_rom.cpp
-    src/system246_rom.cpp
-    src/xbox360_rom.cpp
-    src/sega/model1/model1_rom.cpp
-    src/sega/model2/model2_rom.cpp
-    src/namco/galaxian/galaxian_rom.cpp
-    src/sega/system16b/system16b_rom.cpp
-    src/capcom/gng/gng_rom.cpp
-    src/namco/namco_rom.cpp
-)
-# The game's own recompiled code. Must be after burnout3_recomp in the
-# link order so its strong recomp_lookup_manual (from b3_native_dispatch.c)
-# overrides the weak one, and b3_native_d3d.c overrides XDK stubs.
-# Only links when Burnout3Recomp's native recomp directory exists.
-if(EXISTS "${BURNOUT3_NATIVE_DIR}/b3_native_env.c" AND TARGET burnout3_native)
-    target_link_libraries(Burnout3Standalone PRIVATE burnout3_native)
-    target_compile_options(Burnout3Standalone PRIVATE -w
-        "SHELL:-include ${BURNOUT3_NATIVE_DIR}/msvc_compat.h"
-        "SHELL:-include ${BURNOUT3_NATIVE_DIR}/b3_decls.h")
-else()
-    message(WARNING "burnout3_native not available — the game's own frontend "
-                    "won't run; Burnout3Standalone will boot but show nothing")
-endif()
-add_dependencies(Burnout3Standalone whitty_shaders)
-target_include_directories(Burnout3Standalone PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/third_party/stb
-    ${CMAKE_SOURCE_DIR}/third_party/json
-    ${WHITTY_SHADER_HEADER_DIR}
-    ${BURNOUT3_NATIVE_DIR}
-    $ENV{HOME}/Burnout3Recomp/src/game/recomp
-    $ENV{HOME}/Burnout3Recomp/src/game/recomp/gen)
-target_link_libraries(Burnout3Standalone PRIVATE
-    burnout3_recomp
-    SDL3::SDL3
-    PkgConfig::SDL3_TTF
-    ${OPENGL_LIBRARIES}
-    ${WHITTY_GLEW_TARGET}
-    Vulkan::Vulkan
-    Threads::Threads
-    PkgConfig::MINIZIP
-    ZLIB::ZLIB
-    ${WHITTY_MATH_LIB}
-    ${CMAKE_DL_LIBS}
-)
-target_compile_options(Burnout3Standalone PRIVATE
-    "$<$<COMPILE_LANGUAGE:CXX>:-O2;-Wall;-Wextra;-Wpedantic>"
-)
-target_compile_definitions(Burnout3Standalone PRIVATE _GNU_SOURCE)
+# The handcrafted fe_menu standalone was deleted 2026-08-03: the retail
+# XBE frontend (Burnout3Standalone, src/burnout3_dxvk_standalone.c above)
+# is the only Burnout 3 launch path.
 
 # ===========================================================================
 # System 246/256 board bring-up: embedded PCSX2 core link test (FOUNDATION).
 #
-# Standalone smoke-test executable that proves WhittyArcade can link against
+# Standalone smoke-test executable that proves MANX can link against
 # the prebuilt PCSX2 arcade-fork static libraries and stand the PCSX2 CPU
 # thread up and down headlessly (no game boot, no GS device, no UI/audio).
 #
 # It is compiled and linked directly with clang++ in C++20 -- matching how the
 # PCSX2 libraries themselves were built -- so its ABI matches libpcsx2.a even
-# though the main WhittyArcade tree builds with the default (GCC) compiler.
+# though the main MANX tree builds with the default (GCC) compiler.
 # The include dirs, compile definitions and flags are copied verbatim from how
 # PCSX2 compiles its own core (pcsx2/VMManager.cpp) so the arcade-fork headers
 # parse identically here.
 #
-# Kept entirely separate from the main WhittyArcade binary and NOT part of the
+# Kept entirely separate from the main MANX binary and NOT part of the
 # default (ALL) build, so a PCSX2 link failure cannot break the rest of the
 # tree. Build explicitly with:
 #     cmake --build build --target system246_pcsx2_link_test
 #
 # PCSX2 has no ARM backend, so the target only exists on x86-64.
 # ===========================================================================
-set(WHITTY_PCSX2_SRC_ROOT "/home/jon/pcsx2x6" CACHE PATH
+set(MANX_PCSX2_SRC_ROOT "/home/jon/pcsx2x6" CACHE PATH
     "PCSX2 arcade-fork source tree used by the System 246 link test")
-set(WHITTY_PCSX2_BUILD_ROOT "/home/jon/pcsx2x6/build" CACHE PATH
+set(MANX_PCSX2_BUILD_ROOT "/home/jon/pcsx2x6/build" CACHE PATH
     "PCSX2 arcade-fork build tree containing the prebuilt static libraries")
 
 # Set TRUE once the real PCSX2-backed System 246 session (the dlopen client that
-# drives libsystem246_pcsx2.so) is compiled into WhittyArcade and the .so is
+# drives libsystem246_pcsx2.so) is compiled into MANX and the .so is
 # built; a stub make_system246_session is added otherwise.
-set(WHITTY_SYSTEM246_PCSX2_LINKED FALSE)
+set(MANX_SYSTEM246_PCSX2_LINKED FALSE)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
-    find_program(WHITTY_PCSX2_CLANGXX NAMES clang++ clang++-22 clang++-20)
-    if(NOT WHITTY_PCSX2_CLANGXX)
+    find_program(MANX_PCSX2_CLANGXX NAMES clang++ clang++-22 clang++-20)
+    if(NOT MANX_PCSX2_CLANGXX)
         message(STATUS
             "system246_pcsx2_link_test: clang++ not found; PCSX2 link test disabled")
-    elseif(NOT EXISTS "${WHITTY_PCSX2_BUILD_ROOT}/pcsx2/libpcsx2.a")
+    elseif(NOT EXISTS "${MANX_PCSX2_BUILD_ROOT}/pcsx2/libpcsx2.a")
         message(STATUS
-            "system246_pcsx2_link_test: ${WHITTY_PCSX2_BUILD_ROOT}/pcsx2/libpcsx2.a "
+            "system246_pcsx2_link_test: ${MANX_PCSX2_BUILD_ROOT}/pcsx2/libpcsx2.a "
             "not found; PCSX2 link test disabled")
     else()
-        set(_p2s "${WHITTY_PCSX2_SRC_ROOT}")
-        set(_p2b "${WHITTY_PCSX2_BUILD_ROOT}")
+        set(_p2s "${MANX_PCSX2_SRC_ROOT}")
+        set(_p2b "${MANX_PCSX2_BUILD_ROOT}")
 
-        set(WHITTY_PCSX2_SOURCES
+        set(MANX_PCSX2_SOURCES
             "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_host.cpp"
             "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_link_test.cpp")
 
         # Compile flags copied from PCSX2's own core build (minus the PCH, which
         # we reproduce by #include "pcsx2/PrecompiledHeader.h" in the sources).
-        set(WHITTY_PCSX2_FLAGS
+        set(MANX_PCSX2_FLAGS
             -DFMT_USE_EXCEPTIONS=0 -DFMT_USE_RTTI=0
             -O3 -DNDEBUG -std=gnu++20 -fPIC -march=native -pipe
             -fvisibility=hidden -pthread -fno-exceptions -g1
@@ -2100,7 +2195,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
             -Wno-missing-braces -Wno-unknown-pragmas)
 
         # Compile definitions copied verbatim from the PCSX2 core build.
-        set(WHITTY_PCSX2_DEFINES
+        set(MANX_PCSX2_DEFINES
             -DCPUINFO_SUPPORTED_PLATFORM=1 -DENABLE_OPENGL -DENABLE_VULKAN
             -DHAVE_DECL_BASENAME=1 -DHAVE_LIMITS_H=1 -DHAVE_STDLIB_H=1
             -DHAVE_STRING_H=1 -DPLUTOSVG_HAS_FREETYPE
@@ -2110,7 +2205,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
             -D_M_X86=1 -D__POSIX__)
 
         # Include dirs copied verbatim from the PCSX2 core build.
-        set(WHITTY_PCSX2_INCLUDES
+        set(MANX_PCSX2_INCLUDES
             -I${_p2s}/3rdparty/xbyak
             -I${_p2s}/pcsx2
             -I${_p2b}/pcsx2
@@ -2144,7 +2239,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
 
         # Prebuilt PCSX2 static libraries. Wrapped in --start-group/--end-group
         # to resolve their circular dependencies.
-        set(WHITTY_PCSX2_STATIC_LIBS
+        set(MANX_PCSX2_STATIC_LIBS
             ${_p2b}/pcsx2/libpcsx2.a
             ${_p2b}/common/libcommon.a
             ${_p2b}/3rdparty/ccc/libccc.a
@@ -2165,7 +2260,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
             ${_p2b}/3rdparty/zydis/libzydis.a)
 
         # System libraries PCSX2 depends on (matches the fork's gsrunner link).
-        set(WHITTY_PCSX2_SYSTEM_LIBS
+        set(MANX_PCSX2_SYSTEM_LIBS
             -ldl -lbacktrace -lcurl -ldbus-1 -lfontconfig -lfreetype -lGLX
             -ljpeg -llz4 -lOpenGL -lpcap -lpng -ludev -lwebp -lX11 -lXext -lXi
             -lxkbcommon -lXrandr -lXrender -lz -lzstd -lpthread -lSDL3
@@ -2175,53 +2270,54 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
         # Isolated PCSX2 module: libsystem246_pcsx2.so (dlopen'd at runtime).
         #
         # The PCSX2 arcade core bundles its own glad GL loader plus a raft of
-        # static initialisers that collide with WhittyArcade's GLEW-based
+        # static initialisers that collide with MANX's GLEW-based
         # OpenGL renderer when both live in one binary (this hung
         # polygon_renderer_gpu::initialize at startup for EVERY game). So NO
-        # PCSX2 symbol is linked into WhittyArcade. Instead the code is split:
+        # PCSX2 symbol is linked into MANX. Instead the code is split:
         #
         #   * system246_pcsx2_session.cpp is a plain GCC/C++17 dlopen client
-        #     compiled straight into WhittyArcade. It includes no PCSX2 header
+        #     compiled straight into MANX. It includes no PCSX2 header
         #     -- only <dlfcn.h> and the flat C ABI in pcsx2_module.h.
         #   * pcsx2_module.cpp + pcsx2_host.cpp (the only files that touch
         #     PCSX2) are compiled and linked with clang++ (matching the ABI
         #     libpcsx2.a was built with) into libsystem246_pcsx2.so, next to
-        #     the WhittyArcade binary. WhittyArcade dlopen()s it at run time and
+        #     the MANX binary. MANX dlopen()s it at run time and
         #     drives Ridge Racer V purely through the four wa_pcsx2_* exports.
         #
-        # Because WhittyArcade only sees the C ABI, it reverts cleanly to GCC
+        # Because MANX only sees the C ABI, it reverts cleanly to GCC
         # and carries zero PCSX2 / glad symbols.
-        target_sources(WhittyArcade PRIVATE
+        target_sources(MANX PRIVATE
             "${CMAKE_SOURCE_DIR}/src/system246/system246_pcsx2_session.cpp"
             "${CMAKE_SOURCE_DIR}/src/system246/system246_loading_screen.cpp")
 
-        set(WHITTY_PCSX2_MODULE_SOURCES
+        set(MANX_PCSX2_MODULE_SOURCES
             "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_module.cpp"
             "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_host.cpp")
 
-        set(WHITTY_PCSX2_MODULE_SO
+        set(MANX_PCSX2_MODULE_SO
             "${CMAKE_BINARY_DIR}/libsystem246_pcsx2.so")
 
         # Single-shot clang++ compile+link into the shared object (same recipe
         # as the link-test/boot harnesses, plus -shared). Every PCSX2 static
         # lib is position-independent (POSITION_INDEPENDENT_CODE=ON in the
         # arcade build), so they link cleanly into a .so. Our own module sources
-        # additionally need the WhittyArcade headers.
+        # additionally need the MANX headers.
         add_custom_command(
-            OUTPUT "${WHITTY_PCSX2_MODULE_SO}"
-            COMMAND "${WHITTY_PCSX2_CLANGXX}"
+            OUTPUT "${MANX_PCSX2_MODULE_SO}"
+            COMMAND "${MANX_PCSX2_CLANGXX}"
                 -shared -fPIC
-                ${WHITTY_PCSX2_FLAGS}
-                ${WHITTY_PCSX2_DEFINES}
-                ${WHITTY_PCSX2_INCLUDES}
+                ${MANX_PCSX2_FLAGS}
+                ${MANX_PCSX2_DEFINES}
+                ${MANX_PCSX2_INCLUDES}
                 -I${CMAKE_SOURCE_DIR}/include
                 -I${CMAKE_SOURCE_DIR}/src
                 -I${CMAKE_SOURCE_DIR}/src/system246
-                ${WHITTY_PCSX2_MODULE_SOURCES}
-                -o "${WHITTY_PCSX2_MODULE_SO}"
-                -Wl,--start-group ${WHITTY_PCSX2_STATIC_LIBS} -Wl,--end-group
-                ${WHITTY_PCSX2_SYSTEM_LIBS}
-            DEPENDS ${WHITTY_PCSX2_MODULE_SOURCES}
+                ${MANX_PCSX2_MODULE_SOURCES}
+                -o "${MANX_PCSX2_MODULE_SO}"
+                -Wl,--start-group ${MANX_PCSX2_STATIC_LIBS} -Wl,--end-group
+                ${MANX_PCSX2_SYSTEM_LIBS}
+            DEPENDS ${MANX_PCSX2_MODULE_SOURCES}
+                "${CMAKE_SOURCE_DIR}/include/audio_impact_detector.h"
                 "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_module.h"
                 "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_host.h"
                 "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_input.h"
@@ -2229,28 +2325,28 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
             COMMENT "Linking libsystem246_pcsx2.so (isolated PCSX2 module) with clang++"
             VERBATIM)
 
-        # Part of the default (ALL) build; WhittyArcade dlopen()s it, so also
+        # Part of the default (ALL) build; MANX dlopen()s it, so also
         # order it before the binary is considered done.
         add_custom_target(system246_pcsx2_module ALL
-            DEPENDS "${WHITTY_PCSX2_MODULE_SO}")
-        add_dependencies(WhittyArcade system246_pcsx2_module)
+            DEPENDS "${MANX_PCSX2_MODULE_SO}")
+        add_dependencies(MANX system246_pcsx2_module)
 
-        set(WHITTY_SYSTEM246_PCSX2_LINKED TRUE)
+        set(MANX_SYSTEM246_PCSX2_LINKED TRUE)
 
-        set(WHITTY_PCSX2_LINK_TEST_BIN
+        set(MANX_PCSX2_LINK_TEST_BIN
             "${CMAKE_BINARY_DIR}/system246_pcsx2_link_test")
 
         add_custom_command(
-            OUTPUT "${WHITTY_PCSX2_LINK_TEST_BIN}"
-            COMMAND "${WHITTY_PCSX2_CLANGXX}"
-                ${WHITTY_PCSX2_FLAGS}
-                ${WHITTY_PCSX2_DEFINES}
-                ${WHITTY_PCSX2_INCLUDES}
-                ${WHITTY_PCSX2_SOURCES}
-                -o "${WHITTY_PCSX2_LINK_TEST_BIN}"
-                -Wl,--start-group ${WHITTY_PCSX2_STATIC_LIBS} -Wl,--end-group
-                ${WHITTY_PCSX2_SYSTEM_LIBS}
-            DEPENDS ${WHITTY_PCSX2_SOURCES}
+            OUTPUT "${MANX_PCSX2_LINK_TEST_BIN}"
+            COMMAND "${MANX_PCSX2_CLANGXX}"
+                ${MANX_PCSX2_FLAGS}
+                ${MANX_PCSX2_DEFINES}
+                ${MANX_PCSX2_INCLUDES}
+                ${MANX_PCSX2_SOURCES}
+                -o "${MANX_PCSX2_LINK_TEST_BIN}"
+                -Wl,--start-group ${MANX_PCSX2_STATIC_LIBS} -Wl,--end-group
+                ${MANX_PCSX2_SYSTEM_LIBS}
+            DEPENDS ${MANX_PCSX2_SOURCES}
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
             COMMENT "Linking system246_pcsx2_link_test against prebuilt PCSX2 static libraries"
             VERBATIM)
@@ -2261,43 +2357,43 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
         # plus SDL3, that boots Ridge Racer V Arcade Battle in-process into a
         # real Vulkan window with cubeb audio. Compiles pcsx2_boot_rrv.cpp +
         # pcsx2_host.cpp and reuses the same flags/defines/includes/static-lib
-        # group; SDL3 libs are already in WHITTY_PCSX2_SYSTEM_LIBS (-lSDL3).
+        # group; SDL3 libs are already in MANX_PCSX2_SYSTEM_LIBS (-lSDL3).
         #
         # Like the link test it is x86-64 only and kept OUT of the default
         # (ALL) build. Build explicitly with:
         #     cmake --build build --target system246_pcsx2_boot_rrv
         # -------------------------------------------------------------------
-        set(WHITTY_PCSX2_BOOT_RRV_SOURCES
+        set(MANX_PCSX2_BOOT_RRV_SOURCES
             "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_host.cpp"
             "${CMAKE_SOURCE_DIR}/src/system246/pcsx2_boot_rrv.cpp")
 
         # SDL3 compile flags (headers). The link libs come from -lSDL3 already
-        # present in WHITTY_PCSX2_SYSTEM_LIBS.
+        # present in MANX_PCSX2_SYSTEM_LIBS.
         execute_process(
             COMMAND pkg-config --cflags sdl3
-            OUTPUT_VARIABLE WHITTY_SDL3_CFLAGS
+            OUTPUT_VARIABLE MANX_SDL3_CFLAGS
             OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE WHITTY_SDL3_PKGCONFIG_RESULT)
-        if(NOT WHITTY_SDL3_PKGCONFIG_RESULT EQUAL 0)
-            set(WHITTY_SDL3_CFLAGS "")
+            RESULT_VARIABLE MANX_SDL3_PKGCONFIG_RESULT)
+        if(NOT MANX_SDL3_PKGCONFIG_RESULT EQUAL 0)
+            set(MANX_SDL3_CFLAGS "")
         endif()
-        separate_arguments(WHITTY_SDL3_CFLAGS_LIST NATIVE_COMMAND "${WHITTY_SDL3_CFLAGS}")
+        separate_arguments(MANX_SDL3_CFLAGS_LIST NATIVE_COMMAND "${MANX_SDL3_CFLAGS}")
 
-        set(WHITTY_PCSX2_BOOT_RRV_BIN
+        set(MANX_PCSX2_BOOT_RRV_BIN
             "${CMAKE_BINARY_DIR}/system246_pcsx2_boot_rrv")
 
         add_custom_command(
-            OUTPUT "${WHITTY_PCSX2_BOOT_RRV_BIN}"
-            COMMAND "${WHITTY_PCSX2_CLANGXX}"
-                ${WHITTY_PCSX2_FLAGS}
-                ${WHITTY_PCSX2_DEFINES}
-                ${WHITTY_PCSX2_INCLUDES}
-                ${WHITTY_SDL3_CFLAGS_LIST}
-                ${WHITTY_PCSX2_BOOT_RRV_SOURCES}
-                -o "${WHITTY_PCSX2_BOOT_RRV_BIN}"
-                -Wl,--start-group ${WHITTY_PCSX2_STATIC_LIBS} -Wl,--end-group
-                ${WHITTY_PCSX2_SYSTEM_LIBS}
-            DEPENDS ${WHITTY_PCSX2_BOOT_RRV_SOURCES}
+            OUTPUT "${MANX_PCSX2_BOOT_RRV_BIN}"
+            COMMAND "${MANX_PCSX2_CLANGXX}"
+                ${MANX_PCSX2_FLAGS}
+                ${MANX_PCSX2_DEFINES}
+                ${MANX_PCSX2_INCLUDES}
+                ${MANX_SDL3_CFLAGS_LIST}
+                ${MANX_PCSX2_BOOT_RRV_SOURCES}
+                -o "${MANX_PCSX2_BOOT_RRV_BIN}"
+                -Wl,--start-group ${MANX_PCSX2_STATIC_LIBS} -Wl,--end-group
+                ${MANX_PCSX2_SYSTEM_LIBS}
+            DEPENDS ${MANX_PCSX2_BOOT_RRV_SOURCES}
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
             COMMENT "Linking system246_pcsx2_boot_rrv (RRV in-process boot) against prebuilt PCSX2 static libraries + SDL3"
             VERBATIM)
@@ -2308,15 +2404,15 @@ endif()
 # On any target where the embedded PCSX2 core was not linked (non-x86-64, no
 # clang, or the prebuilt libpcsx2 is absent), provide a stub
 # make_system246_session so the board stays wired into the catalog/factory and
-# WhittyArcade still links.
-if(NOT WHITTY_SYSTEM246_PCSX2_LINKED)
-    target_sources(WhittyArcade PRIVATE
+# MANX still links.
+if(NOT MANX_SYSTEM246_PCSX2_LINKED)
+    target_sources(MANX PRIVATE
         ${CMAKE_SOURCE_DIR}/src/system246/system246_pcsx2_session_stub.cpp)
     # The factory test asks every board to build a session. Without the core
     # this one cannot, and the test has to know the difference between a board
     # this build left out and a board that is broken.
-    target_compile_definitions(WhittyArcade PRIVATE
-        WHITTY_SYSTEM246_STUBBED=1)
+    target_compile_definitions(MANX PRIVATE
+        MANX_SYSTEM246_STUBBED=1)
 endif()
 
 add_executable(title_frame_dump
@@ -2327,6 +2423,7 @@ add_executable(title_frame_dump
     src/namco/galaxian/galaxian_machine_phoenix.cpp
     src/namco/galaga/galaga_machine.cpp
     src/namco/system1/system1_machine.cpp
+    src/namco/system1/pacmania_feedback.cpp
     src/namco/namco_rom.cpp
     src/high_scores.cpp)
 target_include_directories(title_frame_dump PRIVATE
@@ -2339,6 +2436,118 @@ target_link_libraries(title_frame_dump PRIVATE
     chips_z80 m6809f namcos1_core ymfm PkgConfig::MINIZIP ZLIB::ZLIB)
 target_compile_options(title_frame_dump PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
+
+add_executable(namco_system1_start_test
+    tests/namco_system1_start_test.cpp
+    src/namco/system1/system1_ym2151.cpp
+    src/namco/system1/system1_machine.cpp
+    src/namco/system1/pacmania_feedback.cpp
+    src/namco/namco_rom.cpp)
+target_include_directories(namco_system1_start_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(namco_system1_start_test SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/namcos1
+    ${CMAKE_SOURCE_DIR}/third_party/ymfm/src)
+target_link_libraries(namco_system1_start_test PRIVATE
+    m6809f namcos1_core ymfm Threads::Threads PkgConfig::MINIZIP ZLIB::ZLIB)
+target_compile_options(namco_system1_start_test PRIVATE
+    -Wall -Wextra -Wpedantic -UNDEBUG)
+
+# FlatOut 1 — first boot test (XBE loader + kernel thunk init only).
+# Verifies the 64 MB memory map, 145 thunks at 0x00273BC0, and the ordinal
+# mapping before any game thread or D3D8 backend is attempted.
+add_executable(FlatOut1FirstBoot
+    src/xbox/flatout1_first_boot.c
+    src/xbox/flatout1_kernel_shim.c
+)
+target_include_directories(FlatOut1FirstBoot PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(FlatOut1FirstBoot PRIVATE
+    Threads::Threads ${CMAKE_DL_LIBS})
+target_compile_options(FlatOut1FirstBoot PRIVATE
+    -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
+
+# FlatOut 1 — D3D8/Vulkan infrastructure diagnostic.
+# Probes the D3D/D3DX sections, initialises the Vulkan D3D8 backend
+# (vulkan_d3d8.c from Burnout3Recomp), and catalogues exactly which
+# D3D/D3DX functions FlatOut 1 needs for native rendering.
+#
+# Compiles vulkan_d3d8.c independently (not via burnout3_recomp) so
+# there are no symbol clashes with the Burnout 3 kernel shim.
+set(BURNOUT3_D3D_DIR "$ENV{HOME}/Burnout3Recomp/src/d3d")
+add_executable(FlatOut1D3DProbe
+    src/xbox/flatout1_game_native.c
+    src/xbox/flatout1_kernel_shim.c
+    ${BURNOUT3_D3D_DIR}/vulkan_d3d8.c
+)
+target_include_directories(FlatOut1D3DProbe PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${BURNOUT3_D3D_DIR}
+)
+target_compile_definitions(FlatOut1D3DProbe PRIVATE
+    D3D8_USE_PORTABLE
+    _GNU_SOURCE
+)
+find_library(SHADERC_LIB shaderc_shared)
+if(SHADERC_LIB)
+    target_link_libraries(FlatOut1D3DProbe PRIVATE ${SHADERC_LIB})
+endif()
+target_link_libraries(FlatOut1D3DProbe PRIVATE
+    Vulkan::Vulkan
+    ${CMAKE_DL_LIBS}
+)
+target_compile_options(FlatOut1D3DProbe PRIVATE
+    -O2 -Wall -Wextra -Wpedantic -UNDEBUG -Wno-unused-function)
+
+# FlatOut 1 — BFS archive diagnostic tool.
+# Lists contents by type (DDS, FSB, Lua, etc.), extracts sample files.
+add_executable(FlatOut1BFSTest
+    tools/flatout1_bfs_test.c
+    src/xbox/flatout1_bfs_vfs.c
+)
+target_include_directories(FlatOut1BFSTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/xbox
+)
+target_link_libraries(FlatOut1BFSTest PRIVATE
+    ZLIB::ZLIB
+)
+target_compile_options(FlatOut1BFSTest PRIVATE
+    -O2 -Wall -Wextra -Wpedantic -UNDEBUG)
+
+# FlatOut 1 — Boot visualiser.
+# Loads boot-screen textures from flatout.bfs and renders them in
+# an SDL3 window.  Proves the asset pipeline without running game code.
+add_executable(FlatOut1Boot
+    tools/flatout1_boot.c
+    src/xbox/flatout1_bfs_vfs.c
+    src/xbox/flatout1_kernel_shim.c
+)
+target_include_directories(FlatOut1Boot PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/xbox
+)
+target_link_libraries(FlatOut1Boot PRIVATE
+    SDL3::SDL3
+    ZLIB::ZLIB
+)
+target_compile_options(FlatOut1Boot PRIVATE
+    -O2 -Wall -Wextra -Wpedantic -UNDEBUG -Wno-unused-function)
+
+add_executable(FlatOut1CRTTest
+    tools/flatout1_crt_test.c
+    src/xbox/flatout1_kernel_shim.c
+    src/xbox/flatout1_bfs_vfs.c
+)
+target_include_directories(FlatOut1CRTTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/xbox
+)
+target_link_libraries(FlatOut1CRTTest PRIVATE
+    ZLIB::ZLIB
+)
+target_compile_options(FlatOut1CRTTest PRIVATE
+    -O2 -Wall -Wextra -Wpedantic -UNDEBUG -Wno-unused-function)
 
 # Asserts must survive in every test, including Release.
 #
@@ -2358,8 +2567,8 @@ target_compile_options(title_frame_dump PRIVATE
 # are, today), and others register only when an optional ROM is present. Those
 # are exactly the ones nobody is watching, so they are the last ones that should
 # quietly lose their asserts.
-get_property(_whitty_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
-foreach(_target IN LISTS _whitty_targets)
+get_property(_manx_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_target IN LISTS _manx_targets)
     if(_target MATCHES "_test$")
         # Custom and utility targets carry the same suffix but cannot take
         # compile options, so ask what this actually is before setting any.

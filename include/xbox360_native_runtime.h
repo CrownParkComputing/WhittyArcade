@@ -1,8 +1,8 @@
 // Launching a natively recompiled Xbox 360 title.
 //
-// Geometry Wars is not emulated by WhittyArcade: it is a native port, a real
-// executable produced by the whitty_xenon runtime that owns its own Vulkan
-// window, its own pad and its own audio device. WhittyArcade's job for such a
+// Geometry Wars is not emulated by MANX: it is a native port, a real
+// executable produced by the manx_xenon runtime that owns its own Vulkan
+// window, its own pad and its own audio device. MANX's job for such a
 // title is the launcher's job - find the binary, hand it the game, and know when
 // the player has finished with it.
 //
@@ -57,7 +57,7 @@ struct xbox360_native_launch {
     // involved, so a path containing spaces stays a single argument.
     std::vector<std::string> arguments;
     // Variables to set in the child. Only those the parent has not already
-    // set, so a value exported before WhittyArcade started still wins.
+    // set, so a value exported before MANX started still wins.
     std::vector<std::pair<std::string, std::string>> environment;
     std::string error;
 
@@ -68,14 +68,20 @@ struct xbox360_native_launch {
 
 // Where the runtime for a title is looked for, most specific first. Exposed so
 // a failure can name every path that was tried.
+// `preferred_binary` is a runtime the caller already knows about - a converted
+// title records its own - and is tried after an explicit override but before
+// any build tree. Passed in rather than looked up so this stays independent of
+// the catalogue: the launch planner should not need to know what a catalogue is.
 std::vector<std::string> xbox360_native_runtime_candidates(
-    const std::string& short_name);
+    const std::string& short_name,
+    const std::string& preferred_binary = {});
 
 // Resolves the runtime binary and composes the command line and environment the
 // title needs. `error` is set, and `binary` left empty, when no runtime is
 // installed for the title.
 xbox360_native_launch plan_xbox360_native_launch(
-    const std::string& short_name, const xbox360_native_content& content);
+    const std::string& short_name, const xbox360_native_content& content,
+    const std::string& preferred_binary = {});
 
 // A launched title. Owns the child process: destroying this stops the game.
 class xbox360_native_process {

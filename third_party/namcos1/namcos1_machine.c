@@ -27,10 +27,14 @@ extern void g88_ym2151_write_addr(uint8_t v);
 extern void g88_ym2151_write_data(uint8_t v);
 extern uint8_t g88_ym2151_read_status(void);
 extern int g88_ym2151_irq_active(void);
+extern void g88_ym2151_advance_cpu_cycles(unsigned cycles);
 
 #define CYCLES_PER_FRAME 25344   /* 1.536 MHz / 60.606 Hz */
 #define SLICE 40                 /* 38400 Hz quantum       */
 #define MCU_MULT 4               /* 6.144 MHz / 1.536 MHz  */
+#define SCANLINES_PER_FRAME 264
+#define VBLANK_LINES 40          /* lines 240-263 plus 0-15 */
+#define VBLANK_CYCLES ((CYCLES_PER_FRAME * VBLANK_LINES) / SCANLINES_PER_FRAME)
 
 /* =============== regions (assembled by g88_load) =============== */
 static uint8_t mainrom[0x400000];   /* 4 MB program ROM image        */
@@ -76,6 +80,7 @@ static uint8_t mcu_patch_data;
 static mc6809__t main, sub, audio;
 static m6801_t   mcu;
 static int fault_code, flip_screen, copy_armed;
+static int mcu_irq_pending;
 
 /* =============== inputs (active-low) =============== */
 static uint8_t p1_port = 0xff, p2_port = 0xff, coin_port = 0xff, dipsw = 0xff;
@@ -192,7 +197,9 @@ static void register_w(int cpu, uint16_t a, uint8_t v)
                      * banks (main sets sub bank7 via reg 14 before releasing) -- mirrors
                      * MAME subres_cb(CLEAR_LINE) pulsing INPUT_LINE_RESET. */
                      mc6809_reset(&sub); mc6809_reset(&audio); m6801_reset(&mcu);
-                     sub.cycles = main.cycles; audio.cycles = main.cycles; mcu.cycles = main.cycles;
+                     sub.cycles = main.cycles;
+                     audio.cycles = main.cycles;
+                     mcu.cycles = main.cycles * MCU_MULT;
                  }
                  prev_subres = subres; } break;          /* SUBRES (main only) */
         case 9:  wdog |= (1 << cpu); break;                    /* watchdog kick */
@@ -306,7 +313,11 @@ static void mwr(m6801_t *c, uint16_t a, uint8_t v)
     if (a >= 0xc800 && a <= 0xcfff) { nvram[a - 0xc800] = v; return; }
     if (a == 0xd000 || a == 0xd400) return;   /* DAC data (host: ignored) */
     if (a == 0xd800) { mcu_bankswitch(v); return; }
-    if (a == 0xf000) { mcu.irq1 = false; return; }   /* MCU IRQ ack */
+    if (a == 0xf000) {
+        mcu.irq1 = false;
+        mcu_irq_pending = 0;
+        return;
+    }   /* MCU IRQ ack */
 }
 
 /* =============== vblank =============== */
@@ -328,7 +339,7 @@ static void vblank_rising(void)
 static void vblank_falling(void)
 {
     audio.irq = true;
-    mcu.irq1  = true;
+    mcu_irq_pending = 1;
 }
 
 /* =============== public API =============== */
@@ -398,6 +409,10 @@ void g88_load(const uint8_t *p0,const uint8_t *p1,const uint8_t *p5,
     memcpy(sprrom + 0x60000, obj3, 0x20000);
     memcpy(sprrom + 0x80000, obj4, 0x20000);
     memcpy(sprrom + 0xa0000, obj5, 0x20000);
+    /* MAME init_galaga88: key_type_2_init(0x31). Pac-Mania's loader sets
+     * 0x12 instead, so this must be set per game rather than left at the
+     * static default. */
+    key_id = 0x31;
     (void)key;
 }
 
@@ -462,6 +477,7 @@ void g88_reset(void)
     key_quotient = key_reminder = key_numhi = 0;
     memset(key, 0, sizeof key);
     mcu_patch_data = 0; fault_code = 0; flip_screen = 0; copy_armed = 0;
+    mcu_irq_pending = 0;
     g88_ym2151_reset();
     memset(c116_regs, 0, sizeof c116_regs);
 
@@ -475,24 +491,54 @@ void g88_reset(void)
 
 void g88_run_frame(void)
 {
-    unsigned long target = main.cycles + CYCLES_PER_FRAME;
+    unsigned long frame_start = main.cycles;
+    unsigned long target = frame_start + CYCLES_PER_FRAME;
+    unsigned long vblank_fall = frame_start + VBLANK_CYCLES;
+    int vblank_is_high = 1;
     vblank_rising();
     while (main.cycles < target && !fault_code) {
         unsigned long ms = main.cycles + SLICE;
         while (main.cycles < ms && !fault_code) { if (mc6809_step(&main)) break; }
         if (subres) {
             while (sub.cycles  < ms && !fault_code) { if (mc6809_step(&sub))  break; }
+            unsigned long audio_before = audio.cycles;
             while (audio.cycles < ms && !fault_code){
-                if (g88_ym2151_irq_active()) audio.firq = true;
+                // YM2151 IRQ is a level-driven connection to the audio
+                // 6809's FIRQ line. It must deassert when the chip clears its
+                // timer status; latching only the asserted edge causes an
+                // endless FIRQ storm after the first music timer event.
+                audio.firq = g88_ym2151_irq_active() != 0;
                 if (mc6809_step(&audio))break;
             }
-            if (g88_ym2151_irq_active()) audio.firq = true;
-            unsigned long es = mcu.cycles + MCU_MULT * SLICE;
-            while (mcu.cycles < es && !mcu.trap_op) m6801_step(&mcu);
+            g88_ym2151_advance_cpu_cycles(
+                (unsigned)(audio.cycles - audio_before));
+            audio.firq = g88_ym2151_irq_active() != 0;
+            // All CPUs share the 49.152 MHz board crystal. Anchor the MCU's
+            // 4x clock to the same slice boundary as the 6809s so vblank IRQs
+            // land at the hardware phase, including around the external-ROM
+            // bank-switch trampoline used by Pac-Mania's voice MCU code.
+            unsigned long es = ms * MCU_MULT;
+            while (mcu.cycles < es && !mcu.trap_op) {
+                /* The shared CUS64 firmware switches back to external ROM in
+                 * F5CE-F5D5. Its IRQ prologue cannot preserve that bank if an
+                 * interrupt is accepted inside this seven-instruction
+                 * trampoline. Real System-1 video/MCU clocks are phase-locked;
+                 * our instruction-granular scheduler keeps the level pending
+                 * until the RTS has restored external execution. */
+                const int bank_trampoline =
+                    mcu.pc >= 0xf5ce && mcu.pc <= 0xf5d5;
+                mcu.inhibit_interrupts = bank_trampoline != 0;
+                mcu.irq1 = mcu_irq_pending && !bank_trampoline;
+                m6801_step(&mcu);
+            }
             if (mcu.trap_op) break;
         }
+        if (vblank_is_high && main.cycles >= vblank_fall) {
+            vblank_falling();
+            vblank_is_high = 0;
+        }
     }
-    if (subres) vblank_falling();
+    if (subres && vblank_is_high) vblank_falling();
 }
 
 /* ---- video state accessors ---- */

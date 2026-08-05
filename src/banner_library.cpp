@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <thread>
 
-#if defined(WHITTY_HAVE_CURL)
+#if defined(MANX_HAVE_CURL)
 #include <curl/curl.h>
 #endif
 
@@ -25,8 +25,8 @@ namespace banner {
 namespace {
 
 fs::path banner_root() {
-    const fs::path root = whitty_platform::data_root();
-    return (root.empty() ? fs::current_path() : root) / "WhittyArcade" /
+    const fs::path root = manx_platform::data_root();
+    return (root.empty() ? fs::current_path() : root) / "MANX" /
            "artwork" / "banners";
 }
 
@@ -54,7 +54,7 @@ std::string url_encode(const std::string& text) {
     return out;
 }
 
-#if defined(WHITTY_HAVE_CURL)
+#if defined(MANX_HAVE_CURL)
 std::size_t collect(char* data, std::size_t size, std::size_t count,
                     void* sink) {
     static_cast<std::string*>(sink)->append(data, size * count);
@@ -68,7 +68,7 @@ std::string fetch(const std::string& url) {
     curl_easy_setopt(handle, CURLOPT_URL, url.c_str());
     curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(handle, CURLOPT_USERAGENT,
-                     "WhittyArcade (arcade cabinet frontend)");
+                     "MANX (Multiscreen Arcade Nexus)");
     curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 5L);
     curl_easy_setopt(handle, CURLOPT_TIMEOUT, 20L);
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, collect);
@@ -229,7 +229,7 @@ library::~library() = default;
 
 void library::request(const std::string& key, kind source,
                       const std::string& title) {
-#if !defined(WHITTY_HAVE_CURL)
+#if !defined(MANX_HAVE_CURL)
     (void)key; (void)source; (void)title;
     return;
 #else

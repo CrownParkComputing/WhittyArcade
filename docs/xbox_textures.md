@@ -1,5 +1,5 @@
 # Original-Xbox textures (MANX)
-`include/whitty_xbox_texture.h` + `src/xbox_texture/whitty_xbox_texture.c`
+`include/manx_xbox_texture.h` + `src/xbox_texture/manx_xbox_texture.c`
 decode original-Xbox (NV2A) texture data into bytes that upload straight
 into a Vulkan image. It is a framework module: every original-Xbox title
 stores its art in the same handful of NV2A surface formats, so a port
@@ -46,7 +46,7 @@ follow nv2a-trace; the XDK's own spelling is given where it differs.
 Codes 0x10 and up are the linear (row-major) aliases of the swizzled
 codes below them: same pixels, same packing, different memory order.
 Anything not in the table — the YUV, bump-map and depth/stencil codes —
-is rejected by `whitty_xbox_texture_describe()`.
+is rejected by `manx_xbox_texture_describe()`.
 
 Everything that is not block-compressed decodes to `B8G8R8A8_UNORM`
 rather than a packed 16-bit Vulkan format. `VK_FORMAT_A4R4G4B4_*` needs
@@ -83,7 +83,7 @@ offset = [x7 x6] [y5 x5 y4 x4 y3 x3 y2 x2 y1 x1 y0 x0]
 ```
 
 A plain square Morton decode therefore scrambles non-square art into
-stripes. `whitty_xbox_texture_decode()` implements the rule as a gather
+stripes. `manx_xbox_texture_decode()` implements the rule as a gather
 — it computes a source offset per destination pixel and converts in the
 same pass — so no intermediate deswizzle buffer is ever allocated.
 
@@ -96,7 +96,7 @@ Two rules bound it:
   row-major whatever its format code says. The module detects this and
   falls back rather than producing garbage.
 
-`WHITTY_XBOX_TEXTURE_ASSUME_LINEAR` overrides the format's swizzle bit,
+`MANX_XBOX_TEXTURE_ASSUME_LINEAR` overrides the format's swizzle bit,
 for assets a title's own tooling deswizzled ahead of time.
 
 ## Mip level counts
@@ -104,7 +104,7 @@ for assets a title's own tooling deswizzled ahead of time.
 **Take the level count from the texture descriptor, bits 16..19 of the
 dword at descriptor offset 0x0C. Do not assume a full chain.**
 
-`whitty_xbox_texture_descriptor_levels()` reads it and clamps to at
+`manx_xbox_texture_descriptor_levels()` reads it and clamps to at
 least one level and to what the dimensions support.
 
 Containers do ship single-level textures next to full chains — 8 of the
@@ -121,7 +121,7 @@ because every screen pixel samples one arbitrary texel of a detailed
 A DXT3/DXT5 block is sixteen bytes: eight of alpha then eight of colour.
 BC2/BC3 expect that order. Some containers write the two halves the
 other way round, and without a swap every surface using one renders as
-multicoloured block noise. `WHITTY_XBOX_TEXTURE_DXT_COLOUR_FIRST` swaps
+multicoloured block noise. `MANX_XBOX_TEXTURE_DXT_COLOUR_FIRST` swaps
 the halves per block, per level.
 
 This is a property of the container, not of the console or the title —
@@ -146,7 +146,7 @@ measurement, before wiring the flag in.
 Link the target and include the header:
 
 ```cmake
-target_link_libraries(my_title PRIVATE whitty_xbox_texture)
+target_link_libraries(my_title PRIVATE manx_xbox_texture)
 ```
 
 The port keeps the container walk — finding entries, names, dimensions,
@@ -154,32 +154,32 @@ format codes and where the pixel data starts — and hands each mip level
 to the module:
 
 ```c
-whitty_xbox_texture_info info;
-if (!whitty_xbox_texture_describe(fmt, &info))
+manx_xbox_texture_info info;
+if (!manx_xbox_texture_describe(fmt, &info))
     continue;                       /* not a format we decode */
 
-uint32_t levels = whitty_xbox_texture_descriptor_levels(descriptor, w, h);
+uint32_t levels = manx_xbox_texture_descriptor_levels(descriptor, w, h);
 
 for (uint32_t l = 0; l < levels; l++) {
-    whitty_xbox_texture_source lvl = {0};
+    manx_xbox_texture_source lvl = {0};
     lvl.format      = fmt;
-    lvl.width       = whitty_xbox_texture_level_dim(w, l);
-    lvl.height      = whitty_xbox_texture_level_dim(h, l);
+    lvl.width       = manx_xbox_texture_level_dim(w, l);
+    lvl.height      = manx_xbox_texture_level_dim(h, l);
     lvl.options     = 0;            /* or DXT_COLOUR_FIRST, ASSUME_LINEAR */
     lvl.pixels      = cursor;
-    lvl.pixels_size = whitty_xbox_texture_source_bytes(fmt, lvl.width, lvl.height);
+    lvl.pixels_size = manx_xbox_texture_source_bytes(fmt, lvl.width, lvl.height);
     /* paletted formats also set lvl.palette / lvl.palette_size */
 
-    size_t upload = whitty_xbox_texture_upload_bytes(fmt, lvl.width, lvl.height);
-    whitty_xbox_texture_decode(&lvl, staging_for_level(l), upload);
+    size_t upload = manx_xbox_texture_upload_bytes(fmt, lvl.width, lvl.height);
+    manx_xbox_texture_decode(&lvl, staging_for_level(l), upload);
 
     cursor += lvl.pixels_size;
 }
 ```
 
-Create the image with `whitty_xbox_texture_vk_format(fmt)` and
-`whitty_xbox_texture_upload_chain_bytes()` worth of staging.
-`whitty_xbox_texture_source_chain_bytes()` sizes the read side, which is
+Create the image with `manx_xbox_texture_vk_format(fmt)` and
+`manx_xbox_texture_upload_chain_bytes()` worth of staging.
+`manx_xbox_texture_source_chain_bytes()` sizes the read side, which is
 also the bounds check to run before trusting a descriptor's level count.
 
 Checklist for a new title:

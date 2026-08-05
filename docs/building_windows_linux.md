@@ -1,5 +1,5 @@
 # Building MANX on Windows and Linux
-WhittyArcade uses one CMake project for Windows and Linux. Android is not part
+MANX uses one CMake project for Windows and Linux. Android is not part
 of these workflows. All current release jobs target x86-64 processors from
 AMD or Intel.
 
@@ -31,14 +31,14 @@ cmake --build build-windows --parallel 2
 ctest --test-dir build-windows --output-on-failure --parallel 2
 ```
 
-The result is `build-windows/WhittyArcade.exe`. Running
+The result is `build-windows/MANX.exe`. Running
 `tools/stage_windows.sh` from the UCRT64 environment collects its transitive
 UCRT64 DLL dependencies, licence files, checksums and a separate debug file.
 The GitHub Actions workflow is the canonical example.
 
 The packaged program is a native Windows GUI executable with a Windows 10/11
 manifest, per-monitor V2 DPI awareness, a native `IFileOpenDialog`, Segoe UI
-font discovery and `%LOCALAPPDATA%\WhittyArcade` storage. It does not depend
+font discovery and `%LOCALAPPDATA%\MANX` storage. It does not depend
 on `msys-2.0.dll`.
 
 ## Linux

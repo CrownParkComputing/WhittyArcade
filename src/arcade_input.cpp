@@ -1,5 +1,6 @@
 // arcade_input.cpp - shared, configurable SDL arcade input implementation.
 #include "arcade_input.h"
+#include "arcade_feedback.h"
 #include "arcade_sdl_guard.h"
 
 #include <algorithm>
@@ -104,7 +105,7 @@ int watch_code(const input_binding& binding, input_binding_type type) {
 }
 
 bool second_cabinet_process() {
-    const char* node = std::getenv("WHITTY_CABINET_NODE");
+    const char* node = std::getenv("MANX_CABINET_NODE");
     return node && std::strcmp(node, "2") == 0;
 }
 
@@ -115,7 +116,7 @@ void route_player_two_keyboard_to_cabinet(
     // gets the normal P1 keyboard layout; the link maps that contribution to
     // the authoritative game's P2 inputs. Only the second process of a local
     // two-cabinet setup needs the alternate P2 keys.
-    const char* network_link = std::getenv("WHITTY_INPUT_LINK");
+    const char* network_link = std::getenv("MANX_INPUT_LINK");
     if (network_link && *network_link &&
         std::strcmp(network_link, "0") != 0)
         return;
@@ -203,6 +204,10 @@ void arcade_input_netplay_poll() {
     if (g_netplay_link_owner) g_netplay_link_owner->poll_link();
 }
 
+void arcade_input_netplay_request_shutdown() {
+    if (g_netplay_link_owner) g_netplay_link_owner->request_peer_shutdown();
+}
+
 uint32_t arcade_input_network_peer_ipv4() {
     return network_peer_ipv4.load(std::memory_order_acquire);
 }
@@ -223,15 +228,15 @@ arcade_input::~arcade_input() {
 bool arcade_input::initialize_network_link() {
     // Netplay is decided by the launch and travels in the environment, the
     // same way the input link's ports do.
-    if (const char* mode = std::getenv("WHITTY_NETPLAY"))
+    if (const char* mode = std::getenv("MANX_NETPLAY"))
         m_netplay = *mode == '1';
-    if (const char* two = std::getenv("WHITTY_TWO_PLAYER"))
+    if (const char* two = std::getenv("MANX_TWO_PLAYER"))
         m_two_player_session = *two == '1';
     g_netplay_active.store(m_netplay, std::memory_order_release);
     std::fprintf(stderr, "Netplay link: %s (node %s)\n",
                  m_netplay ? "ON" : "off",
-                 std::getenv("WHITTY_CABINET_NODE") ?
-                     std::getenv("WHITTY_CABINET_NODE") : "?");
+                 std::getenv("MANX_CABINET_NODE") ?
+                     std::getenv("MANX_CABINET_NODE") : "?");
     if (m_netplay) {
         // The opening frames need seeding or the session deadlocks: input is
         // published a delay ahead, so the first packet either machine sends
@@ -249,17 +254,18 @@ bool arcade_input::initialize_network_link() {
             m_netplay_peer_known[frame % netplay_ring] = true;
         g_netplay_frame.store(0, std::memory_order_release);
         g_netplay_desync_frame.store(0, std::memory_order_release);
+        g_netplay_peer_lost.store(false, std::memory_order_release);
         for (auto& slot : g_netplay_local_hashes)
             slot.store(0, std::memory_order_release);
     }
     shutdown_network_link();
-    const char* enabled = std::getenv("WHITTY_INPUT_LINK");
+    const char* enabled = std::getenv("MANX_INPUT_LINK");
     if (!enabled || !*enabled || std::strcmp(enabled, "0") == 0)
         return true;
-    const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+    const char* node_text = std::getenv("MANX_CABINET_NODE");
     const int node = node_text ? std::atoi(node_text) : 0;
-    const uint16_t local_port = input_link_port("WHITTY_INPUT_LOCAL_PORT");
-    const uint16_t peer_port = input_link_port("WHITTY_INPUT_PEER_PORT");
+    const uint16_t local_port = input_link_port("MANX_INPUT_LOCAL_PORT");
+    const uint16_t peer_port = input_link_port("MANX_INPUT_PEER_PORT");
     if ((node != 1 && node != 2) || !local_port || !peer_port)
         return false;
 
@@ -334,7 +340,7 @@ bool arcade_input::initialize_network_link() {
     m_network_peer_state = {};
     network_peer_seen.store(false, std::memory_order_release);
     network_peer_ipv4.store(0, std::memory_order_release);
-    std::printf("WhittyArcade player %u input link UDP %u -> %u\n",
+    std::printf("MANX player %u input link UDP %u -> %u\n",
                 m_network_node, local_port, peer_port);
     return true;
 }
@@ -401,6 +407,17 @@ bool arcade_input::drain_network_input() {
             static_cast<int32_t>(incoming.sequence -
                                  m_network_peer_sequence) <= 0)
             continue;
+        if (incoming.reserved[0] != 0) {
+            // The other cabinet is leaving deliberately. Treat this as an
+            // immediate peer loss instead of waiting for the normal silence
+            // timeout, so both processes unwind their render/audio/input
+            // owners together.
+            m_network_peer_sequence = incoming.sequence;
+            g_netplay_peer_lost.store(true, std::memory_order_release);
+            network_peer_seen.store(false, std::memory_order_release);
+            received_peer = true;
+            continue;
+        }
         if (m_netplay && incoming.netplay) {
             // Filed by frame rather than overwriting one slot: a packet that
             // arrives late still belongs to its own frame, and one that
@@ -548,7 +565,8 @@ void arcade_input::wait_for_peer_frame(uint32_t frame) {
 // for its partner must still announce itself: sending only happened while
 // running a frame, and neither cabinet runs a frame until it has seen the
 // other - so each waited for a packet the other would never send.
-void arcade_input::send_link_packet(const input_state& local_state) {
+void arcade_input::send_link_packet(const input_state& local_state,
+                                    bool shutting_down) {
     if (m_network_socket == -1 || m_network_node == 0) return;
     const input_native_socket socket_handle =
         to_input_socket(m_network_socket);
@@ -562,6 +580,7 @@ void arcade_input::send_link_packet(const input_state& local_state) {
     outgoing.active_player =
         network_authoritative_player.load(std::memory_order_acquire);
     outgoing.netplay = m_netplay ? 1 : 0;
+    outgoing.reserved[0] = shutting_down ? 1 : 0;
     // Published for a frame in the future: by the time either machine
     // simulates it, the packet has had the whole delay window to arrive.
     const uint32_t publish_frame = m_netplay_frame + netplay_delay_frames;
@@ -591,11 +610,20 @@ void arcade_input::send_link_packet(const input_state& local_state) {
            static_cast<int>(sizeof(outgoing)), 0,
            reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
     // Also loop the LAN packet onto this host so the exact two-computer mode
-    // can be tested with two local WhittyArcade instances.
+    // can be tested with two local MANX instances.
     peer.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     sendto(socket_handle, reinterpret_cast<const char*>(&outgoing),
            static_cast<int>(sizeof(outgoing)), 0,
            reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
+}
+
+void arcade_input::request_peer_shutdown() {
+    if (!m_netplay || m_network_socket == -1) return;
+    // UDP is intentionally best-effort; three back-to-back notices make a
+    // local packet loss harmless without adding a blocking acknowledgement
+    // to the shutdown path.
+    for (int notice = 0; notice < 3; ++notice)
+        send_link_packet(m_state, true);
 }
 
 void arcade_input::exchange_network_input(const input_state& local_state) {
@@ -693,7 +721,6 @@ void arcade_input::exchange_network_input(const input_state& local_state) {
     // nothing to do but watch.
     if ((m_netplay || m_two_player_session) && combined.start) {
         combined.p2_start = true;
-        combined.start = false;
     }
     // ...and a coin credits both slots. A board wants two credits before it
     // will start a two-player game, so without this the start button appears
@@ -775,6 +802,7 @@ bool arcade_input::initialize(std::string_view game_short_name) {
     }
 
     m_game_short_name = game_short_name;
+    m_feedback_profile.configure(m_game_short_name);
     // Time Crisis (System 22) and the Model 2 light-gun games (Virtua Cop and
     // Virtua Cop 2) all drive the crosshair from the mouse; only their ADC
     // calibration differs. The Model 2 guns use the full 0..255 axis.
@@ -819,7 +847,7 @@ bool arcade_input::initialize(std::string_view game_short_name) {
                     "take cover/reload\n");
     if (!initialize_network_link())
         std::fprintf(stderr,
-                     "Could not open WhittyArcade's network player link\n");
+                     "Could not open MANX's network player link\n");
     return true;
 }
 
@@ -858,6 +886,7 @@ void arcade_input::reload_mappings() {
         event.store(false, std::memory_order_relaxed);
     m_keyboard_steering = 0.0f;
     m_state = input_state{};
+    m_feedback_profile.configure(m_game_short_name);
 }
 
 void arcade_input::shutdown() {
@@ -869,14 +898,25 @@ void arcade_input::shutdown() {
     }
     m_controller_instance.store(-1, std::memory_order_relaxed);
     if (m_controller) {
+        SDL_RumbleGamepad(m_controller, 0, 0, 0);
         SDL_CloseGamepad(m_controller);
         m_controller = nullptr;
     }
+    m_rumble_low = 0;
+    m_rumble_high = 0;
+    m_applied_rumble_low = 0;
+    m_applied_rumble_high = 0;
+    m_audio_impact_low = 0;
+    m_audio_impact_high = 0;
+    m_audio_impact_until = 0;
+    m_rumble_supported = false;
+    m_rumble_error_reported = false;
     if (m_initialized) {
         SDL_QuitSubSystem(SDL_INIT_GAMEPAD | SDL_INIT_JOYSTICK);
         m_initialized = false;
     }
     m_time_crisis_mouse = false;
+    m_feedback_profile.reset();
     m_lightgun_mouse_active = false;
     m_mouse_activity.store(false, std::memory_order_relaxed);
 }
@@ -896,7 +936,10 @@ bool arcade_input::open_controller(SDL_JoystickID joystick_id) {
     SDL_Gamepad* controller = SDL_OpenGamepad(joystick_id);
     if (!controller) return false;
 
-    if (m_controller) SDL_CloseGamepad(m_controller);
+    if (m_controller) {
+        SDL_RumbleGamepad(m_controller, 0, 0, 0);
+        SDL_CloseGamepad(m_controller);
+    }
     m_controller = controller;
     SDL_Joystick* joystick = SDL_GetGamepadJoystick(m_controller);
     m_controller_instance.store(SDL_GetJoystickID(joystick),
@@ -914,11 +957,70 @@ bool arcade_input::open_controller(SDL_JoystickID joystick_id) {
                 m_controller, static_cast<SDL_GamepadAxis>(axis));
     }
 
-    std::printf("Input controller: %s [%s]\n",
+    const SDL_PropertiesID properties = SDL_GetGamepadProperties(m_controller);
+    m_rumble_supported = properties != 0 && SDL_GetBooleanProperty(
+        properties, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false);
+    m_rumble_low = 0;
+    m_rumble_high = 0;
+    m_applied_rumble_low = 0;
+    m_applied_rumble_high = 0;
+    m_audio_impact_low = 0;
+    m_audio_impact_high = 0;
+    m_audio_impact_until = 0;
+    m_rumble_refresh_count = 0;
+    m_rumble_error_reported = false;
+
+    std::printf("Input controller: %s [%s] (%s)\n",
                 SDL_GetGamepadName(m_controller) ?
                     SDL_GetGamepadName(m_controller) : "unknown",
-                guid_text.data());
+                guid_text.data(),
+                m_rumble_supported ? "rumble ready" : "no rumble");
     return true;
+}
+
+bool arcade_input::apply_rumble(uint16_t low_frequency,
+                                uint16_t high_frequency,
+                                uint32_t duration_ms) {
+    if (!m_controller || !m_rumble_supported) return false;
+    if (SDL_RumbleGamepad(m_controller, low_frequency, high_frequency,
+                          duration_ms)) {
+        m_rumble_error_reported = false;
+        return true;
+    }
+    if (!m_rumble_error_reported) {
+        std::fprintf(stderr, "Controller rumble failed: %s\n", SDL_GetError());
+        m_rumble_error_reported = true;
+    }
+    return false;
+}
+
+void arcade_input::set_rumble(uint16_t low_frequency,
+                              uint16_t high_frequency) {
+    // A 200 ms command refreshed every six 60 Hz input updates gives a
+    // generous overlap while limiting wireless traffic to ten updates/sec.
+    m_rumble_low = low_frequency;
+    m_rumble_high = high_frequency;
+    const bool impact_active = m_update_count <= m_audio_impact_until;
+    const uint16_t effective_low = impact_active ?
+        std::max(low_frequency, m_audio_impact_low) : low_frequency;
+    const uint16_t effective_high = impact_active ?
+        std::max(high_frequency, m_audio_impact_high) : high_frequency;
+    const bool changed = effective_low != m_applied_rumble_low ||
+                         effective_high != m_applied_rumble_high;
+    if (!changed && m_update_count - m_rumble_refresh_count < 6) return;
+    m_applied_rumble_low = effective_low;
+    m_applied_rumble_high = effective_high;
+    m_rumble_refresh_count = m_update_count;
+    apply_rumble(effective_low, effective_high,
+                 (effective_low || effective_high) ? 200u : 0u);
+}
+
+void arcade_input::pulse_rumble(uint16_t low_frequency,
+                                uint16_t high_frequency,
+                                uint32_t duration_ms) {
+    if (!low_frequency && !high_frequency) return;
+    apply_rumble(low_frequency, high_frequency,
+                 std::clamp<uint32_t>(duration_ms, 1, 2000));
 }
 
 void arcade_input::scan_for_controller() {
@@ -938,7 +1040,7 @@ void arcade_input::scan_for_controller() {
     // steers both cabinets and a single coin enters both riders. Cabinet N
     // takes the Nth controller and nothing else; a cabinet without its own
     // controller stays on the keyboard, which does follow the focus.
-    const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+    const char* node_text = std::getenv("MANX_CABINET_NODE");
     const int cabinet = node_text ? std::atoi(node_text) : 0;
     if (cabinet >= 1) {
         int gamepad_index = 0;
@@ -1026,13 +1128,38 @@ void arcade_input::update() {
     if (m_controller && !SDL_GamepadConnected(m_controller)) {
         std::printf("Input controller disconnected\n");
         m_controller_instance.store(-1, std::memory_order_relaxed);
+        SDL_RumbleGamepad(m_controller, 0, 0, 0);
         SDL_CloseGamepad(m_controller);
         m_controller = nullptr;
+        m_rumble_low = 0;
+        m_rumble_high = 0;
+        m_applied_rumble_low = 0;
+        m_applied_rumble_high = 0;
+        m_audio_impact_low = 0;
+        m_audio_impact_high = 0;
+        m_audio_impact_until = 0;
+        m_rumble_supported = false;
         for (auto& code : m_watch_controller_buttons)
             code.store(-1, std::memory_order_relaxed);
     }
     if (!m_controller && (m_update_count % 60) == 0) scan_for_controller();
     ++m_update_count;
+
+    const float impact = arcade_feedback::take_impact();
+    if (impact > 0.0f && m_feedback_profile.accepts_generic_impact()) {
+        const unsigned scaled = static_cast<unsigned>(impact * 65535.0f);
+        m_audio_impact_low = static_cast<uint16_t>(std::min<unsigned>(
+            0xffff, 0x3800u + scaled * 0xc7ffu / 0xffffu));
+        m_audio_impact_high = static_cast<uint16_t>(std::min<unsigned>(
+            0xffff, 0x2800u + scaled * 0xd7ffu / 0xffffu));
+        m_audio_impact_until = m_update_count + 8;
+        set_rumble(m_rumble_low, m_rumble_high);
+    } else if (m_audio_impact_until != 0 &&
+               m_update_count == m_audio_impact_until + 1) {
+        m_audio_impact_low = 0;
+        m_audio_impact_high = 0;
+        set_rumble(m_rumble_low, m_rumble_high);
+    }
 
     const bool* keys = SDL_GetKeyboardState(nullptr);
     // Cabinet lines are edge-latched briefly. Real cabinets sample dedicated
@@ -1252,13 +1379,13 @@ void arcade_input::update() {
                     m_state.left_stick_y =
                         cyber_axis(normalized_y * 2.0f - 1.0f);
                 }
-                // WHITTY_GUN_TRACE=1 reports where the pointer is, what the
+                // MANX_GUN_TRACE=1 reports where the pointer is, what the
                 // picture's rectangle inside the window is, and the fraction
                 // of the picture the gun is told to aim at. Comparing that
                 // fraction with where the shot lands says whether the aim is
                 // being measured wrongly or converted wrongly further down.
                 static const bool trace_gun =
-                    std::getenv("WHITTY_GUN_TRACE") != nullptr;
+                    std::getenv("MANX_GUN_TRACE") != nullptr;
                 if (trace_gun && (m_update_count % 30) == 0) {
                     std::printf("GUN pointer=%d,%d window=%dx%d "
                                 "picture=%d,%d %dx%d aim=%.3f,%.3f "
@@ -1304,6 +1431,37 @@ void arcade_input::update() {
             }
         }
     }
+
+    // Boards with genuine motor/solenoid outputs call set_rumble directly.
+    // Everything synthetic is selected and tuned by the shared profile
+    // service, keeping game-name knowledge out of this hardware adapter.
+    const arcade_feedback::command feedback =
+        m_feedback_profile.update(m_state, m_suppressed);
+    if (feedback.set_continuous)
+        set_rumble(feedback.continuous_low, feedback.continuous_high);
+    arcade_feedback::command pulse = feedback;
+    if (!m_suppressed) {
+        const arcade_feedback::gameplay_event event =
+            arcade_feedback::take_gameplay_event();
+        const arcade_feedback::command event_pulse =
+            arcade_feedback::gameplay_event_command(event);
+        const unsigned profile_weight =
+            static_cast<unsigned>(pulse.pulse_low) + pulse.pulse_high;
+        const unsigned event_weight =
+            static_cast<unsigned>(event_pulse.pulse_low) +
+            event_pulse.pulse_high;
+        // A jump should remain more tactile than an ordinary pellet collected
+        // on the same frame. Every larger gameplay consequence takes priority
+        // over a control-derived cue.
+        if (event.kind != arcade_feedback::gameplay_event_kind::none &&
+            (event.kind != arcade_feedback::gameplay_event_kind::pellet ||
+             event_weight > profile_weight))
+            pulse = event_pulse;
+    } else {
+        (void)arcade_feedback::take_gameplay_event();
+    }
+    if (pulse.pulse_ms != 0)
+        pulse_rumble(pulse.pulse_low, pulse.pulse_high, pulse.pulse_ms);
 
     exchange_network_input(m_state);
     for (uint8_t& frames : m_cabinet_pulse_frames)

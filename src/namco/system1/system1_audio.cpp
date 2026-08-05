@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 
-extern "C" int g88_ym2151_sample(void);
+extern "C" void g88_ym2151_generate(int16_t* output, int frames, int level);
 
 namespace {
 
@@ -15,9 +15,7 @@ public:
                   int effects_volume) override {
         const int level =
             std::clamp((music_volume * 3 + effects_volume) / 4, 0, 100);
-        for (int i = 0; i < frames; ++i)
-            output[i] = static_cast<int16_t>(std::clamp(
-                g88_ym2151_sample() * level / 100, -32768, 32767));
+        g88_ym2151_generate(output, frames, level);
     }
     int active_tune() const override { return 0; }
 };

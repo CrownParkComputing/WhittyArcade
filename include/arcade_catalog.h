@@ -89,14 +89,14 @@ arcade_cabinet_form classify_cabinet_form(const rom_set_manifest& manifest);
 // "Linked cabinet wall".
 const char* cabinet_form_label(arcade_cabinet_form form);
 
-constexpr std::size_t arcade_board_count = 13;
+constexpr std::size_t arcade_board_count = 15;
 using arcade_board_list =
     std::array<arcade_board_descriptor, arcade_board_count>;
 // The built-in games are a fixed table; the list as a whole is not, because
 // games also arrive as plugins discovered on disk at start-up. A std::array
 // sized by a constant would mean a game could only ever be added by rebuilding
 // the arcade, which is exactly what the plugin path exists to avoid.
-constexpr std::size_t arcade_builtin_game_count = 41;
+constexpr std::size_t arcade_builtin_game_count = 49;
 using arcade_game_list = std::vector<rom_set_manifest>;
 
 // This is the only board-name/order/directory table in the application.

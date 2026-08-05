@@ -111,6 +111,13 @@ private:
     bool mapper_region(uint32_t address, unsigned& region_out,
                        uint32_t& offset_out) const noexcept;
     uint8_t io_region_read(uint32_t offset) noexcept;
+    // 171-5797 region 1 (multiplier / compare-timer / tile bank) and
+    // region 2 (the second compare-timer). `offset` is the byte offset
+    // the mapper resolved within the region.
+    uint8_t bank_math_read(uint32_t offset) noexcept;
+    void bank_math_write(uint32_t offset, uint8_t data) noexcept;
+    uint8_t cmp_timer2_read(uint32_t offset) noexcept;
+    void cmp_timer2_write(uint32_t offset, uint8_t data) noexcept;
 
     std::unique_ptr<mcs51_cpu_device> mcu_;
 
@@ -242,6 +249,41 @@ public:
             // identity-mapped sprite banks of 128 KiB, bankable tiles.
             sprite_bank_mod_ = 16;
             mapper_decode_ = true;
+        } else if (set == ::system16b::system16b_rom_set::bay_route) {
+            // Bay Route (set 1 US, unprotected): ROM board 171-5358, the
+            // same fixed layout and alternate sprite bank wiring as Alien
+            // Syndrome (MAME segas16b.cpp alternate_banklist). Factory
+            // DIPs (MAME `bayroute`): continue on, demo sounds on,
+            // 3 lives, bonus at 100k, normal difficulty.
+            dsw2_ = 0xbd;
+            static constexpr std::array<uint8_t, 16> alternate_banklist{
+                0, 255, 255, 255, 255, 255, 255, 3,
+                255, 255, 255, 2, 255, 1, 0, 255};
+            sprite_banklist_ = alternate_banklist.data();
+        } else if (set == ::system16b::system16b_rom_set::eswat) {
+            // 1 credit to start, demo sounds on, flip off, timer normal,
+            // difficulty normal, 3 lives (MAME INPUT_PORTS_START(eswat)).
+            dsw2_ = 0xfd;
+            // ROM board 171-5797: unlike the 5704 there is no second ROM
+            // window -- region 0 shows the whole 512 KiB program -- and
+            // regions 1 and 2 are custom-chip files rather than ROM or a
+            // bare tile bank register.
+            mapper_decode_ = true;
+            mapper_rom_base_ = {0, kMapperBankMath, kMapperCmpTimer2};
+            mapper_rom_mask_ = 0x7ffff;
+            // 0x1c0000 of sprite ROM is 14 of the 16 banks the sprite
+            // entry's 4-bit bank field can name; the last two read as
+            // empty, exactly as on the board.
+            sprite_bank_mod_ = 16;
+        } else if (set == ::system16b::system16b_rom_set::wonder_boy3) {
+            // Demo sounds on, 3 lives, bonus at 50k/100k/180k/300k,
+            // normal difficulty, test mode off (MAME INPUT_PORTS(wb3);
+            // SW2:1 and SW2:8 are documented as always off).
+            dsw2_ = 0xfd;
+            // ROM board 171-5704: mapper-decoded, eight 128 KiB sprite
+            // banks, bankable tiles.
+            mapper_decode_ = true;
+            sprite_bank_mod_ = 8;
         }
     }
     // Sprite bank LUT for the current ROM board (identity for Shinobi's).
@@ -267,13 +309,49 @@ public:
     // already disagree about all of them.
     bool mapper_decode_{false};
     // What mapper regions 0-2 serve: the program-buffer offset each ROM
-    // window shows, with kMapperTileBank marking the 5704/5521 tile bank
-    // register instead. The 5358 has three 128 KiB ROM windows; the 5704
-    // has two 256 KiB ones and the bank register.
+    // window shows, with one of the sentinels below marking a board
+    // register file instead. The 5358 has three 128 KiB ROM windows; the
+    // 5704 has two 256 KiB ones and the tile bank register; the 5797 has
+    // a single 512 KiB window and two custom-chip windows.
     static constexpr uint32_t kMapperTileBank = 0xffffffffu;
+    // 171-5797 region 1: the 16 KiB "bank/math" window, holding the
+    // 315-5248 multiplier, one 315-5250 compare/timer and the tile bank
+    // register, selected by bits 13-12 of the byte offset.
+    static constexpr uint32_t kMapperBankMath = 0xfffffffeu;
+    // 171-5797 region 2: the board's second 315-5250 compare/timer.
+    static constexpr uint32_t kMapperCmpTimer2 = 0xfffffffdu;
     std::array<uint32_t, 3> mapper_rom_base_{0, 0x40000, kMapperTileBank};
     uint32_t mapper_rom_mask_{0x3ffff};
     std::array<uint8_t, 2> tile_banks_{0, 1};
+
+    // ---- Sega custom chips carried by the 171-5797 ROM board ----------
+    // Both are 16-bit devices on the 68000 bus, so a word access arrives
+    // here as two byte accesses (high then low). Register writes therefore
+    // update one byte half each, and the register's *action* runs on the
+    // completing low byte, which is what makes a `move.w` behave as the
+    // single chip-level write MAME performs.
+
+    // 315-5248: two 16-bit inputs, signed 32-bit product read back as a
+    // high/low pair.
+    struct multiplier_chip {
+        std::array<uint16_t, 4> regs{};
+        uint16_t read(unsigned word_offset) const noexcept;
+        void write(unsigned word_offset, bool low_byte, uint8_t data) noexcept;
+    };
+    // 315-5250: clamps a value into the range spanned by two bounds and
+    // records a bit history of in-range results. On this board neither the
+    // 68000 interrupt line, the sound-CPU latch nor the external timer
+    // clock is wired up, so only the compare registers are observable.
+    struct compare_timer_chip {
+        std::array<uint16_t, 16> regs{};
+        uint8_t bit{0};
+        void execute(bool update_history = false) noexcept;
+        uint16_t read(unsigned word_offset) const noexcept;
+        void write(unsigned word_offset, bool low_byte, uint8_t data) noexcept;
+        void reset() noexcept;
+    };
+    multiplier_chip multiplier_{};
+    std::array<compare_timer_chip, 2> compare_timers_{};
 };
 
 // =====================================================================

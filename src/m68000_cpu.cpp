@@ -9,6 +9,17 @@ struct m68000_cpu::core final : moira::Moira {
     explicit core(m68000_bus& b) : bus(b) {}
 
     m68000_bus& bus;
+    // Level asserted in MAME HOLD_LINE fashion: the request stays pending
+    // (even across interrupt-masked stretches) until the CPU services it,
+    // then drops by itself. 0 = none held.
+    moira::u8 hold_level{0};
+
+    void willInterrupt(moira::u8 level) override {
+        if (hold_level != 0 && level >= hold_level) {
+            setIPL(0);
+            hold_level = 0;
+        }
+    }
 
     moira::u8 read8(moira::u32 addr) const override {
         return const_cast<m68000_bus&>(bus).read8(addr);
@@ -40,6 +51,12 @@ int m68000_cpu::execute(int cycles) {
 }
 
 void m68000_cpu::set_irq(unsigned level) {
+    m_core->hold_level = 0;
+    m_core->setIPL(static_cast<moira::u8>(level & 7));
+}
+
+void m68000_cpu::set_irq_hold(unsigned level) {
+    m_core->hold_level = static_cast<moira::u8>(level & 7);
     m_core->setIPL(static_cast<moira::u8>(level & 7));
 }
 

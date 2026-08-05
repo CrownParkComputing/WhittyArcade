@@ -23,23 +23,23 @@ broken (engine never dynamically revves; see the 2026-07-23/24 findings later
 in this doc). PCSX2X6 is a full low-level PS2 emulator that boots the real BIOS
 and lists RRV playable — the correct architecture for this board.
 
-**Licensing consequence — decided:** PCSX2X6 is **GPLv3**; WhittyArcade was
+**Licensing consequence — decided:** PCSX2X6 is **GPLv3**; MANX was
 **proprietary** ("all rights reserved"). They cannot coexist in one binary
 unless the whole program is GPLv3. **The owner chose to embed the PCSX2 core
-directly and relicense WhittyArcade to GPLv3.** The proprietary licence is
+directly and relicense MANX to GPLv3.** The proprietary licence is
 being given up for this. (The alternative — running PCSX2X6 as a separate
-process to keep WhittyArcade proprietary — was considered and rejected in
+process to keep MANX proprietary — was considered and rejected in
 favour of tighter integration.) *Do not actually change `LICENSE` until the
 proof-of-concept gate below passes and real PCSX2-derived code starts landing,
 so the licence is not surrendered for a dead end.*
 
 **Hard constraint — x86-64 only:** PCSX2's EE/IOP/VU recompilers have no ARM
-backend. WhittyArcade's `CMakeLists.txt` has aarch64/arm branches; on those
+backend. MANX's `CMakeLists.txt` has aarch64/arm branches; on those
 targets the System 246 board will be unavailable (build it out with a guard).
 Desktop x86-64 (the owner's CachyOS box) is fine.
 
 **Play! removal footprint (clean):** `third_party/play` (87 MB submodule),
-`src/system246/play_*.{cpp,h}` (~16 files), and only ~5 WhittyArcade source
+`src/system246/play_*.{cpp,h}` (~16 files), and only ~5 MANX source
 files reference it. `atapi_registers.*`, `rrv_music.*`, `system246_rom.*`,
 input/video bridge glue and the ROM/media cache may be reusable; the Play!
 VM wiring (`play_core.*`) is discarded.
@@ -53,15 +53,15 @@ VM wiring (`play_core.*`) is discarded.
    RRV, the whole plan is void. (Configured 2026-07-24, Release/no-LTO,
    clang+lld, all system deps present: Qt 6.11.1, SDL2, Vulkan 1.4, zstd,
    libpcap. `pcsx2-qt` build launched.)
-1. Relicense WhittyArcade to GPLv3 (`LICENSE` + headers + README).
+1. Relicense MANX to GPLv3 (`LICENSE` + headers + README).
 2. Remove Play!: drop the submodule and `play_*` sources; keep the reusable
    glue identified above behind the existing board abstraction.
-3. Bring the PCSX2 core into the WhittyArcade build (link `pcsx2` + `common` +
+3. Bring the PCSX2 core into the MANX build (link `pcsx2` + `common` +
    `3rdparty` static libs; PCSX2 is not a library by design, so this follows
    the `pcsx2-gsrunner` headless pattern, not the Qt app).
-4. Implement PCSX2's `Host` interface against WhittyArcade services: GS video
-   → WhittyArcade renderer/window, SPU2 audio → WhittyArcade audio output,
-   input → WhittyArcade input channel, settings → hardcoded System 246 profile.
+4. Implement PCSX2's `Host` interface against MANX services: GS video
+   → MANX renderer/window, SPU2 audio → MANX audio output,
+   input → MANX input channel, settings → hardcoded System 246 profile.
 5. Drive `VMManager` to boot RRV (BIOS + dongle + disc) and wire it into the
    System 246 board entry point.
 6. Test + polish; re-run the cross-board teardown soak before shipping.
@@ -74,14 +74,14 @@ never added," and rebuild from PCSX2. Rationale accepted: PCSX2 produced real
 dynamic engine audio (corrupt "vroom-vroom", a timing race — not silence/
 static like Play!), has active upstream development, and ships dedicated RRV
 arcade code, so it is a better base on which to eventually fix the streaming
-race. WhittyArcade is being relicensed to GPLv3 to permit embedding the PCSX2
+race. MANX is being relicensed to GPLv3 to permit embedding the PCSX2
 core (owner-approved).
 
 **Progress (branch `system246-pcsx2-rewrite`, `main` untouched):**
 - **Phase 1 removal — DONE & verified.** `third_party/play` submodule,
   `src/system246/`, `src/system246_*.{cpp,h}`, all `tests/system246_*`, and
   every CMake/enum/catalog/session/probe/persistent-data/rom-library reference
-  removed. `grep -rniE "system246|play_core|PlayCore|rrvac|WHITTY_PLAY"` over
+  removed. `grep -rniE "system246|play_core|PlayCore|rrvac|MANX_PLAY"` over
   src/include/tests/CMakeLists is CLEAN. Build green (62 targets), ctest 37/37.
   (Also fixed the stale `srallyc`-only system-link assertion — now accepts
   `ridgera2`/`raverace`/`srallyc`.)
@@ -89,8 +89,8 @@ core (owner-approved).
   completed clang/Release build; BIOS + RRV `.acgame` staged under
   `build/bin/`). Pinned tag v0.2.14, commit 88d490bb, remote
   github.com/PS2Homebrew-arcade/pcsx2x6.
-- **Link recipe established** (no symbol conflicts — WhittyArcade uses system
-  SDL3/zlib/zstd; PCSX2 bundles its own fmt/imgui/cubeb which WhittyArcade
+- **Link recipe established** (no symbol conflicts — MANX uses system
+  SDL3/zlib/zstd; PCSX2 bundles its own fmt/imgui/cubeb which MANX
   doesn't use). 18 static libs from `/home/jon/pcsx2x6/build/`
   (`pcsx2/libpcsx2.a`, `common/libcommon.a`, + 16 `3rdparty/*`), wrapped in
   `--start-group/--end-group`, plus system libs: `dl backtrace curl dbus-1
@@ -107,7 +107,7 @@ core (owner-approved).
   **links green AND runs headless to `CPU thread init OK`/`shutdown OK`** —
   VM memory, x86 JIT recompiler, cpuinfo, settings all init with no display.
 - **Relicensed to GPLv3 — DONE.** `LICENSE` replaced with the full GPL v3
-  text (was the WhittyArcade proprietary licence). Follow-up sweep still
+  text (was the MANX proprietary licence). Follow-up sweep still
   needed: README + per-file copyright/licence headers + a NOTICE.
 - **Phase 4 (boot RRV harness) — BUILT & GREEN.**
   `src/system246/pcsx2_boot_rrv.cpp` + target `system246_pcsx2_boot_rrv`:
@@ -123,7 +123,7 @@ core (owner-approved).
   avoid two threads pumping SDL; JVS routing is the next task).
 - **Phase 5 (input) — BUILT & GREEN.** `src/system246/pcsx2_input.h` +
   implementation in `pcsx2_host.cpp`: keyboard captured on the main SDL thread
-  into atomics; `WhittyArcadeInput::ApplyToJVS()` pushes held state + queued
+  into atomics; `MANXInput::ApplyToJVS()` pushes held state + queued
   coins into `ACJV::{SetWheelAxis,SetButtonState,InsertCoin}` on the CPU thread
   from `Host::PumpMessagesOnCPUThread` (verified called each vsync by
   `PollInputOnCPUThread`, before `PollSources`; ACJV state is level so it
@@ -133,9 +133,9 @@ core (owner-approved).
   green. Owner runs to confirm controls + finally judge engine audio in a race.
   (Gear/view JVS bits are a first guess — refine after the owner drives.)
 - **Phase 6 (GUI integration) — BUILT & GREEN.** System 246 is a real
-  WhittyArcade board again: catalog lists "Namco System 246" → "Ridge Racer V:
+  MANX board again: catalog lists "Namco System 246" → "Ridge Racer V:
   Arcade Battle (rrvac)"; selecting it creates a PCSX2-backed session that
-  boots RRV surfaceless in-process and presents into WhittyArcade's own window.
+  boots RRV surfaceless in-process and presents into MANX's own window.
   Whole tree builds green under clang, PCSX2 linked into the main binary (40 MB,
   130 VMManager symbols), ctest 37/37. New `system246_pcsx2_session.cpp` +
   `system246_pcsx2` OBJECT lib (isolates C++20/-fno-exceptions/PCSX2 defines
@@ -149,7 +149,7 @@ core (owner-approved).
   show "not ready"); frame aspect/row-order unverified (may need a flip);
   per-frame snapshot alloc is a later optimization.
   Original design (all pieces de-risked):
-  - **clang everywhere.** WhittyArcade builds clean with clang (2 trivial
+  - **clang everywhere.** MANX builds clean with clang (2 trivial
     model1 brace-narrowing fixes applied), so the clang-built PCSX2 libs link
     DIRECTLY into the main binary — no C-ABI shim. (Switch the default
     compiler to clang.)
@@ -159,10 +159,10 @@ core (owner-approved).
     `m_gpu_renderer->present_rgba_frame`). PCSX2 runs **surfaceless**; frames
     captured via `GSSaveSnapshotToMemory(...)` (pcsx2/GS/GS.h → RGBA
     `std::vector<u32>`) in `Host::BeginPresentFrame`, double-buffered to the
-    session. No Vulkan/OpenGL window conflict (WhittyArcade keeps its GL
+    session. No Vulkan/OpenGL window conflict (MANX keeps its GL
     presenter; PCSX2 renders offscreen).
-  - **Input** already done — the session maps WhittyArcade input to
-    `WhittyArcadeInput::` setters → ACJV/JVS.
+  - **Input** already done — the session maps MANX input to
+    `MANXInput::` setters → ACJV/JVS.
   - Re-add board wiring: enum + catalog + `system246_rom`/`system246_controls`
     (restored from `main`, backend-independent) + session dispatch; new
     `src/system246/system246_pcsx2_session.cpp` = `make_system246_session`.
@@ -171,7 +171,7 @@ core (owner-approved).
   streamed-engine audio-race work — once RRV drives inside the GUI.
 
 **PCSX2 embedding blueprint (phases 3–5), from `pcsx2-gsrunner` + `pcsx2-qt`:**
-- Link `libpcsx2.a` + `common` + PCSX2's `3rdparty` into WhittyArcade (static).
+- Link `libpcsx2.a` + `common` + PCSX2's `3rdparty` into MANX (static).
   PCSX2 core is x86-64 only — guard the whole board out on aarch64/arm.
 - Drive the VM on a dedicated CPU thread:
   `VMManager::Internal::CPUThreadInitialize()` →
@@ -182,9 +182,9 @@ core (owner-approved).
 - Implement PCSX2's `Host::` interface (~50 methods; most are trivial stubs —
   achievements/clipboard/text-input/etc. return default). Load-bearing ones:
   `Host::AcquireRenderWindow`/`ReleaseRenderWindow` (hand PCSX2's Vulkan GS a
-  render surface — reuse WhittyArcade's existing Vulkan window/`WindowInfo`),
+  render surface — reuse MANX's existing Vulkan window/`WindowInfo`),
   `Host::BeginPresentFrame`, `Host::OnGameChanged`, and the settings hooks.
-- Audio: gsrunner sets `SPU2/Output OutputModule=nullout`; WhittyArcade needs a
+- Audio: gsrunner sets `SPU2/Output OutputModule=nullout`; MANX needs a
   real `AudioStream` backend feeding `arcade_audio_output` (either PCSX2's
   cubeb/SDL backend or a thin custom `AudioStream` bridging to our mixer).
 - Boot RRV as an arcade `.acgame`-equivalent: `VMBootParameters` with the
@@ -201,7 +201,7 @@ Built PCSX2X6 natively (proof-of-concept gate), staged the real BIOS + dongle
 
 - **The disc is a HARD DISK image**, definitively: `rrv1-a.chd` CHD header has
   `unitbytes=512` + `GDDD` hard-disk metadata (not CD/DVD). RRV reads it over
-  **ATA**, matching the dongle's `acata`/`ATA_driver` modules. WhittyArcade
+  **ATA**, matching the dongle's `acata`/`ATA_driver` modules. MANX
   detects the `GDDD` tag correctly but then *extracts it to an "ISO" and feeds
   Play! optical CD/DVD media* — a media-type mismatch. Fixed the PCSX2X6
   manifest to `media = HDD` (was CD).
@@ -234,13 +234,13 @@ reference only (its original role), not a dependency.
 ## Decision (SUPERSEDED — see MAJOR PIVOT above)
 
 - Use a pinned, optional [Play!](https://github.com/jpd002/Play-) core as the
-  implementation base. Its built-in HLE BIOS means the normal WhittyArcade
+  implementation base. Its built-in HLE BIOS means the normal MANX
   path does not need a Sony or Namco BIOS dump.
-- Keep the board behind `WHITTY_ENABLE_SYSTEM246` until ROM audit, boot,
+- Keep the board behind `MANX_ENABLE_SYSTEM246` until ROM audit, boot,
   video, audio, input and repeated-session tests pass on Windows and Linux.
 - Use [PCSX2X6](https://github.com/PS2Homebrew-arcade/pcsx2x6) only as an
   external comparison implementation. It is GPL-3.0 and must not be copied or
-  linked into a proprietary WhittyArcade build.
+  linked into a proprietary MANX build.
 - Use MAME's
   [`namcops2.cpp`](https://github.com/mamedev/mame/blob/master/src/mame/namco/namcops2.cpp)
   as the primary hardware, ROM-name and dump-audit reference. MAME currently
@@ -315,7 +315,7 @@ The unchanged dongle ZIP plus the temporary optical-format CHD booted with
 Play! 1.0.0.33 through Wine on the Linux development host. Play! loaded the
 `START` executable and rendered the Ridge Racer V: Arcade Battle title/coin
 screen. This establishes asset and baseline-emulator feasibility; it is not
-yet evidence that WhittyArcade's future adapter, every race mode, audio,
+yet evidence that MANX's future adapter, every race mode, audio,
 force feedback or long-session stability works.
 
 ## Upstream comparison
@@ -323,7 +323,7 @@ force feedback or long-session stability works.
 | Project | What the research established | Role here |
 | --- | --- | --- |
 | Play! | Permissive two-clause license, HLE BIOS, native System 246 driver, CHD/dongle mounting, ACRAM/ACATA/ACCDVD/JVS HLE, driving input and three RRV-specific patches. The supplied game reached its title screen. | Recommended pinned core after a complete transitive-license audit. |
-| PCSX2X6 | GPL-3.0 PCSX2 fork; its compatibility tracker reports RRV playable. It requires a user-dumped System 246/256 COH-H BIOS because a retail PS2 BIOS has incompatible arcade modules. | External developer baseline only; do not ship, link or copy it into WhittyArcade. |
+| PCSX2X6 | GPL-3.0 PCSX2 fork; its compatibility tracker reports RRV playable. It requires a user-dumped System 246/256 COH-H BIOS because a retail PS2 BIOS has incompatible arcade modules. | External developer baseline only; do not ship, link or copy it into MANX. |
 | MAME | Best current ROM definitions and board documentation. The RRV driver identifies the V257 steering/feedback board and the real cabinet's wheel/feedback startup checks. Runtime is marked `MACHINE_NOT_WORKING | MACHINE_NO_SOUND`. | Audit/reference only; adapt only individually licensed BSD-3-Clause material with notices and provenance. |
 
 The PCSX2X6 compatibility source is its
@@ -337,7 +337,7 @@ Play!'s placement rules, driving controls and CHD troubleshooting are in its
 
 ### Build and dependency boundary
 
-Add an opt-in `whitty_playcore` target pinned to a reviewed Play! revision.
+Add an opt-in `manx_playcore` target pinned to a reviewed Play! revision.
 Do not link Play!'s Qt frontend. Its existing `ui_shared` target also pulls in
 SQLite, HTTP and optional S3/library features that the emulator session does
 not need, so the clean endpoint is a small `PlayArcadeCore` target containing:
@@ -349,7 +349,7 @@ not need, so the clean endpoint is a small `PlayArcadeCore` target containing:
   GS-frame delivery.
 
 Prefer contributing that target/API upstream. If it must initially live as a
-WhittyArcade patch, keep the patch set small, documented and reproducible
+MANX patch, keep the patch set small, documented and reproducible
 against the pinned revision. Configure `ENABLE_AMAZON_S3=OFF`.
 
 Before redistribution, record the license of Play! and every linked
@@ -401,7 +401,7 @@ session owns the Play! VM, handlers, save path and all emulator threads.
   correctness-first RGBA/staging path that submits complete immutable frames
   to `arcade_video_worker`; then add Vulkan texture sharing if profiling shows
   the copy is material. Play! must not create a second production window or
-  own WhittyArcade's process-wide SDL/Vulkan lifetime.
+  own MANX's process-wide SDL/Vulkan lifetime.
 - **Audio:** provide a Play! sound handler that sends bounded stereo PCM to
   `arcade_audio_output`. Pause, reset and teardown must stop the producer
   before the shared output is flushed.
@@ -411,7 +411,7 @@ session owns the Play! VM, handlers, save path and all emulator threads.
   service/test to the corresponding JVS actions. Test endpoints and neutral
   values so the startup checks cannot see pedal or wheel drift.
 - **Persistence:** redirect Play!'s backup RAM and arcade save files into the
-  WhittyArcade per-game configuration root. Never use Play!'s global desktop
+  MANX per-game configuration root. Never use Play!'s global desktop
   data directory from an embedded session.
 - **Lifecycle:** pause and join the VM, sound and GS producers before calling
   `arcade_video_worker::reset_session()`. Recreating `rrvac` among all other
@@ -445,7 +445,7 @@ test reports that `START` executed.
 Gate: missing dongle, wrong revision, missing CHD, wrong media type and valid
 RRV each produce deterministic test results and useful UI messages.
 
-### 3. Whitty session output
+### 3. MANX session output
 
 - Wire the offscreen GS frame sink, PCM sink, frame pacing and pause/reset.
 - Prove non-black changing frames without committing copyrighted screenshots
@@ -453,7 +453,7 @@ RRV each produce deterministic test results and useful UI messages.
 - Verify audio bounds, underrun recovery and teardown under sanitizers where
   practical.
 
-Gate: boot to the title/attract sequence through WhittyArcade with one window,
+Gate: boot to the title/attract sequence through MANX with one window,
 one shared video worker and clean audio shutdown.
 
 ### 4. Cabinet controls and persistence
@@ -561,7 +561,7 @@ the emulated SPU2 at all) is unaffected and continues to play correctly.
   already provides), not a raw memory-mapped hardware device and not a
   second SIF RPC server. Play! already has a same-shaped class,
   `Iop::Namco::CAcAta` (`Iop_NamcoAcAta.cpp/h`, upstream-committed, currently
-  unused by WhittyArcade) — but it is wired for a flat HDD image
+  unused by MANX) — but it is wired for a flat HDD image
   (`SetHddStream`, plain LBA `READ_DMA`/`IDENTIFY_DEVICE`/`SET_FEATURE`), not
   optical media, and nothing in `play_core.cpp` constructs or registers it.
 - Real ATA/ATAPI hardware-register emulation (the PCSX2X6 approach —
@@ -618,7 +618,7 @@ build):
 (`0x273360`) exist on the dongle too but are **not** in `accde`'s import list
 and were not needed for this dependency chain.
 
-**Confirmed empirically this session (env `WHITTYARCADE_TRACE_AUDIO=1`):**
+**Confirmed empirically this session (env `MANX_TRACE_AUDIO=1`):**
 - `accde` (the real SIF-0x76500002 service) is never loaded and never
   attempts to self-register — `Source/ee/SIF.cpp` `CSIF::RegisterModule` was
   instrumented for IDs `0x76500000-0x7650000F` and only ever saw the single
@@ -642,7 +642,7 @@ and were not needed for this dependency chain.
   mechanism that already resolves `sysmem`/`intrman`/`thbase`/etc. for every
   other HLE'd kernel module. `Iop::Namco::CAcAta::GetId()` already returns
   exactly `"acata"` (`Iop_NamcoAcAta.cpp:54`) — it is upstream-committed and
-  completely unused by WhittyArcade today. A new `Iop::Namco::CAcLoCore`
+  completely unused by MANX today. A new `Iop::Namco::CAcLoCore`
   stub for `"aclocore"` was written this session
   (`Iop_NamcoAcLoCore.h/.cpp`, added to `Source/CMakeLists.txt`) but is
   **not wired into `play_core.cpp`** — it exists only as an inert starting
@@ -680,7 +680,7 @@ entirely — there's nothing to notify. `TriggerCallback`'s `CreateThread`/
 `prepare_environment`, right after `vm->Reset()` (which is what initializes
 `m_moduleStarterProcAddress` and friends) and before `vm->Resume()`.
 Confirmed via the new `System 246 ProcessModuleStart`/`FinishModuleStart`
-traces (env `WHITTYARCADE_TRACE_AUDIO=1`, added to `IopBios.cpp`): calling
+traces (env `MANX_TRACE_AUDIO=1`, added to `IopBios.cpp`): calling
 `iop_bios->LoadModuleFromHost(dongle.data() + offset)` then
 `iop_bios->StartModule(CIopBios::MODULESTARTREQUEST_SOURCE::HOST, id, name, "", 0)`
 for all four modules from `prepare_environment` no longer crashes, and each
@@ -700,7 +700,7 @@ identity the project's MAME audit already flagged as the missing parent set)
 is now available, which unblocked building and reading PCSX2X6 as a genuine
 working oracle (`docs/system246_256_board_plan.md`'s existing policy: PCSX2X6
 is GPL-3.0, comparison/reference only, **never linked into or copied into
-WhittyArcade** — confirmed again this session; its core cannot be embedded
+MANX** — confirmed again this session; its core cannot be embedded
 in-process without making the combined binary GPL-3.0, which is out of
 scope). PCSX2X6 built cleanly on this machine using system Qt6/SDL3/ffmpeg
 via plain `find_package()` (`cmake -B build -G Ninja
@@ -784,7 +784,7 @@ and starts `acacd`/`accdfs`/`accdc`/`accde` from the dongle in dependency
 order via `load_and_start_dongle_module()`/`load_real_driver_chain()`
 (`play_core.cpp`), each guarded so a load/start failure logs and falls back
 to the existing `CAcCdvd` stub rather than crashing boot. Gated behind
-`WHITTYARCADE_DISABLE_REAL_DRIVER_CHAIN` (unset by default) for A/B testing.
+`MANX_DISABLE_REAL_DRIVER_CHAIN` (unset by default) for A/B testing.
 
 **New finding this session — the "aclocore framework" problem (the real
 remaining blocker for this whole approach).** All four real modules'
@@ -814,7 +814,7 @@ attempted further this session.
 **Live A/B confirmation this session: the new driver-chain code has zero
 effect on actual audio behavior, in either direction.** Running the full
 `system246_rrv_stream_integration_test` (see below) with
-`WHITTYARCADE_DISABLE_REAL_DRIVER_CHAIN=1` produces byte-identical results
+`MANX_DISABLE_REAL_DRIVER_CHAIN=1` produces byte-identical results
 to running with it enabled — same 44s sustained healthy audio window, same
 windows, same zero clipping throughout. This is expected given the finding
 above (the loaded modules never become functionally active either way) and
@@ -829,7 +829,7 @@ Built `tests/system246_rrv_stream_integration_test.cpp`: boots the real
 project's "don't launch the graphical app" testing-split convention) against
 the real `rrvac.zip` dongle + `rrv1-a.chd`, mutes the real output device
 (`audio_control->set_paused(true)`, so nothing reaches speakers) while
-`WHITTYARCADE_SPU_DUMP` still captures the genuine pre-mix SPU signal, and
+`MANX_SPU_DUMP` still captures the genuine pre-mix SPU signal, and
 scripts cabinet input to actually reach and sustain a race:
 
 - The real boot sequence (self-test "keep hands off steering wheel"
@@ -938,7 +938,7 @@ framework RE (above) or reverse-engineering the EE buffer-state transition
 that should move `-2`→`-1` for this stream — both deep, neither a quick patch.
 
 **MEASUREMENT CAVEAT — the integration test measures the wrong signal
-(2026-07-24).** `WHITTYARCADE_SPU_DUMP` captures the **pre-mix** SPU render
+(2026-07-24).** `MANX_SPU_DUMP` captures the **pre-mix** SPU render
 output, *before* the System 246 line gain (`system246_spu_line_gain_percent
 = 1600`, i.e. **16×**, in `src/system246/play_audio.h`) and final output
 mixing. So "0.000% clipping in the dump" does **not** mean "clean on the
@@ -980,7 +980,7 @@ and must be validated on the post-mix path, not the SPU dump.
   `RRV_TEST_ROM_ZIP` cache variable (matching the existing
   `SHINOBI_TEST_ROM`-style pattern — not registered as a `ctest` case unless
   a real `rrvac.zip` path is configured; currently configured to
-  `/home/jon/.local/share/WhittyArcade/roms/system246/rrvac.zip` on this
+  `/home/jon/.local/share/MANX/roms/system246/rrvac.zip` on this
   machine). Boots the real core headlessly (no window), scripts real cabinet
   input through the actual boot/self-test/attract/coin/select sequence
   documented above, and asserts on the captured SPU dump using a
@@ -1069,7 +1069,7 @@ technique this project's `TraceRrvAcCdvdClientState` family already used):**
   wasn't.
 - **Also tested and disproven: the test's own scripted input was not the
   cause.** `CSpuBase::SendKeyOn`'s existing per-key-on trace (already built,
-  `Iop_SpuBase.cpp`, gated on `WHITTYARCADE_TRACE_AUDIO`, prints address/
+  `Iop_SpuBase.cpp`, gated on `MANX_TRACE_AUDIO`, prints address/
   pitch/ADSR/a raw sample-data preview) shows the bursts are `core=0`
   channels playing genuine, valid PCM data (ADPCM-header bytes all
   plausible, ~90% nonzero data windows) at addresses that repeat exactly
@@ -1239,7 +1239,7 @@ SPU-IRQ hypothesis below, which was implemented and disproven live):**
   value, and the true tick/refill state machine will be on screen within
   one ~5-minute run. All other instrumentation (cvd RPC call/fail hooks,
   gate hook, completion-callback hook, per-tick mask logging, stream
-  struct dumps via `WHITTYARCADE_TRACE_SPUSIF`) is already in place and
+  struct dumps via `MANX_TRACE_SPUSIF`) is already in place and
   prints in the same log.
 - Handle ticks (cmd 0x8400) carry handles 21/22/23 in strict rotation
   continuously (~4.8/frame each, never stop; handle=tag-epoch*24, slot
@@ -1314,7 +1314,7 @@ smoking gun directly:
   bug's cause.
 - Ruled out: this session's real-driver-chain work (`CAcAtaAtapi`,
   `CAcLoCore`, the dongle module loader) has zero effect either way,
-  confirmed via `WHITTYARCADE_DISABLE_REAL_DRIVER_CHAIN=1` A/B testing —
+  confirmed via `MANX_DISABLE_REAL_DRIVER_CHAIN=1` A/B testing —
   those modules never become functionally active (see the aclocore-framework
   finding above), so they can't be causing or fixing this. Also ruled out:
   the pre-existing `0x01EFBE40` "ACCDVD client/worker" cooperative-scheduler

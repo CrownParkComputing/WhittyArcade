@@ -104,6 +104,9 @@ public:
     int master_volume() const { return m_master_volume.load(); }
     int music_volume() const { return m_music_volume.load(); }
     int effects_volume() const { return m_effects_volume.load(); }
+    void set_driving_feedback(bool enabled) {
+        m_driving_feedback.store(enabled, std::memory_order_release);
+    }
 
 private:
     struct command {
@@ -145,6 +148,7 @@ private:
     std::atomic<int> m_master_volume{100};
     std::atomic<int> m_music_volume{100};
     std::atomic<int> m_effects_volume{100};
+    std::atomic<bool> m_driving_feedback{false};
     std::array<std::atomic<uint16_t>, 0x800> m_register_snapshot{};
     uint32_t m_trace_command_count{0};
 };

@@ -5,7 +5,7 @@
 // This is the next milestone after pcsx2_link_test.cpp. Where the link test
 // only stands the PCSX2 CPU thread up and down headlessly, this harness:
 //   * creates a real, resizable Vulkan-capable window with SDL3 and hands its
-//     native (X11/Wayland) handle to the PCSX2 GS thread via the WhittyArcade
+//     native (X11/Wayland) handle to the PCSX2 GS thread via the MANX
 //     host hooks in pcsx2_host.cpp,
 //   * configures the in-memory settings layer for the Vulkan HW renderer and
 //     cubeb audio output, folders pointed at the PCSX2 arcade build tree,
@@ -48,12 +48,12 @@
 // ---------------------------------------------------------------------------
 // Host hooks implemented in pcsx2_host.cpp (compiled into the same target).
 // ---------------------------------------------------------------------------
-namespace WhittyArcadeHost
+namespace MANXHost
 {
 	void SetRenderWindow(const WindowInfo& wi);
 	void ClearRenderWindow();
 	void SetCPUThreadId(std::thread::id id);
-} // namespace WhittyArcadeHost
+} // namespace MANXHost
 
 // ---------------------------------------------------------------------------
 // Fixed paths into the PCSX2 arcade build tree.
@@ -224,7 +224,7 @@ static bool CreateWindowAndRegister()
 
 	// Fullscreen like every other board. WINDOW_WIDTH/HEIGHT only name the
 	// size the window would fall back to if fullscreen were toggled off.
-	s_window = SDL_CreateWindow("WhittyArcade - Ridge Racer V Arcade Battle", WINDOW_WIDTH, WINDOW_HEIGHT,
+	s_window = SDL_CreateWindow("MANX - Ridge Racer V Arcade Battle", WINDOW_WIDTH, WINDOW_HEIGHT,
 		SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN);
 	if (!s_window)
 	{
@@ -236,7 +236,7 @@ static bool CreateWindowAndRegister()
 	if (!BuildWindowInfo(s_window, &wi))
 		return false;
 
-	WhittyArcadeHost::SetRenderWindow(wi);
+	MANXHost::SetRenderWindow(wi);
 	return true;
 }
 
@@ -247,7 +247,7 @@ static void RefreshWindowInfoOnResize()
 
 	WindowInfo wi;
 	if (BuildWindowInfo(s_window, &wi))
-		WhittyArcadeHost::SetRenderWindow(wi);
+		MANXHost::SetRenderWindow(wi);
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +265,7 @@ static void RefreshWindowInfoOnResize()
 
 static void HandleKey(SDL_Scancode sc, bool down)
 {
-	using namespace WhittyArcadeInput;
+	using namespace MANXInput;
 	switch (sc)
 	{
 		case SDL_SCANCODE_LEFT:
@@ -293,7 +293,7 @@ static void HandleKey(SDL_Scancode sc, bool down)
 static void CPUThreadEntry(VMBootParameters params, std::atomic<int>* ret)
 {
 	ret->store(EXIT_FAILURE);
-	WhittyArcadeHost::SetCPUThreadId(std::this_thread::get_id());
+	MANXHost::SetCPUThreadId(std::this_thread::get_id());
 
 	if (VMManager::Internal::CPUThreadInitialize())
 	{
@@ -385,7 +385,7 @@ int main(int /*argc*/, char* /*argv*/[])
 					else if (ev.key.scancode == SDL_SCANCODE_5)
 					{
 						if (!ev.key.repeat)
-							WhittyArcadeInput::InsertCoin();
+							MANXInput::InsertCoin();
 					}
 					else
 						HandleKey(ev.key.scancode, true);
@@ -406,7 +406,7 @@ int main(int /*argc*/, char* /*argv*/[])
 		VMManager::SetState(VMState::Stopping);
 	cpu_thread.join();
 
-	WhittyArcadeHost::ClearRenderWindow();
+	MANXHost::ClearRenderWindow();
 	if (s_window)
 	{
 		SDL_DestroyWindow(s_window);

@@ -7,10 +7,9 @@
 #include "wall_capacity.h"
 #include "system16_data.h"
 #include "play_stats.h"
-#include "igdb_artwork.h"
-#include "title_capture.h"
 #include "input_mapper.h"
 #include "launcher_menu.h"
+#include "media_library.h"
 #include "multiplayer_lobby.h"
 #include "persistent_data.h"
 #include "platform_file_dialog.h"
@@ -22,6 +21,7 @@
 #include <array>
 #include <thread>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include "stb_image.h"
 #include <fstream>
@@ -36,6 +36,27 @@ namespace fs = std::filesystem;
 
 namespace {
 using board_counts = std::array<int, arcade_board_count>;
+
+bool hidden_from_launcher(arcade_board_type board) {
+    return board == arcade_board_type::xbox ||
+           board == arcade_board_type::xbox360 ||
+           board == arcade_board_type::game_plugin;
+}
+
+fs::path source_media_root();
+
+std::vector<std::string> media_names_for_choice(const rom_choice& choice) {
+    std::vector<std::string> names;
+    const fs::path path(choice.path);
+    const std::string archive_name = path.stem().string();
+    if (!archive_name.empty()) names.push_back(archive_name);
+    if (const auto identity = identify_arcade_game(choice.path)) {
+        if (std::find(names.begin(), names.end(), identity->short_name) ==
+            names.end())
+            names.push_back(identity->short_name);
+    }
+    return names;
+}
 
 int board_slot(arcade_board_type board) {
     const std::size_t index = arcade_board_index(board);
@@ -54,6 +75,8 @@ int choose_board(launcher_menu& menu, const std::string& title,
     std::vector<std::string> labels;
     const arcade_board_list& boards = arcade_boards();
     for (std::size_t slot = 0; slot < boards.size(); ++slot) {
+        if (hidden_from_launcher(boards[slot].type))
+            continue;
         if (!include_empty && counts[slot] == 0) continue;
         slots.push_back(static_cast<int>(slot));
         labels.emplace_back(std::string(boards[slot].display_name) + "  (" +
@@ -270,15 +293,60 @@ bool save_library_folders(launcher_menu& menu, emulator_settings& settings) {
         "Folders saved",
         "ROM folder:\n" + rom_library_path() +
             "\n\nCHD folder:\n" + chd_library_path() +
+            "\n\nNAS media source:\n" +
+            (settings.media_directory.empty() ?
+                std::string("Not configured") : settings.media_directory) +
+            "\n\nLocal curated media:\n" +
+            manx_media::local_root().string() +
             "\n\nInstalled supported games found: " +
             std::to_string(games.size()));
     return true;
 }
 
+void import_installed_game_media(launcher_menu& menu) {
+    const fs::path source = source_media_root();
+    if (source.empty()) {
+        menu.show_text(
+            "Import private media",
+            "Choose the mounted NAS media source first. For our pack, select "
+            "the /Roms/v3_0.285/media folder.", "Back to Folders");
+        return;
+    }
+
+    std::vector<std::string> short_names;
+    for (const rom_choice& choice : discover_library_roms({})) {
+        if (hidden_from_launcher(choice.board))
+            continue;
+        const std::vector<std::string> names = media_names_for_choice(choice);
+        short_names.insert(short_names.end(), names.begin(), names.end());
+    }
+    std::sort(short_names.begin(), short_names.end());
+    short_names.erase(std::unique(short_names.begin(), short_names.end()),
+                      short_names.end());
+
+    menu.show_splash("Copying artwork and game descriptions", 0.5f);
+    const manx_media::import_result imported =
+        manx_media::import_installed_games(
+            source, manx_media::local_root(), short_names);
+    std::ostringstream report;
+    report << imported.message
+           << "\n\nSource:\n" << source.string()
+           << "\n\nLocal mirror:\n" << manx_media::local_root().string()
+           << "\n\nNew folders created: " << imported.directories_created
+           << "\nFiles copied: " << imported.files_copied
+           << "\nDescriptions imported: "
+           << imported.descriptions_imported
+           << "\nData copied: "
+           << (imported.bytes_copied / (1024 * 1024)) << " MB";
+    menu.show_text(imported.success ? "Media import complete" :
+                                      "Media import failed",
+                   report.str(), "Back to Folders");
+}
+
 bool choose_library_folders(launcher_menu& menu, bool first_run) {
     emulator_settings settings = load_settings();
     for (;;) {
-        const int selected = menu.select(
+        const int selected = menu.select_modes(
             first_run ? "Welcome to MANX" : "ROM and CHD folders",
             first_run ?
                 "Choose where MANX should look for your existing MAME "
@@ -286,8 +354,10 @@ bool choose_library_folders(launcher_menu& menu, bool first_run) {
                 "never imported, copied or repacked." :
                 "Choose both library locations again, or use MANX's "
                 "recommended per-user folders.",
-            {"Choose my library folders",
-             "Use recommended per-user folders"},
+            {{"Choose Library", "Select existing ROM and CHD folders",
+              launcher_menu::mode_icon::folder},
+             {"Recommended Folders", "Use MANX's per-user library",
+              launcher_menu::mode_icon::settings}},
             first_run ? "Exit MANX" : "Cancel");
         if (selected < 0) return false;
         if (selected == 1) {
@@ -323,16 +393,34 @@ bool choose_library_folders(launcher_menu& menu, bool first_run) {
 
 void show_library_folder_settings(launcher_menu& menu) {
     for (;;) {
+        const emulator_settings current = load_settings();
         const std::string description =
             "ROM folder:\n" + rom_library_path() +
-            "\n\nCHD folder:\n" + chd_library_path();
-        const int selected = menu.select(
-            "ROM and CHD folders", description,
-            {"Change both folders",
-             "Change ROM folder only",
-             "Change CHD folder only",
-             "Use ROM folder for CHDs",
-             "Restore recommended folders"},
+            "\n\nCHD folder:\n" + chd_library_path() +
+            "\n\nNAS media source:\n" +
+            (current.media_directory.empty() ?
+                std::string("Not configured") :
+                current.media_directory) +
+            "\n\nLocal curated media:\n" +
+            manx_media::local_root().string();
+        const int selected = menu.select_modes(
+            "Library and media folders", description,
+            {{"ROM + CHD", "Choose both library folders",
+              launcher_menu::mode_icon::folder},
+             {"ROM Folder", "Change arcade archive location",
+              launcher_menu::mode_icon::storage},
+             {"CHD Folder", "Change disc-image location",
+              launcher_menu::mode_icon::storage},
+             {"Shared Folder", "Keep CHDs beside ROM archives",
+              launcher_menu::mode_icon::linked_cabinets},
+             {"NAS Media", "Set /Roms/v3_0.285/media source",
+              launcher_menu::mode_icon::network},
+             {"Import Media", "Copy artwork and game descriptions",
+              launcher_menu::mode_icon::refresh},
+             {"Disconnect NAS", "Keep the local copied media",
+              launcher_menu::mode_icon::exit},
+             {"Restore Defaults", "Use MANX's recommended folders",
+              launcher_menu::mode_icon::settings}},
             "Back to Settings");
         if (selected < 0) return;
         if (selected == 0) {
@@ -352,6 +440,17 @@ void show_library_folder_settings(launcher_menu& menu) {
         } else if (selected == 3) {
             settings.chd_directory = rom_library_path();
         } else if (selected == 4) {
+            const std::vector<std::string> folder = platform_file_selection(
+                true, false,
+                "Choose the mounted Roms/v3_0.285/media folder");
+            if (folder.empty()) continue;
+            settings.media_directory = folder.front();
+        } else if (selected == 5) {
+            import_installed_game_media(menu);
+            continue;
+        } else if (selected == 6) {
+            settings.media_directory.clear();
+        } else if (selected == 7) {
             settings.rom_directory.clear();
             settings.chd_directory.clear();
         }
@@ -361,16 +460,19 @@ void show_library_folder_settings(launcher_menu& menu) {
 
 void show_rom_library_manager(launcher_menu& menu) {
     for (;;) {
-        const std::vector<std::string> items{
-            "ROM and CHD folder locations",
-            "Audit ROMs",
-            "Required MAME sets",
-            "How merged / split sets work",
+        const std::vector<launcher_menu::mode_card> items{
+            {"Library + Media", "ROM, CHD and NAS artwork folders",
+             launcher_menu::mode_icon::folder},
+            {"Audit ROMs", "Verify every installed game",
+             launcher_menu::mode_icon::audit},
+            {"Required Sets", "See the supported MAME archives",
+             launcher_menu::mode_icon::storage},
+            {"Archive Help", "Merged and split-set guidance",
+             launcher_menu::mode_icon::information},
         };
-        const int selected = menu.select(
+        const int selected = menu.select_modes(
             "Settings",
-            "Manage the folders MANX reads directly. Your ROM and CHD "
-            "files remain where they are.",
+            "Choose a settings area.",
             items, "Back to Main Menu");
         if (selected < 0) return;
         if (selected == 0) {
@@ -570,23 +672,6 @@ int display_count() {
     return count;
 }
 
-bool has_second_monitor() { return display_count() > 1; }
-
-// The "two monitors" entry, greyed out and saying so on a machine with one.
-std::string second_monitor_label(const std::string& text) {
-    return has_second_monitor() ? text : text + "   (no second display)";
-}
-
-std::vector<int> second_monitor_blocked() {
-    return has_second_monitor() ? std::vector<int>{} : std::vector<int>{1};
-}
-
-std::string second_monitor_note() {
-    return has_second_monitor() ? std::string() :
-        std::string("  Only one display is connected, so the two-monitor "
-                    "option is unavailable until another is plugged in.");
-}
-
 struct launch_capabilities {
     const rom_set_manifest* manifest{};
     arcade_multiplayer_mode multiplayer{arcade_multiplayer_mode::none};
@@ -640,8 +725,8 @@ const char* board_wiki_article(arcade_board_type type) {
     case arcade_board_type::capcom_gng: return "Ghosts 'n Goblins";
     case arcade_board_type::namco_galaga: return "Galaga";
     case arcade_board_type::namco_system1: return "Namco System 1";
+    case arcade_board_type::midway: return "Midway Wolf Unit";
     }
-    return "";
 }
 
 // Decodes one harvested image. Uses the banner image type because it is the
@@ -668,22 +753,21 @@ banner::banner_image load_local_art(const std::string& path) {
     return out;
 }
 
-// The mark a card carries, and its colour. A game usually supports more than
-// one of these; the badge names the one that takes the most people, since
-// that is the question being asked when someone is scanning the shelf.
-struct play_badge {
-    const char* text{};
-    int tone{};
-};
-
-play_badge badge_for_choice(const rom_choice& choice) {
-    const launch_capabilities caps = probe_choice(choice);
-    if (caps.system_link) return {"LINK", 2};
-    if (caps.network_two_player) return {"NET", 1};
-    switch (caps.multiplayer) {
-    case arcade_multiplayer_mode::simultaneous: return {"2P", 0};
-    case arcade_multiplayer_mode::alternating: return {"2P", 0};
-    case arcade_multiplayer_mode::none: break;
+// Private/local MAME media pack. The configured folder may itself be the
+// `media` directory on a mounted NAS, or MANX can infer a sibling `media`
+// directory when ROMs live in `<version>/roms`. No URL is embedded and no
+// media is copied into a release.
+fs::path source_media_root() {
+    const emulator_settings settings = load_settings();
+    if (!settings.media_directory.empty())
+        return fs::path(settings.media_directory);
+    if (const char* environment = std::getenv("MANX_MEDIA_ROOT"))
+        if (*environment) return fs::path(environment);
+    if (!settings.rom_directory.empty()) {
+        const fs::path beside_roms =
+            fs::path(settings.rom_directory).parent_path() / "media";
+        std::error_code error;
+        if (fs::is_directory(beside_roms, error)) return beside_roms;
     }
     return {};
 }
@@ -703,8 +787,6 @@ bool matches_play_style(const rom_choice& choice, int style) {
 // launcher_menu::interrupted when the interrupt callback fired.
 int browse_library_grid(
     launcher_menu& menu, const std::vector<rom_choice>& choices,
-    igdb::cover_library& covers,
-    std::map<std::string, igdb::cover_image>& cover_pixels,
     banner::library& banners,
     std::map<std::string, banner::banner_image>& banner_pixels,
     const std::string& menu_title,
@@ -749,6 +831,10 @@ int browse_library_grid(
         }
         // Decoded local artwork, keyed by index into choices.
     std::map<std::size_t, banner::banner_image> local_art;
+    std::map<std::size_t, std::string> local_descriptions;
+    const fs::path media_source = source_media_root();
+    const fs::path media_local = manx_media::local_root();
+    std::string media_category = load_settings().media_artwork_category;
     // 0 A-Z, 1 most played, 2 recently added, 3 last played, 4 single-screen,
     // 5 multi-screen. The browser opens on Last Played: the games from the
     // previous session are the ones most likely wanted again. 4 and 5 are the
@@ -852,32 +938,21 @@ int browse_library_grid(
                 });
             std::vector<std::size_t> game_indices;
             std::vector<std::string> labels;
-            std::vector<play_badge> badges;
+            std::vector<std::string> descriptions;
             for (const browse_entry& entry : visible) {
                 game_indices.push_back(entry.index);
                 labels.push_back(choices[entry.index].label);
-                badges.push_back(badge_for_choice(choices[entry.index]));
+                auto cached = local_descriptions.find(entry.index);
+                if (cached == local_descriptions.end()) {
+                    cached = local_descriptions.emplace(
+                        entry.index,
+                        manx_media::description(
+                            media_local,
+                            media_names_for_choice(choices[entry.index])))
+                                 .first;
+                }
+                descriptions.push_back(cached->second);
             }
-            std::string view_name =
-                sort_mode == 1 ? "Most Played" :
-                sort_mode == 2 ? "Recently Added" :
-                sort_mode == 3 ? "Last Played" :
-                sort_mode == 4 ? "Single-Screen Games" :
-                sort_mode == 5 ? "Multi-Screen Games" : "A - Z";
-            if (play_style && *play_style > 0)
-                view_name = std::string(
-                    play_style_names[static_cast<std::size_t>(*play_style)]) +
-                    "  \u00b7  " + view_name;
-            if (board_narrow >= 0)
-                view_name += std::string("  \u00b7  ") +
-                    arcade_boards()[static_cast<std::size_t>(board_narrow)]
-                        .display_name +
-                    "  \u00b7  page " + std::to_string(page_index + 1) +
-                    " / " + std::to_string(page_count);
-            if (!publisher_narrow.empty())
-                view_name += "  \u00b7  " + publisher_narrow +
-                    "  \u00b7  page " + std::to_string(page_index + 1) +
-                    " / " + std::to_string(page_count);
             // Local artwork for whatever this page shows, decoded once and
             // kept for the life of the browser.
             for (std::size_t slot = 0; slot < game_indices.size(); ++slot) {
@@ -889,8 +964,17 @@ int browse_library_grid(
                     local_art[entry] = {};
                     continue;
                 }
-                local_art[entry] = load_local_art(
-                    title_capture_path(identity->short_name));
+                banner::banner_image image = load_local_art(
+                    manx_media::artwork_path(
+                        media_local, media_names_for_choice(choices[entry]),
+                        media_category).string());
+                if (!image.valid())
+                    image = load_local_art(
+                        manx_media::artwork_path(
+                            media_source,
+                            media_names_for_choice(choices[entry]),
+                            media_category).string());
+                local_art[entry] = std::move(image);
             }
             // No downloaded artwork: a game whose icon has not been
             // captured yet shows its name on the plain plate until it has
@@ -968,12 +1052,8 @@ int browse_library_grid(
                 labels.empty() ?
                     "No games match this view. TAB changes the view; open "
                     "Settings from the System Menu to choose ROM folders." :
-                    !board_summary.empty() ?
-                        board_summary :
-                        "View: " + view_name + "  \u00b7  " +
-                            std::to_string(labels.size()) +
-                            " games  \u00b7  2P two players here, "
-                            "NET two machines, LINK cabinet link",
+                    "Multiscreen Arcade Nexus  //  Multi-screen. "
+                    "Multi-player. Networked arcade cohesion.",
                 labels, back_label, std::min(remembered,
                     std::max(0, static_cast<int>(labels.size()) - 1)),
                 [&](int index) {
@@ -981,14 +1061,8 @@ int browse_library_grid(
                     if (index < 0 ||
                         index >= static_cast<int>(labels.size()))
                         return art;
-                    const play_badge& badge =
-                        badges[static_cast<std::size_t>(index)];
-                    art.badge = badge.text;
-                    art.badge_tone = badge.tone;
-                    // Locally harvested arcade title screens come first -
-                    // they are the game's own artwork and need no network -
-                    // with the IGDB cover as the fallback for anything the
-                    // harvest does not have.
+                    // Only the explicitly selected NAS media category is
+                    // shown. Missing media stays a named placeholder.
                     const std::size_t entry =
                         game_indices[static_cast<std::size_t>(index)];
                     const auto local = local_art.find(entry);
@@ -1002,12 +1076,6 @@ int browse_library_grid(
                 },
                 [&] {
                     bool arrived = false;
-                    for (igdb::ready_cover& ready : covers.take_ready()) {
-                        if (!ready.image.valid()) continue;
-                        cover_pixels[ready.menu_label] =
-                            std::move(ready.image);
-                        arrived = true;
-                    }
                     for (banner::ready_banner& ready : banners.take_ready()) {
                         if (!ready.image.valid()) continue;
                         banner_pixels[ready.key] = std::move(ready.image);
@@ -1030,7 +1098,150 @@ int browse_library_grid(
                 },
                 interrupt, page_mode != 0, banner_ptr,
                 !board_info.empty(),
-                /*list_view=*/true);
+                /*list_view=*/false,
+                /*marquee_view=*/media_category == "marquee",
+                /*coverflow_view=*/media_category == "coverflow",
+                /*video_for=*/[&](int index) -> std::string {
+                    if (index < 0 || index >= static_cast<int>(game_indices.size()))
+                        return {};
+                    const std::size_t entry = game_indices[static_cast<std::size_t>(index)];
+                    const auto names = media_names_for_choice(choices[entry]);
+                    for (const std::string& name : names) {
+                        for (const char* dir : {"snap", "video", "videos", ""}) {
+                            const fs::path folder = dir[0] ?
+                                media_local / dir : media_local;
+                            std::error_code ec;
+                            if (!fs::is_directory(folder, ec)) { ec.clear(); continue; }
+                            for (const char* ext : {".mp4", ".avi", ".mkv"}) {
+                                const fs::path candidate = folder / (name + ext);
+                                if (fs::is_regular_file(candidate, ec)) {
+                                    ec.clear();
+                                    return candidate.string();
+                                }
+                                ec.clear();
+                            }
+                        }
+                        for (const char* dir : {"snap", "video", "videos", ""}) {
+                            const fs::path folder = dir[0] ?
+                                media_source / dir : media_source;
+                            if (folder.empty()) continue;
+                            std::error_code ec;
+                            if (!fs::is_directory(folder, ec)) { ec.clear(); continue; }
+                            for (const char* ext : {".mp4", ".avi", ".mkv"}) {
+                                const fs::path candidate = folder / (name + ext);
+                                if (fs::is_regular_file(candidate, ec)) {
+                                    ec.clear();
+                                    return candidate.string();
+                                }
+                                ec.clear();
+                            }
+                        }
+                    }
+                    return std::string();
+                },
+                /*media_for=*/[&](int index) -> launcher_menu::game_media {
+                    launcher_menu::game_media media;
+                    if (index < 0 || index >= static_cast<int>(game_indices.size()))
+                        return media;
+
+                    const std::size_t entry = game_indices[static_cast<std::size_t>(index)];
+                    const auto names = media_names_for_choice(choices[entry]);
+
+                    // Lambda to load image file
+                    auto load_image = [](const fs::path& path) -> std::pair<std::vector<uint8_t>, std::pair<int, int>> {
+                        std::ifstream file(path, std::ios::binary);
+                        if (!file) return {{}, {0, 0}};
+                        std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
+                                                   std::istreambuf_iterator<char>());
+                        int w = 0, h = 0;
+                        stbi_uc* pixels = stbi_load_from_memory(
+                            data.data(), static_cast<int>(data.size()), &w, &h, nullptr, 4);
+                        if (!pixels) return {{}, {0, 0}};
+                        std::vector<uint8_t> rgba(pixels, pixels + static_cast<std::size_t>(w) * h * 4);
+                        stbi_image_free(pixels);
+                        return {rgba, {w, h}};
+                    };
+
+                    // Load box art
+                    for (const std::string& name : names) {
+                        for (const char* dir : {"box", "boxart", ""}) {
+                            const fs::path folder = dir[0] ? media_local / dir : media_local;
+                            std::error_code ec;
+                            for (const char* ext : {".png", ".jpg", ".jpeg"}) {
+                                const fs::path candidate = folder / (name + ext);
+                                if (fs::is_regular_file(candidate, ec)) {
+                                    auto [pixels, dims] = load_image(candidate);
+                                    if (!pixels.empty()) {
+                                        static std::vector<uint8_t> box_data;
+                                        box_data = std::move(pixels);
+                                        media.box_pixels = box_data.data();
+                                        media.box_w = dims.first;
+                                        media.box_h = dims.second;
+                                        break;
+                                    }
+                                    ec.clear();
+                                }
+                            }
+                            if (media.box_pixels) break;
+                        }
+                        if (media.box_pixels) break;
+                    }
+
+                    // Load marquee
+                    for (const std::string& name : names) {
+                        for (const char* dir : {"marquee", "logo", ""}) {
+                            const fs::path folder = dir[0] ? media_local / dir : media_local;
+                            std::error_code ec;
+                            for (const char* ext : {".png", ".jpg", ".jpeg"}) {
+                                const fs::path candidate = folder / (name + ext);
+                                if (fs::is_regular_file(candidate, ec)) {
+                                    auto [pixels, dims] = load_image(candidate);
+                                    if (!pixels.empty()) {
+                                        static std::vector<uint8_t> marquee_data;
+                                        marquee_data = std::move(pixels);
+                                        media.marquee_pixels = marquee_data.data();
+                                        media.marquee_w = dims.first;
+                                        media.marquee_h = dims.second;
+                                        break;
+                                    }
+                                    ec.clear();
+                                }
+                            }
+                            if (media.marquee_pixels) break;
+                        }
+                        if (media.marquee_pixels) break;
+                    }
+
+                    // Load snapshot
+                    for (const std::string& name : names) {
+                        for (const char* dir : {"snap", "screenshot", "screenshot", ""}) {
+                            const fs::path folder = dir[0] ? media_local / dir : media_local;
+                            std::error_code ec;
+                            for (const char* ext : {".png", ".jpg", ".jpeg"}) {
+                                const fs::path candidate = folder / (name + ext);
+                                if (fs::is_regular_file(candidate, ec)) {
+                                    auto [pixels, dims] = load_image(candidate);
+                                    if (!pixels.empty()) {
+                                        static std::vector<uint8_t> snap_data;
+                                        snap_data = std::move(pixels);
+                                        media.snap_pixels = snap_data.data();
+                                        media.snap_w = dims.first;
+                                        media.snap_h = dims.second;
+                                        break;
+                                    }
+                                    ec.clear();
+                                }
+                            }
+                            if (media.snap_pixels) break;
+                        }
+                        if (media.snap_pixels) break;
+                    }
+
+                    return media;
+                },
+                &descriptions);
+            if (selected_game == launcher_menu::exit_requested)
+                return launcher_menu::exit_requested;
             if (selected_game == launcher_menu::interrupted)
                 return launcher_menu::interrupted;
             if (selected_game == launcher_menu::info_request) {
@@ -1045,59 +1256,34 @@ int browse_library_grid(
                 continue;
             }
             if (selected_game == launcher_menu::view_change) {
-                std::vector<std::string> view_items{
-                    "Last Played  |  pick up where you left off",
-                    "All Games  |  A - Z",
-                    "Most Played  |  your launch history",
-                    "Recently Added  |  newest ROM files first",
-                    "By Board  |  original arcade hardware",
-                    "By Publisher  |  who made the machine"};
-                if (play_style)
-                    view_items.push_back(
-                        std::string("Play Style  |  now: ") +
-                        play_style_names[
-                            static_cast<std::size_t>(*play_style)]);
-                const int view = menu.select(
-                    menu_title + " - View",
-                    "Order the grid, narrow it to one board or publisher, "
-                    "or filter by how many players a game supports.",
-                    view_items, "Back");
-                if (view == 0) {
-                    sort_mode = 3;
-                    page_mode = 0;
-                    page_index = 0;
-                } else if (view == 1) {
-                    sort_mode = 0;
-                    page_mode = 0;
-                    page_index = 0;
-                } else if (view == 2) {
-                    sort_mode = 1;
-                } else if (view == 3) {
-                    sort_mode = 2;
-                } else if (view == 4) {
-                    // Straight into the pages: one per board, first board
-                    // first, PgUp/PgDn or the shoulders flip between them.
-                    page_mode = 1;
-                    page_index = 0;
-                } else if (view == 6 && play_style) {
-                    const int style = menu.select(
-                        "Play Style",
-                        "Alternating games take turns on one cabinet; "
-                        "simultaneous games put both players on together. "
-                        "Twin Screens splits the view per player; Linked "
-                        "Cabinets runs two original machines side by side.",
-                        {"All Games",
-                         "2P Alternating  |  take turns, one cabinet",
-                         "2P Simultaneous  |  both players at once",
-                         "2P Twin Screens  |  split or two monitors",
-                         "2P Linked Cabinets  |  twin-cabinet racing"},
-                        "Back");
-                    if (style >= 0 && style <= 4) *play_style = style;
-                } else if (view == 5) {
-                    // Straight into the pages: one per publisher, flipped
-                    // with PgUp/PgDn or the shoulders.
-                    page_mode = 2;
-                    page_index = 0;
+                static constexpr std::array<const char*, 4> categories{{
+                    "box2d", "box3d", "marquee", "coverflow",
+                }};
+                int current_artwork = 0;
+                for (std::size_t index = 0; index < categories.size(); ++index)
+                    if (media_category == categories[index])
+                        current_artwork = static_cast<int>(index);
+                const int artwork = menu.select_modes(
+                    "Artwork", "",
+                    {{"2D", "Flat cover",
+                      launcher_menu::mode_icon::cover_front},
+                     {"3D", "Box render",
+                      launcher_menu::mode_icon::cover_3d},
+                     {"Marquee", "Cabinet header",
+                      launcher_menu::mode_icon::marquee_art},
+                     {"Cover Flow", "Full-screen 3D carousel",
+                      launcher_menu::mode_icon::fan_art}},
+                    "Back to Games", current_artwork);
+                if (artwork == launcher_menu::exit_requested)
+                    return launcher_menu::exit_requested;
+                if (artwork >= 0 && artwork <
+                        static_cast<int>(categories.size())) {
+                    media_category =
+                        categories[static_cast<std::size_t>(artwork)];
+                    emulator_settings settings = load_settings();
+                    settings.media_artwork_category = media_category;
+                    save_settings(settings);
+                    local_art.clear();
                 }
                 remembered = 0;
                 continue;
@@ -1145,12 +1331,10 @@ std::string show_in_game_game_browser(const std::vector<rom_choice>& choices) {
     // A software launcher avoids stealing the running cabinet's GL context,
     // exactly as the in-game controls mapper does.
     launcher_menu menu(true);
-    igdb::cover_library covers;
-    std::map<std::string, igdb::cover_image> cover_pixels;
     banner::library banners;
     std::map<std::string, banner::banner_image> banner_pixels;
     const int picked = browse_library_grid(
-        menu, choices, covers, cover_pixels, banners, banner_pixels,
+        menu, choices, banners, banner_pixels,
         "Switch Game", {});
     return picked >= 0 ? choices[static_cast<std::size_t>(picked)].path
                        : std::string();
@@ -1209,10 +1393,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 return true;
             });
     };
-    // Cover artwork, collected in the background and kept for the life
-    // of the selector so moving between lists does not refetch.
-    igdb::cover_library covers;
-    std::map<std::string, igdb::cover_image> cover_pixels;
+    // Board and publisher banners are collected in the background and kept
+    // for the life of the selector so moving between lists does not refetch.
     banner::library banners;
     std::map<std::string, banner::banner_image> banner_pixels;
     if (!load_settings().library_setup_complete &&
@@ -1223,6 +1405,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     }
     menu.show_splash("Reading the game library", 0.35f);
     std::vector<rom_choice> choices = discover_rom_choices(current_path);
+    choices.erase(
+        std::remove_if(choices.begin(), choices.end(),
+            [](const rom_choice& choice) {
+                return hidden_from_launcher(choice.board);
+            }),
+        choices.end());
     menu.show_splash("Gathering cabinet artwork", 0.8f);
     const auto linked_result = [&](std::string_view short_name, int node) {
         for (const rom_choice& choice : choices) {
@@ -1253,20 +1441,103 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // that ends in "pick a game". filter narrows the library - the same-
     // machine menu offers only games with a second-player path - and a game
     // that fails its manifest check reports itself and keeps browsing.
+    bool exit_from_nested_browser = false;
     const auto browse_for_game =
         [&](const std::string& menu_title,
             const std::function<bool(const rom_choice&)>& filter)
         -> std::optional<std::size_t> {
         const int picked = browse_library_grid(
-            menu, choices, covers, cover_pixels, banners, banner_pixels,
+            menu, choices, banners, banner_pixels,
             menu_title, filter);
+        if (picked == launcher_menu::exit_requested)
+            exit_from_nested_browser = true;
         if (picked < 0) return std::nullopt;
         return static_cast<std::size_t>(picked);
     };
 
-    // The grid IS the launcher: games appear immediately, the play style is
-    // a view filter, and everything that is not a game lives behind Back.
+    struct platform_entry {
+        arcade_board_type board;
+        std::string name;
+        std::string logo;
+        int games{};
+        launcher_menu::mode_icon icon{launcher_menu::mode_icon::storage};
+    };
+    std::vector<platform_entry> platforms;
+    const auto platform_name = [](arcade_board_type board) {
+        const int slot = board_slot(board);
+        if (slot >= 0)
+            return std::string(arcade_boards()[
+                static_cast<std::size_t>(slot)].display_name);
+        if (board == arcade_board_type::game_plugin)
+            return std::string("Native Arcade");
+        return std::string("Other Arcade");
+    };
+    const auto platform_icon = [](arcade_board_type board) {
+        switch (board) {
+        case arcade_board_type::system22:
+        case arcade_board_type::system246:
+        case arcade_board_type::model1:
+        case arcade_board_type::model2:
+            return launcher_menu::mode_icon::linked_cabinets;
+        case arcade_board_type::system16b:
+        case arcade_board_type::capcom_gng:
+            return launcher_menu::mode_icon::local_players;
+        case arcade_board_type::game_plugin:
+            return launcher_menu::mode_icon::display_wall;
+        default:
+            return launcher_menu::mode_icon::solo;
+        }
+    };
+    const auto platform_logo = [](arcade_board_type board) {
+        switch (board) {
+        case arcade_board_type::system22:
+        case arcade_board_type::namco_galaga:
+        case arcade_board_type::namco_system1:
+            return std::string("Namco");
+        case arcade_board_type::system246:
+            return std::string("Sony");
+        case arcade_board_type::model1:
+        case arcade_board_type::model2:
+        case arcade_board_type::system16b:
+            return std::string("Sega");
+        case arcade_board_type::capcom_gng:
+            return std::string("Capcom");
+        case arcade_board_type::galaxian:
+            return std::string("Namco");
+        case arcade_board_type::phoenix:
+            return std::string("Amstar");
+        case arcade_board_type::midway:
+            return std::string("Midway");
+        default:
+            return std::string();
+        }
+    };
+    for (const rom_choice& choice : choices) {
+        const auto found = std::find_if(
+            platforms.begin(), platforms.end(),
+            [&](const platform_entry& entry) {
+                return entry.board == choice.board;
+            });
+        if (found != platforms.end()) {
+            ++found->games;
+        } else {
+            platforms.push_back({choice.board, platform_name(choice.board),
+                                 platform_logo(choice.board), 1,
+                                 platform_icon(choice.board)});
+        }
+    }
+    std::stable_sort(platforms.begin(), platforms.end(),
+                     [](const platform_entry& left,
+                        const platform_entry& right) {
+                         return left.name < right.name;
+                     });
+
+    // Platform is the first selection. Once inside one, Back returns to the
+    // platform tiles; Back there opens the system menu. This keeps a marquee
+    // carousel short and coherent instead of mixing every board generation.
     int play_style = 0;
+    std::optional<arcade_board_type> selected_platform;
+    int platform_cursor = 0;
     for (;;) {
         if (lobby) lobby->set_installed_games(choices);
         const bool lobby_connected_at_draw = lobby && lobby->connected();
@@ -1283,82 +1554,181 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                        lobby->connected() != lobby_connected_at_draw;
             }) :
             std::function<bool()>{};
-        const int picked = browse_library_grid(
-            menu, choices, covers, cover_pixels, banners, banner_pixels,
-            "MANX", {}, &play_style, interrupt, "System Menu");
+        bool system_menu_requested = false;
+        if (!selected_platform) {
+            std::vector<launcher_menu::mode_card> platform_cards;
+            std::vector<std::string> platform_logo_keys;
+            platform_cards.reserve(platforms.size());
+            platform_logo_keys.reserve(platforms.size());
+            for (const platform_entry& platform : platforms) {
+                platform_cards.push_back({
+                    platform.name,
+                    std::to_string(platform.games) +
+                    (platform.games == 1 ? " game" : " games"),
+                    platform.icon, platform.games});
+                platform_cards.back().artwork_fallback = platform.logo;
+                const std::string key = platform.logo.empty() ? std::string{} :
+                    "brand_" + platform.logo;
+                platform_logo_keys.push_back(key);
+                if (!key.empty())
+                    banners.request(key, banner::library::kind::commons_logo,
+                                    platform.logo);
+            }
+            const auto collect_platform_logos = [&] {
+                bool arrived = false;
+                for (banner::ready_banner& ready : banners.take_ready()) {
+                    if (!ready.image.valid()) continue;
+                    banner_pixels[ready.key] = std::move(ready.image);
+                    arrived = true;
+                }
+                for (std::size_t index = 0;
+                     index < platform_logo_keys.size(); ++index) {
+                    const auto found = banner_pixels.find(
+                        platform_logo_keys[index]);
+                    if (found == banner_pixels.end() ||
+                        !found->second.valid())
+                        continue;
+                    platform_cards[index].artwork =
+                        found->second.rgba.data();
+                    platform_cards[index].artwork_width =
+                        found->second.width;
+                    platform_cards[index].artwork_height =
+                        found->second.height;
+                }
+                return arrived;
+            };
+            const int platform_choice = menu.select_modes(
+                "Choose Platform",
+                "Multiscreen Arcade Nexus",
+                platform_cards, "System Menu", platform_cursor, interrupt,
+                collect_platform_logos);
+            if (platform_choice == launcher_menu::exit_requested) {
+                rom_selection_result exit_result;
+                exit_result.action = rom_selection_action::exit_requested;
+                return exit_result;
+            }
+            if (platform_choice == launcher_menu::interrupted) {
+                rom_selection_result remote = take_remote_launch();
+                if (remote.action == rom_selection_action::selected)
+                    return remote;
+                continue;
+            }
+            if (platform_choice < 0) {
+                system_menu_requested = true;
+            } else {
+                platform_cursor = platform_choice;
+                selected_platform = platforms[
+                    static_cast<std::size_t>(platform_choice)].board;
+            }
+        }
+
+        int picked = -1;
+        if (!system_menu_requested) {
+            const std::string title = platform_name(*selected_platform);
+            picked = browse_library_grid(
+                menu, choices, banners, banner_pixels, title,
+                [&](const rom_choice& choice) {
+                    return choice.board == *selected_platform;
+                }, &play_style, interrupt, "Platforms");
+        }
+        if (picked == launcher_menu::exit_requested) {
+            rom_selection_result exit_result;
+            exit_result.action = rom_selection_action::exit_requested;
+            return exit_result;
+        }
         if (picked == launcher_menu::interrupted) {
             rom_selection_result remote = take_remote_launch();
             if (remote.action == rom_selection_action::selected) return remote;
+            continue;
+        }
+        if (!system_menu_requested && picked < 0) {
+            selected_platform.reset();
+            play_style = 0;
             continue;
         }
         if (picked >= 0) {
             const rom_choice& choice =
                 choices[static_cast<std::size_t>(picked)];
             if (play_style == 0) {
-                // No style chosen, so ask - but only when there is something
-                // to ask. A game with no second-player path just starts,
-                // which is what makes the grid feel like a shelf rather than
-                // a form; anything else would put a menu in front of every
-                // launch to serve the few that need one.
+                // Always ask how to launch. Multi-instance is useful even
+                // when an older catalogue entry has no multiplayer metadata,
+                // and must never disappear merely because that metadata is
+                // incomplete.
                 const launch_capabilities caps = probe_choice(choice);
-                const bool shared_cabinet =
-                    caps.multiplayer != arcade_multiplayer_mode::none;
-                if (!shared_cabinet && !caps.system_link &&
-                    !caps.network_two_player) {
-                    // Genuinely a one-player board: nothing to ask about.
-                    run_loading_screen(menu, choice);
-
-                    return {rom_selection_action::selected, choice.path, cabinet_launch_mode::single, 0, false, false,
-                            false, {}};
-                }
                 int wanted = -1;
                 while (wanted < 0) {
-                    const bool peer_ready = lobby && lobby->connected();
-                    std::vector<std::string> how;
+                    const auto identity = identify_arcade_game(choice.path);
+                    const bool peer_connected = lobby && lobby->connected();
+                    const bool peer_ready = peer_connected && identity &&
+                        lobby->peer_has_game(identity->short_name);
+                    std::vector<launcher_menu::mode_card> how;
                     std::vector<int> how_style;
-                    how.push_back("Single Player");
+                    how.push_back({"Single Player", "One player, one cabinet",
+                                   launcher_menu::mode_icon::solo});
                     how_style.push_back(0);
+                    how.push_back({
+                        "Another Instance",
+                        caps.system_link || caps.network_two_player ?
+                            "Start Player 2 here and connect immediately" :
+                            "Start a second connected cabinet here",
+                        launcher_menu::mode_icon::linked_cabinets, 2});
+                    how_style.push_back(6);
                     if (caps.multiplayer ==
                             arcade_multiplayer_mode::alternating) {
-                        how.push_back(
-                            "2 Players  |  take turns on this cabinet");
+                        how.push_back({"Local Multiplayer",
+                                       "Take turns on this cabinet",
+                                       launcher_menu::mode_icon::local_players});
                         how_style.push_back(1);
                     } else if (caps.multiplayer ==
                                    arcade_multiplayer_mode::simultaneous) {
-                        how.push_back("2 Players  |  both at once on this "
-                                      "cabinet");
+                        how.push_back({"Local Multiplayer",
+                                       "Play together on this cabinet",
+                                       launcher_menu::mode_icon::local_players});
                         how_style.push_back(2);
                     }
                     if (caps.network_two_player) {
-                        how.push_back("2 Players  |  a screen each");
+                        how.push_back({"Split Screen",
+                                       "A separate view for each player",
+                                       launcher_menu::mode_icon::split_screen});
                         how_style.push_back(3);
                     }
                     if (caps.system_link) {
-                        how.push_back(
-                            "Linked Cabinets  |  two machines, linked");
-                        how_style.push_back(4);
+                        const int maximum = identity ?
+                            linked_cabinet_maximum(identity->short_name) : 2;
+                        if (maximum > 2) {
+                            how.push_back({
+                                "Linked Cabinets",
+                                "Launch 2-" + std::to_string(maximum) +
+                                    " connected instances here",
+                                launcher_menu::mode_icon::linked_cabinets,
+                                maximum});
+                            how_style.push_back(4);
+                        }
                     }
-                    if (peer_ready) {
-                        how.push_back("2 Players  |  the other computer");
+                    if (lobby) {
+                        how.push_back({"Network Play",
+                                       "Play across two computers",
+                                       launcher_menu::mode_icon::network, 0,
+                                       !peer_ready,
+                                       peer_ready ? "PEER READY" :
+                                       peer_connected ? "GAME NOT ON PEER" :
+                                                        "SEARCHING"});
                         how_style.push_back(5);
                     }
-                    // Say why the across-computers option is missing rather
-                    // than leaving a player to wonder. The menu is rebuilt if
-                    // a machine turns up while it is open, so the option
-                    // appears the moment it becomes true - no backing out and
-                    // coming in again to find it.
-                    const std::string why =
-                        peer_ready ?
-                            "Another machine is connected, so this game can "
-                            "also be played across both computers." :
-                            "Waiting for another machine on the network - "
-                            "until one appears, only what this cabinet can "
-                            "do on its own is available.";
-                    const int how_chosen = menu.select_interruptible(
-                        choice.label, why, how, "Back", 0,
-                        [lobby, peer_ready] {
-                            return (lobby && lobby->connected()) != peer_ready;
+                    const int how_chosen = menu.select_modes(
+                        choice.label,
+                        "Choose how this game should launch.", how,
+                        "Back to Games", 0,
+                        [lobby, peer_connected] {
+                            return lobby &&
+                                lobby->connected() != peer_connected;
                         });
+                    if (how_chosen == launcher_menu::exit_requested) {
+                        rom_selection_result exit_result;
+                        exit_result.action =
+                            rom_selection_action::exit_requested;
+                        return exit_result;
+                    }
                     if (how_chosen == launcher_menu::interrupted)
                         continue;   // a machine arrived, or left
                     if (how_chosen < 0 ||
@@ -1375,6 +1745,15 @@ rom_selection_result show_rom_selector(const std::string& current_path,
 
                     return {rom_selection_action::selected, choice.path, cabinet_launch_mode::linked_network, 1, false,
                             false, true, {}};
+                }
+                if (wanted == 6) {
+                    // A second process on this computer. Main allocates a
+                    // private loopback port pair before spawning it, so this
+                    // is already connected when both boards finish booting.
+                    run_loading_screen(menu, choice);
+                    return {rom_selection_action::selected, choice.path,
+                            cabinet_launch_mode::linked_pair, 0, false, false,
+                            true, {}};
                 }
                 if (wanted == 0 || wanted == 1 || wanted == 2) {
                     run_loading_screen(menu, choice);
@@ -1396,14 +1775,24 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 // A machine with one display cannot put a player on a
                 // second one, but the option still shows - greyed out, so it
                 // reads as "this machine cannot", not "this cannot be done".
-                const int mode = menu.select(
+                const bool second_display_missing =
+                    display_count() < 2;
+                const int mode = menu.select_modes(
                     "Start " + choice.label + " - Twin Screens",
-                    "Each player gets an aspect-correct view of the same "
-                    "session: fullscreen split down the middle, or one "
-                    "monitor each." + second_monitor_note(),
-                    {"Split This Monitor  |  fullscreen, half each",
-                     second_monitor_label("Two Monitors  |  one per display")},
-                    "Back", 0, second_monitor_blocked());
+                    "Choose where the two player views should appear.",
+                    {{"Split This Screen", "Two views, side by side",
+                      launcher_menu::mode_icon::split_screen},
+                     {"Two Monitors", "One fullscreen view per display",
+                      launcher_menu::mode_icon::display_wall, 2,
+                      second_display_missing,
+                      second_display_missing ? "CONNECT A SECOND DISPLAY" :
+                                               "2 DISPLAYS READY"}},
+                    "Back to Modes");
+                if (mode == launcher_menu::exit_requested) {
+                    rom_selection_result exit_result;
+                    exit_result.action = rom_selection_action::exit_requested;
+                    return exit_result;
+                }
                 if (mode < 0) continue;
                 run_loading_screen(menu, choice);
 
@@ -1417,27 +1806,47 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             const int cabinet_maximum = link_identity ?
                 linked_cabinet_maximum(link_identity->short_name) : 2;
             if (cabinet_maximum > 2) {
-                std::vector<std::string> counts;
-                for (int count = 2; count <= cabinet_maximum; ++count)
-                    counts.push_back(std::to_string(count) + " Cabinets" +
-                                     (count == 2 ? "  |  classic twin" : ""));
-                const int picked = menu.select(
+                std::vector<launcher_menu::mode_card> counts;
+                for (int count = 2; count <= cabinet_maximum; ++count) {
+                    counts.push_back({std::to_string(count) + " Cabinets",
+                                      count == 2 ? "Classic linked twin" :
+                                                   "One instance per cabinet",
+                                      launcher_menu::mode_icon::cabinet_count,
+                                      count});
+                }
+                const int picked = menu.select_modes(
                     "Start " + choice.label + " - Cabinets In The Link",
-                    "Every cabinet is its own machine on the ring, exactly "
-                    "as the arcade linked them.",
-                    counts, "Back", 0);
+                    "Choose how many linked game instances to start on this "
+                    "machine.", counts, "Back to Modes", 0);
+                if (picked == launcher_menu::exit_requested) {
+                    rom_selection_result exit_result;
+                    exit_result.action = rom_selection_action::exit_requested;
+                    return exit_result;
+                }
                 if (picked < 0) continue;
                 cabinet_count = 2 + picked;
             }
-            const int mode = menu.select(
+            const int connected_displays = display_count();
+            const bool second_display_missing =
+                connected_displays < cabinet_count;
+            const int mode = menu.select_modes(
                 "Start " + choice.label + " - Linked Cabinets",
-                "Original cabinets, linked exactly as in the arcade: "
-                "side by side on this display, or one cabinet per monitor." +
-                    second_monitor_note(),
-                {"Side By Side  |  this display, half each",
-                 second_monitor_label(
-                     "Two Monitors  |  one cabinet per display")},
-                "Back", 0, second_monitor_blocked());
+                "Choose how the linked cabinets should use your displays.",
+                {{"Side By Side", "Tile every cabinet on this display",
+                  launcher_menu::mode_icon::split_screen, cabinet_count},
+                 {"Separate Monitors", "One cabinet per connected display",
+                  launcher_menu::mode_icon::display_wall, cabinet_count,
+                  second_display_missing,
+                  second_display_missing ?
+                      std::to_string(connected_displays) + " OF " +
+                          std::to_string(cabinet_count) + " DISPLAYS" :
+                                           "DISPLAYS READY"}},
+                "Back to Games", 0);
+            if (mode == launcher_menu::exit_requested) {
+                rom_selection_result exit_result;
+                exit_result.action = rom_selection_action::exit_requested;
+                return exit_result;
+            }
             if (mode < 0) continue;
             rom_selection_result linked{rom_selection_action::selected,
                                         choice.path,
@@ -1447,29 +1856,38 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             return linked;
         }
 
-        // Back from the grid: the system menu. Everything that is not
-        // picking a game lives here, including leaving the program.
-        const int selected_page = menu.select(
+        // Back from platform selection: the system menu. Everything that is
+        // not picking a game lives here, including leaving the program.
+        const int selected_page = menu.select_modes(
             "MANX",
             lobby && lobby->connected() ?
                 "Network player connected - Network Play launches a shared "
                 "game across both computers." :
                 "System pages. Network Play searches for a second "
                 "MANX on the local network automatically.",
-            {lobby && lobby->connected() ?
-                 std::string("Network Play  [CONNECTED]") :
-                 std::string("Network Play  [SEARCHING]"),
-             "Arcade Wall  |  several games side by side",
-             "Settings",
-             "Controllers / Keyboard",
-             "EEPROM / NVRAM Manager",
-             "High Scores"},
-            "Exit MANX");
-        if (selected_page < 0) {
+            {{"Network Play", "Play across two computers",
+              launcher_menu::mode_icon::network, 0, false,
+              lobby && lobby->connected() ? "CONNECTED" : "SEARCHING"},
+             {"Arcade Wall", "Several games side by side",
+              launcher_menu::mode_icon::display_wall},
+             {"Settings", "Libraries, media and system help",
+              launcher_menu::mode_icon::settings},
+             {"Controls", "Controllers and keyboard mapping",
+              launcher_menu::mode_icon::controls},
+             {"Saved Data", "EEPROM and NVRAM manager",
+              launcher_menu::mode_icon::storage},
+             {"High Scores", "Records from every cabinet",
+              launcher_menu::mode_icon::scores},
+             {"Exit MANX", "Close the arcade launcher",
+              launcher_menu::mode_icon::exit}},
+            "Back to Platforms");
+        if (selected_page == launcher_menu::exit_requested ||
+            selected_page == 6) {
             rom_selection_result exit_result;
             exit_result.action = rom_selection_action::exit_requested;
             return exit_result;
         }
+        if (selected_page < 0) continue;
         if (selected_page == 0) {
             if (!lobby) {
                 menu.show_text(
@@ -1496,6 +1914,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                             return lobby->connected() ||
                                    lobby->launch_pending();
                         });
+                    if (waiting == launcher_menu::exit_requested) {
+                        rom_selection_result exit_result;
+                        exit_result.action =
+                            rom_selection_action::exit_requested;
+                        return exit_result;
+                    }
                     if (waiting == -1) break;
                     continue;
                 }
@@ -1510,6 +1934,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                             return lobby->launch_pending() ||
                                    !lobby->connected();
                         });
+                    if (waiting == launcher_menu::exit_requested) {
+                        rom_selection_result exit_result;
+                        exit_result.action =
+                            rom_selection_action::exit_requested;
+                        return exit_result;
+                    }
                     if (waiting == -1) break;
                     continue;
                 }
@@ -1518,17 +1948,24 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 // directly rather than behind a generic "network play"
                 // entry: each one lists only the games that support it and
                 // launches both cabinets itself.
-                const int multiplayer_kind = menu.select_interruptible(
+                const int multiplayer_kind = menu.select_modes(
                     "Two Machines Connected - Choose How To Play",
-                    "Both players run the whole game on their own machine "
-                    "and only controls travel between them, so each screen "
-                    "is full speed with its own sound. Pick a style and the "
-                    "second machine launches automatically.",
-                    {"2P Alternating  |  take turns, a screen each",
-                     "2P Simultaneous  |  both players at once",
-                     "Arcade System Link  |  original cabinet link"},
+                    "Choose a network play style. The second machine will "
+                    "launch automatically.",
+                    {{"Take Turns", "A full screen on each computer",
+                      launcher_menu::mode_icon::local_players},
+                     {"Play Together", "Both players at the same time",
+                      launcher_menu::mode_icon::network},
+                     {"Arcade System Link", "The original cabinet network",
+                      launcher_menu::mode_icon::linked_cabinets}},
                     "Back to Main Menu", 0,
                     [lobby] { return !lobby->connected(); });
+                if (multiplayer_kind == launcher_menu::exit_requested) {
+                    rom_selection_result exit_result;
+                    exit_result.action =
+                        rom_selection_action::exit_requested;
+                    return exit_result;
+                }
                 if (multiplayer_kind == launcher_menu::interrupted) continue;
                 if (multiplayer_kind < 0) break;
 
@@ -1575,6 +2012,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                         "automatically.",
                     linked_labels, "Back to Network Multiplayer", 0,
                     [lobby] { return !lobby->connected(); });
+                if (selected == launcher_menu::exit_requested) {
+                    rom_selection_result exit_result;
+                    exit_result.action =
+                        rom_selection_action::exit_requested;
+                    return exit_result;
+                }
                 if (selected == launcher_menu::interrupted) continue;
                 if (selected < 0) continue;
                 if (selected >= static_cast<int>(linked_indices.size()))
@@ -1615,28 +2058,28 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             if (wall_display_width <= 0) wall_display_width = 1920;
             const int capacity = wall_column_capacity(
                 std::thread::hardware_concurrency(), wall_display_width);
-            std::vector<std::string> counts;
-            std::vector<int> beyond_capacity;
+            std::vector<launcher_menu::mode_card> counts;
             for (int columns = wall_min_columns; columns <= wall_max_columns;
                  ++columns) {
-                std::string entry = std::to_string(columns) + " games";
-                if (columns > capacity) {
-                    entry += "   (more than this machine can run)";
-                    beyond_capacity.push_back(
-                        columns - wall_min_columns);
-                }
-                counts.push_back(entry);
+                const bool unavailable = columns > capacity;
+                counts.push_back({
+                    std::to_string(columns) + " Games",
+                    "Independent cabinets across this display",
+                    launcher_menu::mode_icon::display_wall, columns,
+                    unavailable,
+                    unavailable ? "ABOVE THIS MACHINE'S CAPACITY" :
+                                  "READY"});
             }
-            const int chosen = menu.select(
+            const int chosen = menu.select_modes(
                 "Arcade Wall",
-                "Runs several games at once, side by side across one "
-                "fullscreen display. They all keep running their attract "
-                "modes; the highlighted column is the one you play. This "
-                "machine can drive " + std::to_string(capacity) +
-                    " cabinets at once - the columns share the display "
-                    "between them, so each one gets narrower as you add "
-                    "another.",
-                counts, "Back", 0, beyond_capacity);
+                "Choose how many independent games to run side by side. "
+                "This machine can drive " + std::to_string(capacity) +
+                    " at once.", counts, "Back to Main Menu", 0);
+            if (chosen == launcher_menu::exit_requested) {
+                rom_selection_result exit_result;
+                exit_result.action = rom_selection_action::exit_requested;
+                return exit_result;
+            }
             if (chosen < 0) continue;
             const std::size_t wanted =
                 static_cast<std::size_t>(chosen + wall_min_columns);
@@ -1651,6 +2094,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                         std::to_string(picked.size() + 1) + " of " +
                         std::to_string(wanted),
                     {});
+                if (exit_from_nested_browser) {
+                    rom_selection_result exit_result;
+                    exit_result.action =
+                        rom_selection_action::exit_requested;
+                    return exit_result;
+                }
                 if (!pick) {
                     if (picked.empty()) break;
                     picked.pop_back();

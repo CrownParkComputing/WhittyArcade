@@ -1,7 +1,7 @@
 # AI handoff: add a game to an existing MANX platform
 
-> **Note:** This is the MANX rebrand of the WhittyArcade handoff document.
-Project name in code is still `WhittyArcade` until Phase 2.
+> **Note:** This is the MANX rebrand of the MANX handoff document.
+Project name in code is still `MANX` until Phase 2.
 Give this document to the AI that will implement the next game. Fill in the
 task inputs first. The instructions deliberately exclude new hardware
 platforms.
@@ -10,7 +10,7 @@ platforms.
 
 - Game display name: `<GAME_DISPLAY_NAME>`
 - Stable MAME short name: `<MAME_SHORT_NAME>`
-- Existing WhittyArcade platform: `<EXISTING_PLATFORM>`
+- Existing MANX platform: `<EXISTING_PLATFORM>`
 - Legal local ROM archive or directory: `<LEGAL_ROM_PATH>`
 - Optional parent/device archives: `<COMPANION_ROM_PATHS>`
 - Optional read-only reference project: `<REFERENCE_PATH>`
@@ -19,7 +19,7 @@ platforms.
 ## Assignment
 
 Add `<GAME_DISPLAY_NAME>` to the existing `<EXISTING_PLATFORM>` implementation
-in WhittyArcade. This must be a native extension of the current C++/CMake
+in MANX. This must be a native extension of the current C++/CMake
 emulator. Reuse the platform's existing CPU, bus, video, audio, input, session,
 launcher and ROM-library paths.
 
@@ -53,7 +53,7 @@ menus, or unrelated platforms.
 
 ## Non-negotiable constraints
 
-1. Work only in the WhittyArcade repository. Treat any ZArcade, MAME, or other
+1. Work only in the MANX repository. Treat any ZArcade, MAME, or other
    project as read-only reference material.
 2. Use native C++ and the existing CMake build. Do not introduce Gradle,
    Kotlin, Java, an Android module, a second GUI, or a second build system.
@@ -215,7 +215,7 @@ suite. Adapt cache-variable names to the owning platform:
 cmake -S . -B build -D<PLATFORM>_<GAME>_TEST_ROM=/legal/local/game.zip
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
-./build/WhittyArcade --audit-roms /legal/local/game.zip
+./build/MANX --audit-roms /legal/local/game.zip
 ```
 
 Also launch the game through the normal GUI, insert a coin, start a game and

@@ -193,6 +193,21 @@ constexpr std::array<const char*, 2> kGalaxianCharRoms = {
 
 constexpr const char* kGalaxianPaletteRom = "6l.bpr";
 
+// War of the Bugs runs on unmodified Galaxian hardware -- MAME gives it the
+// plain `galaxian` machine and `init_nolock`, whose only effect is to drop
+// the coin-lockout write this board never had. Same region shape as
+// Galaxian: five 2 KiB program ROMs, two 2 KiB character ROMs and one
+// 32-byte palette PROM.
+constexpr std::array<const char*, 5> kWarofbugProgram = {
+    "warofbug.u", "warofbug.v", "warofbug.w", "warofbug.y", "warofbug.z",
+};
+
+constexpr std::array<const char*, 2> kWarofbugCharRoms = {
+    "warofbug.1k", "warofbug.1j",
+};
+
+constexpr const char* kWarofbugPaletteRom = "warofbug.clr";
+
 constexpr std::array<const char*, 8> kMooncrstProgram = {
     "mc1", "mc2", "mc3", "mc4",
     "mc5.7r", "mc6.8d", "mc7.8e", "mc8",
@@ -374,6 +389,19 @@ galaxian_roms load_galaxian(const source_reader& source, std::string& error) {
     return roms;
 }
 
+galaxian_roms load_warofbug(const source_reader& source, std::string& error) {
+    galaxian_roms roms;
+    if (!load_fixed_2k_roms(source, kWarofbugProgram, roms.program, error))
+        return {};
+    if (!load_fixed_2k_graphics(source, kWarofbugCharRoms, roms.char_rom,
+                                error))
+        return {};
+    if (!load_palette32(source, kWarofbugPaletteRom,
+                        roms.mooncrst_palette_prom, error))
+        return {};
+    return roms;
+}
+
 galaxian_roms load_mooncrst(const source_reader& source, std::string& error) {
     galaxian_roms roms;
     if (!load_mooncrst_program(source, roms.program, error)) return {};
@@ -434,6 +462,14 @@ galaxian_rom_set galaxian_rom_loader::identify_set(const std::string& path) {
     if (source.contains("6l.bpr")) ++galaxian_hits;
     if (galaxian_hits >= 2) return galaxian_rom_set::galaxian;
 
+    // War of the Bugs: every chip carries the game's own prefix, so a
+    // 2-of-3 probe cannot collide with the other Galaxian-hardware sets.
+    int warofbug_hits = 0;
+    if (source.contains("warofbug.u")) ++warofbug_hits;
+    if (source.contains("warofbug.1k")) ++warofbug_hits;
+    if (source.contains("warofbug.clr")) ++warofbug_hits;
+    if (warofbug_hits >= 2) return galaxian_rom_set::warofbug;
+
     // Moon Cresta: 2-of-3 probe against program + first char ROM + palette.
     int mooncrst_hits = 0;
     if (source.contains("mc1")) ++mooncrst_hits;
@@ -457,6 +493,7 @@ const char* galaxian_rom_loader::set_short_name(galaxian_rom_set set) {
     case galaxian_rom_set::galaxian: return "galaxian";
     case galaxian_rom_set::mooncrst: return "mooncrst";
     case galaxian_rom_set::uniwars: return "uniwars";
+    case galaxian_rom_set::warofbug: return "warofbug";
     case galaxian_rom_set::unknown: return "";
     }
     return "";
@@ -472,6 +509,8 @@ const char* galaxian_rom_loader::set_display_name(galaxian_rom_set set) {
         return "Moon Cresta";
     case galaxian_rom_set::uniwars:
         return "UniWar S";
+    case galaxian_rom_set::warofbug:
+        return "War of the Bugs";
     case galaxian_rom_set::unknown:
         return "Unsupported Galaxian-family ROM set";
     }
@@ -498,6 +537,11 @@ galaxian_rom_load_result galaxian_rom_loader::load(const std::string& path) {
     case galaxian_rom_set::uniwars: {
         galaxian_roms roms = load_uniwars(source, error);
         return {galaxian_rom_set::uniwars, std::move(roms), std::move(error)};
+    }
+    case galaxian_rom_set::warofbug: {
+        galaxian_roms roms = load_warofbug(source, error);
+        return {galaxian_rom_set::warofbug, std::move(roms),
+                std::move(error)};
     }
     case galaxian_rom_set::unknown:
         return {galaxian_rom_set::unknown, {},

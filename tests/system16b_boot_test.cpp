@@ -103,7 +103,7 @@ void run_main(system16b::board& board, bus_adapter&, m68000_cpu& cpu,
 int main(int argc, char** argv) {
     {
         system16b::board input_board;
-        // WhittyArcade's cabinet profile is English with attract audio on;
+        // MANX's cabinet profile is English with attract audio on;
         // both settings are active-low in Shinobi's SW2 bank.
         assert((input_board.dsw2_ & 0x80) == 0);
         assert((input_board.dsw2_ & 0x02) == 0);
@@ -114,6 +114,15 @@ int main(int argc, char** argv) {
         input.buttons[0] = true;
         uint8_t ports[5]{};
         input_board.apply_input(input, ports, std::size(ports));
+        // apply_input fills a caller-owned ports[] buffer; the runtime's
+        // set_input() copies it into the board mirror that byte_read()
+        // decodes (System 16-B I/O at 0xC40000). Mirror that here so the
+        // standalone board sees the same state a session would.
+        input_board.p1_input_      = ports[0];
+        input_board.p2_input_      = ports[1];
+        input_board.service_input_ = ports[2];
+        input_board.dsw1_          = ports[3];
+        input_board.dsw2_          = ports[4];
         assert((input_board.byte_read(0xc41000) & 0x01) == 0);
         assert((input_board.byte_read(0xc41000) & 0x10) == 0);
         assert((input_board.byte_read(0xc41002) & 0x80) == 0);

@@ -173,7 +173,7 @@ and [GLES version support](https://developer.android.com/develop/ui/views/graphi
 - Launch `ACTION_OPEN_DOCUMENT` for one or more ZIPs and
   `ACTION_OPEN_DOCUMENT_TREE` for a ROM directory.
 - Take persistable URI permission where appropriate, stream selected content,
-  and copy supported archives unchanged into the private WhittyArcade ROM
+  and copy supported archives unchanged into the private MANX ROM
   library. The existing import audit runs after the copy.
 - Show progress, cancellation and insufficient-space errors. Never request
   broad "all files" access.
@@ -249,9 +249,9 @@ when a physical controller is active.
 - Add a native Windows GitHub Actions job that configures UCRT64 with CMake +
   Ninja, runs all non-ROM tests, and performs a headless command-line smoke
   test.
-- Package `WhittyArcade.exe`, required runtime DLLs, README,
+- Package `MANX.exe`, required runtime DLLs, README,
   proprietary licence, third-party notices and a SHA-256 manifest as one
-  `WhittyArcade-windows-x86_64.zip`.
+  `MANX-windows-x86_64.zip`.
 - Verify the ZIP on clean Windows 10 and 11 machines with Intel, AMD and NVIDIA
   graphics where available. Test Xbox-style controllers, hot-plug, keyboard,
   mouse lightgun input, P1/P2 crosshairs, ROM import and paths containing
@@ -269,7 +269,7 @@ first native `.exe`.
 
 - Keep the current CachyOS/Arch-optimised tarball.
 - Add a generic x86-64 build on a conservative glibc baseline and package it as
-  `WhittyArcade-linux-x86_64.AppImage`.
+  `MANX-linux-x86_64.AppImage`.
 - Bundle application libraries that cannot be assumed on target systems, but
   do not bundle the host's glibc or GPU driver stack. Check OpenGL 4.3/Vulkan
   capabilities at startup and report a useful error.

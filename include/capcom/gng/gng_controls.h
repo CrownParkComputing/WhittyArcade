@@ -4,7 +4,7 @@
 
 namespace gng {
 
-// Convert WhittyArcade's centered action-board axes into GnG's active-low
+// Convert MANX's centered action-board axes into GnG's active-low
 // right/left/down/up/button1/button2 port. The host scaler spans 0x47..0xb7,
 // so the action-board thresholds are deliberately symmetric around 0x7f.
 constexpr uint8_t encode_player_port(uint8_t x, uint8_t y,

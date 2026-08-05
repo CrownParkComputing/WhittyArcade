@@ -53,6 +53,9 @@ enum class system16b_rom_set : uint8_t {
     altered_beast,
     dynamite_dux,
     tough_turf,
+    bay_route,
+    eswat,
+    wonder_boy3,
 };
 
 struct system16b_roms {
@@ -81,6 +84,10 @@ class system16b_rom_loader {
 public:
     static system16b_rom_set identify_set(const std::string& path);
     static const char*      set_short_name(system16b_rom_set set);
+    // Whether the set carries uPD7759 sample data at all. Dynamite Dux and
+    // Wonder Boy III ship a Z80 program and no sample chip, so an empty
+    // sample bank is correct for them rather than a sign of a short dump.
+    static bool             set_has_sample_rom(system16b_rom_set set);
     static const char*      set_display_name(system16b_rom_set set);
     static system16b_rom_load_result load(const std::string& path);
 };

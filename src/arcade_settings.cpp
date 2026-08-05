@@ -2,6 +2,7 @@
 #include "platform_paths.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
@@ -12,16 +13,22 @@ namespace fs = std::filesystem;
 
 namespace {
 fs::path config_root() {
-    return whitty_platform::config_root();
+    return manx_platform::config_root();
 }
 
 fs::path config_path() {
     const fs::path root = config_root();
-    return root.empty() ? fs::path("WhittyArcade-settings.ini") :
-                          root / "WhittyArcade" / "settings.ini";
+    return root.empty() ? fs::path("MANX-settings.ini") :
+                          root / "MANX" / "settings.ini";
 }
 
 fs::path legacy_config_path() {
+    const fs::path root = config_root();
+    return root.empty() ? fs::path("MANX-settings.ini") :
+                          root / "MANX" / "settings.ini";
+}
+
+fs::path oldest_config_path() {
     const fs::path root = config_root();
     return root.empty() ? fs::path("ridge_racer_settings.ini") :
                           root / "ridge_racer_emulator" / "settings.ini";
@@ -52,9 +59,10 @@ std::string settings_path() {
 emulator_settings load_settings() {
     emulator_settings settings;
     std::ifstream input(config_path());
-    // Preserve established installs on the first WhittyArcade launch. New
-    // saves always use the board-neutral application directory above.
+    // Preserve established installs on the first MANX launch. New saves use
+    // the rebranded application directory above.
     if (!input) input.open(legacy_config_path());
+    if (!input) input.open(oldest_config_path());
     std::string line;
     while (std::getline(input, line)) {
         const std::size_t separator = line.find('=');
@@ -83,6 +91,17 @@ emulator_settings load_settings() {
             settings.rom_directory = std::string(value);
         else if (key == "chd_directory")
             settings.chd_directory = std::string(value);
+        else if (key == "media_directory")
+            settings.media_directory = std::string(value);
+        else if (key == "media_artwork_category") {
+            static constexpr std::array<std::string_view, 9> allowed{{
+                "box2d", "box3d", "titles", "images", "marquee",
+                "thumbnails", "fanarts", "boxback", "cartridges",
+            }};
+            if (std::find(allowed.begin(), allowed.end(), value) !=
+                allowed.end())
+                settings.media_artwork_category = std::string(value);
+        }
         else if (key == "library_setup_complete")
             parse_boolean(value, settings.library_setup_complete);
         else if (key == "renderer") {
@@ -124,6 +143,9 @@ bool save_settings(const emulator_settings& settings) {
            << "output=" << output_mode_name(settings.output) << '\n'
            << "rom_directory=" << settings.rom_directory << '\n'
            << "chd_directory=" << settings.chd_directory << '\n'
+           << "media_directory=" << settings.media_directory << '\n'
+           << "media_artwork_category="
+           << settings.media_artwork_category << '\n'
            << "library_setup_complete="
            << settings.library_setup_complete << '\n';
     return output.good();

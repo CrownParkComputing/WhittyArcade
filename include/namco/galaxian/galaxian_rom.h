@@ -17,6 +17,7 @@ enum class galaxian_rom_set : uint8_t {
     galaxian,
     mooncrst,
     uniwars,
+    warofbug,
 };
 
 struct galaxian_roms {

@@ -1,10 +1,10 @@
-# WhittyArcade third-party notices
+# MANX third-party notices
 
-WhittyArcade contains components and adaptations that remain the property of
-their respective copyright holders. The WhittyArcade proprietary licence does
+MANX contains components and adaptations that remain the property of
+their respective copyright holders. The MANX proprietary licence does
 not replace or restrict the licences below for those components.
 
-This notice must accompany distributed WhittyArcade binaries. Source files
+This notice must accompany distributed MANX binaries. Source files
 also retain their applicable notices alongside the code.
 
 ## BSD 3-Clause components
@@ -156,7 +156,7 @@ freely, subject to the following restrictions:
 ## m6809f
 
 The instance-based MC6809 interpreter in `third_party/m6809f` was imported
-from the Ghosts'n Goblins Amiga prototype and adapted for WhittyArcade's
+from the Ghosts'n Goblins Amiga prototype and adapted for MANX's
 per-machine I/O context. Copyright © 2026 Crown Park Computing Ltd. It is
 distributed under the MIT Licence; the complete text is retained in
 `third_party/m6809f/LICENSE`.
@@ -166,7 +166,7 @@ distributed under the MIT Licence; the complete text is retained in
 The Linux executable dynamically links to system-provided libraries including
 SDL, SDL_ttf, OpenAL, OpenGL/GLX, GLEW, Vulkan, zlib, minizip, mpg123,
 FreeType, HarfBuzz, libpng, and their dependencies. Those libraries are not
-included in the WhittyArcade release archive and remain under their own
+included in the MANX release archive and remain under their own
 licences as installed by the user's Linux distribution.
 
 The portable Windows archive includes the UCRT64 DLLs required by the

@@ -2,13 +2,15 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![Platforms: Windows · Linux](https://img.shields.io/badge/platforms-Windows%20·%20Linux-blueviolet.svg)]()
-[![Working sets: 26](https://img.shields.io/badge/working%20sets-26-success.svg)]()
+[![Working sets: 46](https://img.shields.io/badge/working%20sets-46-success.svg)]()
 
-**MANX** is the rebrand of the WhittyArcade project. It is a focused standalone
-multi-board arcade emulator for Windows and Linux. Its 26 working sets span
+**MANX** is the rebrand of the MANX project. It is a focused standalone
+multi-board arcade emulator for Windows and Linux. Its 46 working sets span
 Namco System 22 / Super System 22, System 246, Model 1, Model 2, Namco
-System 1, Galaga, Galaxian, Phoenix, Sega System 16B, Ghosts'n Goblins
-hardware and the Xbox 360.
+System 1, Galaga, Galaxian, Phoenix, Sega System 16B, Taito Z System,
+Ghosts'n Goblins hardware and the Xbox 360.
+
+**Multi-screen. Multi-player. Networked arcade cohesion.**
 
 MAME's BSD hardware implementations are the primary behaviour reference;
 machine integration, scheduling, frontend, storage and host output are
@@ -18,7 +20,7 @@ standalone.
 
 ## Why the rebrand
 
-The original name was WhittyArcade. MANX keeps the codebase, the working
+The original name was MANX. MANX keeps the codebase, the working
 sets and the existing plug-in host, and gives the project a name that puts
 its distinguishing feature — **multiscreen cabinet support** — at the
 front. The Multiscreen Arcade Nexus is the goal: one launcher that knows
@@ -30,9 +32,11 @@ through that lens instead of a flat list.
 Every working set in MANX has been tagged with the cabinet form it actually
 needs:
 
-- **Single-screen uprights** — Galaga, Galaxian, Phoenix, Pac-Mania, Shinobi
-  twin-stick, Ghosts'n Goblins, and the 2D classics.
-- **Sit-down / single-cockpit** — Ridge Racer, Virtua Formula, Star Wars
+- **Single-screen uprights** — Galaga, Galaga '88, Galaxian, War of the
+  Bugs, Phoenix, Pac-Mania, Shinobi twin-stick, Bay Route, Cyber Police
+  E-SWAT, Wonder Boy III: Monster Lair, Ghosts'n Goblins, and the 2D
+  classics.
+- **Sit-down / single-cockpit** — Continental Circus, Ridge Racer, Virtua Formula, Star Wars
   Arcade, Time Crisis (gun), Dirt Dash World DT2, System 22 / Super
   System 22 main boards.
 - **Multi-cabinet / linked** — Galaga twin-cockpit, Shinobi twin-cockpit,
@@ -41,9 +45,21 @@ needs:
   and Burnout 3 / Geometry Wars as native plugins that take the same
   launcher shim.
 
-The next milestone of the launcher is to make these groups visible in the
-menu: a single-screen tab and a multi-screen tab, each with a 2D carousel
-of cabinet previews and the per-game cabinet metadata underneath.
+The launcher makes these groups visible through the game browser and an
+animated, icon-led launch screen. A game can expose solo, local multiplayer,
+split-screen, linked-cabinet and network modes without changing its title.
+Linked games then show the cabinet count and display layout graphically;
+Daytona USA and Manx TT can launch rings of up to eight local instances.
+
+Private MAME media packs can be attached from **Settings → ROM, CHD and
+private media folders**. Point the source browser at a mounted `media`
+directory (our NAS is `/Roms/v3_0.285/media`), then choose **Import/update
+media for installed games**. MANX mirrors the source folder structure into
+its per-user media directory but copies only files matching installed ROM
+short names, including per-game directories. It recognises titles, snaps,
+covers, flyers, cabinets, marquees and icons for the launcher. The NAS path
+stays in local settings and no private media ships with MANX. For a temporary
+source, set `MANX_MEDIA_ROOT` to the mounted media directory.
 
 ## Current status
 
@@ -68,10 +84,34 @@ Implemented and tested (most relevant items; full list in `docs/`):
   mapping and calibrated axes
 - System 24 RAM tile pages, character decoding and 3D composition for
   Model 1 (Virtua Formula, Virtua Fighter, Star Wars Arcade, Wing War)
+- Sega System 16B ROM boards 171-5358, 171-5521, 171-5704 and 171-5797,
+  the last adding the 315-5248 multiplier, two 315-5250 compare/timers
+  and a single 512 KiB program window for Cyber Police E-SWAT
+- Namco System 1 (3x MC6809E + HD63701 MCU behind the CUS117 MMU) running
+  both Pac-Mania and Galaga '88, which differ only in their ROM set and
+  CUS153 keycus id
+- Taito Z System (two MC68000s sharing work RAM) with the TC0100SCN
+  tilemap generator, TC0150ROD road generator, TC0110PCR palette and
+  TC0040IOC input chip, running Continental Circus, plus its sound board:
+  a Z80 driving a YM2610 (FM + SSG + ADPCM-A and ADPCM-B sample playback)
+  through a TC0140SYT mailbox.
+
 - System 246 main board path with PCSX2 reimplementation in progress
   (`system246-pcsx2-rewrite` branch)
 - Geometry Wars and Burnout 3 standalones as plugins hosted by the same
   launcher shim
+
+## ROM requirements
+
+You must supply any ROMs yourself, and only ones you are legally entitled
+to use. There is no FD1094, FD1089 or MC-8123 decryptor here, so an
+encrypted Sega set cannot be run directly. E-SWAT loads from MAME's
+pre-decrypted `eswatd` clone and Wonder Boy III from `wb33d`; each takes
+its two program chips from the clone and every graphics and sound chip
+from the `eswat` / `wb3` parent, so a merged archive supplies both.
+Wonder Boy III's own parent additionally needs an i8751 whose program was
+never dumped, which is the other reason the decrypted clone is the usable
+set.
 
 ## Building
 
@@ -101,8 +141,8 @@ roms/            placeholder for the ROM set (not in git)
 third_party/     upstream code (Musashi, moira, ...)
 tests/           unit and integration tests
 logo-*.svg       brand assets
-whittyarcade.svg LEGACY — kept during the rebrand transition; do not use
-CMakeLists.txt   project(WhittyArcade) — renamed in the next release
+manx.svg LEGACY — kept during the rebrand transition; do not use
+CMakeLists.txt   project(MANX) — renamed in the next release
 ```
 
 ## License
@@ -132,8 +172,8 @@ The rebrand is staged:
 
 - **Phase 1 (this commit)**: marketing identity, logo, README, top-level
   docs, code-comment banners. Identifiers in source still say
-  `WhittyArcade`. Build is `project(WhittyArcade)`.
-- **Phase 2**: identifier rename, project-name change, single-screen /
-  multi-screen launcher tabs, animated 2D carousel.
+  `MANX`. Build is `project(MANX)`.
+- **Phase 2 (in progress)**: graphical play-mode, cabinet-count and display
+  layout screens are implemented; identifier and project-name renaming remains.
 - **Phase 3**: GitHub-side repo rename to `CrownParkComputing/MANX`,
-  redirect from `WhittyArcade`, release tagging.
+  redirect from `MANX`, release tagging.

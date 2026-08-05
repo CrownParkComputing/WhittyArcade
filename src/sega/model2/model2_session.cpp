@@ -83,14 +83,14 @@ public:
         // Model 2 sound runs independently from the i960, geometry and video
         // workers.  It is enabled for normal play; the environment override
         // is retained only as a diagnostic escape hatch.
-        const char* model2_audio = std::getenv("WHITTY_MODEL2_AUDIO");
+        const char* model2_audio = std::getenv("MANX_MODEL2_AUDIO");
         if (!model2_audio || std::strcmp(model2_audio, "0") != 0) {
             if (profile.sound == model2_game_profile::sound_board::segam1audio)
                 initialize_multipcm_audio(settings);
             else
                 initialize_scsp_audio(settings);
         } else {
-            std::printf("Model 2 audio disabled by WHITTY_MODEL2_AUDIO=0\n");
+            std::printf("Model 2 audio disabled by MANX_MODEL2_AUDIO=0\n");
         }
         m_input = std::make_unique<arcade_input>();
         if (!m_input->initialize(
@@ -235,11 +235,11 @@ private:
                 if (m_machine) m_machine->sound_midi_receive(data);
             });
             m_audio->start();
-            whitty_wall_log::note("scsp audio up");
+            manx_wall_log::note("scsp audio up");
         } else {
             std::fprintf(stderr,
                          "Model 2 audio disabled; video will continue\n");
-            whitty_wall_log::note("scsp audio FAILED to initialize");
+            manx_wall_log::note("scsp audio FAILED to initialize");
             m_audio.reset();
         }
     }
@@ -414,7 +414,7 @@ private:
             // the SCSP made of them.
             if (frame % 600 == 0) {
                 if (m_audio)
-                    whitty_wall_log::note(
+                    manx_wall_log::note(
                         "audio: 68k=%06x midi=%llu scsp=%llu voices=%d "
                         "peak=%d",
                         m_audio->program_counter(),
@@ -424,9 +424,9 @@ private:
                             m_audio->scsp_writes()),
                         m_audio->active_voices(), m_audio->peak_sample());
                 else if (m_pcm_audio)
-                    whitty_wall_log::note("audio: multipcm board active");
+                    manx_wall_log::note("audio: multipcm board active");
                 else
-                    whitty_wall_log::note("audio: NO BOARD RUNNING");
+                    manx_wall_log::note("audio: NO BOARD RUNNING");
             }
             if (frame % 60 == 0 && session_trace_enabled()) {
                 const double elapsed = std::chrono::duration<double>(

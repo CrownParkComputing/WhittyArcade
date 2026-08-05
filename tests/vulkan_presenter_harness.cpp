@@ -9,9 +9,9 @@
 // anything that goes wrong before then looks exactly like "no window".
 //
 // It opens a small real window, so it is not part of the default ctest run.
-// Set WHITTY_PRESENTER_HARNESS=1 to run it:
+// Set MANX_PRESENTER_HARNESS=1 to run it:
 //
-//   WHITTY_PRESENTER_HARNESS=1 ./build/vulkan_presenter_harness
+//   MANX_PRESENTER_HARNESS=1 ./build/vulkan_presenter_harness
 //
 // Validation output goes to stderr; the caller greps for it. A clean run
 // prints the two return values and nothing else.
@@ -88,7 +88,7 @@ const sheet_fill sheets[]{
 // System 22 decode replay: renders REAL game sheets through the Vulkan tile
 // decoder and diffs every pixel against a CPU port of the same chain.
 //
-// WHITTY_HARNESS_S22_ROM=<path to set .zip> selects the board. The palette is
+// MANX_HARNESS_S22_ROM=<path to set .zip> selects the board. The palette is
 // synthetic - palette RAM belongs to the running game, which is absent here -
 // chosen so every pen maps to a distinct colour. A mismatch therefore means
 // the GPU decoded a different pen than the reference for that screen pixel,
@@ -320,8 +320,8 @@ int run(alternate_presenter& presenter, const char* rom_path) {
 // upload calls, the same shared draw-list construction - and diffs the
 // result against the machine's own software rasteriser.
 //
-// WHITTY_HARNESS_M2_ROM=<path to srallyc.zip> selects it;
-// WHITTY_HARNESS_M2_OUT names a directory for the gpu/reference PPM pairs.
+// MANX_HARNESS_M2_ROM=<path to srallyc.zip> selects it;
+// MANX_HARNESS_M2_OUT names a directory for the gpu/reference PPM pairs.
 //
 // Two attract frames are checked from one boot, because they fail
 // differently: frame 1200 is the title screen - pure 2D layer, no polygons -
@@ -429,7 +429,7 @@ int snapshot(alternate_presenter& presenter, model2_machine& machine,
 
     const uint8_t* reference =
         reinterpret_cast<const uint8_t*>(machine.frame_buffer());
-    if (const char* out = std::getenv("WHITTY_HARNESS_M2_OUT")) {
+    if (const char* out = std::getenv("MANX_HARNESS_M2_OUT")) {
         std::filesystem::create_directories(out);
         write_ppm(std::filesystem::path(out) /
                       (std::string("gpu-") + label + ".ppm"),
@@ -506,9 +506,9 @@ int run(alternate_presenter& presenter, const char* rom_path) {
 } // namespace m2_replay
 
 int main() {
-    if (const char* enabled = std::getenv("WHITTY_PRESENTER_HARNESS");
+    if (const char* enabled = std::getenv("MANX_PRESENTER_HARNESS");
         !enabled || *enabled != '1') {
-        std::printf("Set WHITTY_PRESENTER_HARNESS=1 to run; skipping.\n");
+        std::printf("Set MANX_PRESENTER_HARNESS=1 to run; skipping.\n");
         return 0;
     }
     // Turn the layers on before the loader builds an instance. Doing it here
@@ -534,10 +534,10 @@ int main() {
     settings.vsync = false;
     settings.window_width = 640;
     // Wall mode, for reproducing multi-process wall failures without a game:
-    // WHITTY_HARNESS_WALL="slot,count" makes this instance one column of a
+    // MANX_HARNESS_WALL="slot,count" makes this instance one column of a
     // wall, taking the same early-show and compositor-placement path a real
     // column takes during startup.
-    if (const char* wall = std::getenv("WHITTY_HARNESS_WALL")) {
+    if (const char* wall = std::getenv("MANX_HARNESS_WALL")) {
         int slot = 0;
         int count = 0;
         if (std::sscanf(wall, "%d,%d", &slot, &count) == 2 && count > 1) {
@@ -546,12 +546,12 @@ int main() {
             // The real wall opens its column log in main; the harness has to
             // do the same or presenter notes written before the first
             // presented frame vanish.
-            whitty_wall_log::begin(slot, count);
+            manx_wall_log::begin(slot, count);
         }
     }
 
-    const char* replay_rom = std::getenv("WHITTY_HARNESS_S22_ROM");
-    const char* m2_rom = std::getenv("WHITTY_HARNESS_M2_ROM");
+    const char* replay_rom = std::getenv("MANX_HARNESS_S22_ROM");
+    const char* m2_rom = std::getenv("MANX_HARNESS_M2_ROM");
 
     alternate_presenter presenter;
     if (!presenter.initialize(renderer_backend::vulkan, 640, 480, settings)) {
@@ -560,10 +560,10 @@ int main() {
         return 1;
     }
 
-    // WHITTY_TITLE_CAPTURE=<name>[:frames] arms the launcher-icon capture
+    // MANX_TITLE_CAPTURE=<name>[:frames] arms the launcher-icon capture
     // so the whole path - present counting, scene readback, BMP on disk -
     // can be proven on the harness's real frames.
-    if (const char* capture = std::getenv("WHITTY_TITLE_CAPTURE")) {
+    if (const char* capture = std::getenv("MANX_TITLE_CAPTURE")) {
         std::string spec(capture);
         int frames = 120;
         const std::size_t colon = spec.find(':');
@@ -584,9 +584,9 @@ int main() {
     if (m2_rom) {
         // Boot from factory defaults, never the user's persistent NVRAM.
 #if defined(_WIN32)
-        _putenv_s("XDG_CONFIG_HOME", "/nonexistent/whitty-harness");
+        _putenv_s("XDG_CONFIG_HOME", "/nonexistent/manx-harness");
 #else
-        setenv("XDG_CONFIG_HOME", "/nonexistent/whitty-harness", 1);
+        setenv("XDG_CONFIG_HOME", "/nonexistent/manx-harness", 1);
 #endif
         const int result = m2_replay::run(presenter, m2_rom);
         presenter.shutdown();

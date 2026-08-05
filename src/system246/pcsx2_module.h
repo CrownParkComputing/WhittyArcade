@@ -1,13 +1,13 @@
 // MANX System 246 board: pure-C ABI for the isolated PCSX2 module.
 //
 // The PCSX2 arcade core (libpcsx2.a) bundles its own GL loader (glad) and a pile
-// of static initialisers that collide with WhittyArcade's GLEW-based OpenGL
+// of static initialisers that collide with MANX's GLEW-based OpenGL
 // renderer if linked into the main binary. To keep them apart, everything PCSX2
 // lives behind this flat C interface inside libsystem246_pcsx2.so, which the
-// main (GCC-built) WhittyArcade binary dlopen()s at runtime. Nothing in this
+// main (GCC-built) MANX binary dlopen()s at runtime. Nothing in this
 // header pulls in a C++ or PCSX2 type, so the GCC side can include it directly.
-#ifndef WHITTY_SYSTEM246_PCSX2_MODULE_H
-#define WHITTY_SYSTEM246_PCSX2_MODULE_H
+#ifndef MANX_SYSTEM246_PCSX2_MODULE_H
+#define MANX_SYSTEM246_PCSX2_MODULE_H
 
 // The module is built with -fvisibility=hidden (inherited from the PCSX2 flags),
 // so the exported entry points must be forced to default visibility or the .so
@@ -86,6 +86,10 @@ WA_PCSX2_EXPORT int wa_pcsx2_get_frame(const unsigned int** pixels, int* w,
 // queues exactly one coin. Safe to call from the host thread every frame.
 WA_PCSX2_EXPORT void wa_pcsx2_set_input(const wa_pcsx2_input* in);
 
+// Returns and clears the strongest audio transient since the previous call.
+// Strength is normalized 0..1; zero means no crash/explosion/impact detected.
+WA_PCSX2_EXPORT float wa_pcsx2_take_impact(void);
+
 // Pause/resume the emulated machine (audio + emulation), not just presentation.
 // paused != 0 pauses; 0 resumes. No-op if the VM isn't running.
 WA_PCSX2_EXPORT void wa_pcsx2_set_paused(int paused);
@@ -105,4 +109,4 @@ WA_PCSX2_EXPORT void wa_pcsx2_stop(void);
 } // extern "C"
 #endif
 
-#endif // WHITTY_SYSTEM246_PCSX2_MODULE_H
+#endif // MANX_SYSTEM246_PCSX2_MODULE_H

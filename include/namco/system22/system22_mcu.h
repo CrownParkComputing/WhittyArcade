@@ -40,6 +40,10 @@ public:
     uint32_t program_counter() const { return m_cpu.program_counter(); }
     uint64_t c352_read_count() const { return m_c352_read_count; }
     uint64_t c352_write_count() const { return m_c352_write_count; }
+    // Super System 22 cabinet outputs written through MCU port 5. Time
+    // Crisis uses bit 1 for the gun solenoid; Dirt Dash uses it to enable
+    // the steering motor, with torque carried by a separate serial board.
+    uint8_t cabinet_output_data() const { return m_output_data; }
 
 private:
     uint8_t read_byte(uint32_t address) const;

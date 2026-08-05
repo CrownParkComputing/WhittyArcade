@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    whitty_xbox360_input input{};
+    manx_xbox360_input input{};
     input.struct_size = sizeof(input);
     std::array<std::int16_t, 4096 * 2> audio{};
     std::vector<std::uint8_t> frame;

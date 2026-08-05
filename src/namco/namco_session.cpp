@@ -1,4 +1,5 @@
 #include "arcade_session_internal.h"
+#include "arcade_feedback.h"
 #include "namco/galaga/galaga_machine.h"
 #include "namco/galaxian/galaxian_audio.h"
 #include "namco/namco_rom.h"
@@ -7,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <utility>
 
 namespace {
@@ -35,10 +37,10 @@ public:
             !m_input->initialize("galaga") ||
             !m_machine->initialize(loaded.galaga))
             return false;
-        const char* network_link = std::getenv("WHITTY_INPUT_LINK");
+        const char* network_link = std::getenv("MANX_INPUT_LINK");
         m_network_two_player = network_link && *network_link &&
             std::strcmp(network_link, "0") != 0;
-        const char* node = std::getenv("WHITTY_CABINET_NODE");
+        const char* node = std::getenv("MANX_CABINET_NODE");
         m_network_host = m_network_two_player && node &&
             std::strcmp(node, "1") == 0;
         m_machine->configure_network_two_player(m_network_two_player);
@@ -188,16 +190,21 @@ public:
     bool initialize(const std::string& path, const std::string&,
                     const emulator_settings& settings) override {
         const namco::load_result loaded = namco::rom_loader::load(path);
-        if (!loaded || loaded.set != namco::rom_set::pacmania) {
-            std::fprintf(stderr, "Pac-Mania ROM error: %s\n",
+        // Both Namco System 1 games run on this session; the board, video
+        // path and audio are identical and only the ROM set differs.
+        const bool is_galaga88 = loaded.set == namco::rom_set::galaga88;
+        if (!loaded || (loaded.set != namco::rom_set::pacmania &&
+                        !is_galaga88)) {
+            std::fprintf(stderr, "Namco System 1 ROM error: %s\n",
                          loaded.error.c_str());
             return false;
         }
         m_machine = std::make_unique<namco::system1_machine>();
         m_input = std::make_unique<arcade_input>();
         if (!m_gpu_renderer->initialize(settings) ||
-            !m_input->initialize("pacmania") ||
-            !m_machine->initialize(loaded.pacmania))
+            !m_input->initialize(is_galaga88 ? "galaga88" : "pacmania") ||
+            !(is_galaga88 ? m_machine->initialize(loaded.galaga88)
+                          : m_machine->initialize(loaded.pacmania)))
             return false;
         m_audio = std::make_unique<galaxian_audio_system>(
             make_system1_sound_synth());
@@ -216,21 +223,74 @@ public:
     }
 
     void run_frame() override {
+        using clock = std::chrono::steady_clock;
+        const auto frame_begin = clock::now();
         m_input->set_suppressed(m_gpu_renderer->input_suppressed());
         m_input->update();
+        const input_state input = m_input->state();
+        const auto input_done = clock::now();
         uint8_t dips = m_cabinet->system1_dip_switches;
-        if (m_input->state().test) dips &= ~uint8_t{0x01};
-        m_machine->set_input(m_input->state(), dips);
+        if (input.test) dips &= ~uint8_t{0x01};
+        m_machine->set_input(input, dips);
         m_machine->run_frame();
+        const namco::pacmania_feedback_signal feedback =
+            m_machine->take_feedback_signal();
+        switch (feedback.event) {
+        case namco::pacmania_feedback_event::pellet:
+            arcade_feedback::publish_gameplay_event(
+                arcade_feedback::gameplay_event_kind::pellet);
+            break;
+        case namco::pacmania_feedback_event::power_pellet:
+            arcade_feedback::publish_gameplay_event(
+                arcade_feedback::gameplay_event_kind::power_pellet);
+            break;
+        case namco::pacmania_feedback_event::ghost_eaten:
+            arcade_feedback::publish_gameplay_event(
+                arcade_feedback::gameplay_event_kind::ghost_eaten,
+                feedback.level);
+            break;
+        case namco::pacmania_feedback_event::death:
+            arcade_feedback::publish_gameplay_event(
+                arcade_feedback::gameplay_event_kind::death);
+            break;
+        case namco::pacmania_feedback_event::none:
+            break;
+        }
+        const auto machine_done = clock::now();
         m_gpu_renderer->present_rgba_frame(
             reinterpret_cast<const uint8_t*>(m_machine->framebuffer()),
             namco::system1_machine::width, namco::system1_machine::height,
             3, 4);
-        if (++m_frames % 600 == 0 && session_trace_enabled())
-            std::printf("Pac-Mania frame %llu pc=%04x fault=%d audio=%d\n",
+        const auto present_done = clock::now();
+        ++m_frames;
+        const bool trace = session_trace_enabled();
+        if (trace && (input.coin1 != m_last_coin || input.start != m_last_start)) {
+            std::printf("Pac-Mania input frame=%llu coin=%d start=%d dips=%02x\n",
+                static_cast<unsigned long long>(m_frames), input.coin1,
+                input.start, dips);
+            std::fflush(stdout);
+        }
+        m_last_coin = input.coin1;
+        m_last_start = input.start;
+        const auto millis = [](clock::duration value) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(value)
+                .count();
+        };
+        const auto total_ms = millis(present_done - frame_begin);
+        if (trace && (m_frames % 60 == 0 || total_ms >= 100)) {
+            std::printf(
+                "Pac-Mania frame=%llu pc=%04x fault=%d audio=%d "
+                "phase_ms=%lld/%lld/%lld total=%lld suppressed=%d\n",
                 static_cast<unsigned long long>(m_frames),
                 m_machine->program_counter(), m_machine->fault(),
-                m_audio ? m_audio->peak_sample() : 0);
+                m_audio ? m_audio->peak_sample() : 0,
+                static_cast<long long>(millis(input_done - frame_begin)),
+                static_cast<long long>(millis(machine_done - input_done)),
+                static_cast<long long>(millis(present_done - machine_done)),
+                static_cast<long long>(total_ms),
+                m_gpu_renderer->input_suppressed());
+            std::fflush(stdout);
+        }
     }
 
     double frame_seconds() const override {
@@ -286,6 +346,8 @@ private:
     std::unique_ptr<galaxian_audio_system> m_audio;
     std::unique_ptr<arcade_input> m_input;
     uint64_t m_frames{};
+    bool m_last_coin{};
+    bool m_last_start{};
 };
 
 } // namespace

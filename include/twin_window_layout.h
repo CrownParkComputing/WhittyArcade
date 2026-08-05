@@ -21,7 +21,7 @@
 extern char** environ;
 #endif
 
-namespace whitty_window {
+namespace manx_window {
 
 struct twin_layout {
     int first_x{};
@@ -279,7 +279,7 @@ inline bool compositor_window_geometry(int&, int&, int&, int&) {
 inline std::string wall_focus_path() {
     const char* runtime = std::getenv("XDG_RUNTIME_DIR");
     const std::string root = runtime && *runtime ? runtime : "/tmp";
-    return root + "/whitty-wall-focus";
+    return root + "/manx-wall-focus";
 }
 
 inline bool publish_wall_focus(int slot) {
@@ -339,7 +339,7 @@ inline void register_wall_window_rules() {
 // lands, that workspace is no longer spare and the next column would pick a
 // different one.
 inline int wall_workspace() {
-    const char* value = std::getenv("WHITTY_WALL_WORKSPACE");
+    const char* value = std::getenv("MANX_WALL_WORKSPACE");
     return value ? std::atoi(value) : 0;
 }
 
@@ -525,8 +525,8 @@ inline void arrange_twin_windows(SDL_Window* player1, SDL_Window* player2,
     const twin_layout layout = fit_twin_layout(usable, requested_width);
     set_exact_size(player1, layout.width, layout.height);
     set_exact_size(player2, layout.width, layout.height);
-    SDL_SetWindowTitle(player1, "WhittyArcade - Player 1");
-    SDL_SetWindowTitle(player2, "WhittyArcade - Player 2");
+    SDL_SetWindowTitle(player1, "MANX - Player 1");
+    SDL_SetWindowTitle(player2, "MANX - Player 2");
     SDL_ShowWindow(player1);
     SDL_ShowWindow(player2);
     SDL_SyncWindow(player1);
@@ -553,4 +553,4 @@ inline void arrange_twin_windows(SDL_Window* player1, SDL_Window* player2,
     SDL_RaiseWindow(player1);
 }
 
-} // namespace whitty_window
+} // namespace manx_window

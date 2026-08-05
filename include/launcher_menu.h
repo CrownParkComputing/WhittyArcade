@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct launcher_controller_info {
@@ -31,6 +32,9 @@ public:
     // Returned when the player asks for the page's information panel
     // (the "i" chip, I key or controller X).
     static constexpr int info_request = -6;
+    // Distinct from Back: the OS close button must terminate the launcher,
+    // not reopen the menu that was underneath the current screen.
+    static constexpr int exit_requested = -7;
     // Compact utility mode is used for menus shown over a running game.
     explicit launcher_menu(bool compact_utility_window = false);
     ~launcher_menu();
@@ -38,7 +42,8 @@ public:
     launcher_menu(const launcher_menu&) = delete;
     launcher_menu& operator=(const launcher_menu&) = delete;
 
-    // Returns the selected item index, or -1 for Back/window close.
+    // Returns the selected item index, -1 for Back, or exit_requested for the
+    // OS window close button.
     // `unavailable` names items that are shown but cannot be chosen - a
     // second monitor on a machine that has only one. Hiding them instead
     // leaves a player wondering whether the feature exists; greying one out
@@ -58,6 +63,75 @@ public:
         const std::string& back_label, int initial_selection,
         std::function<bool()> interrupt);
 
+    // Graphical launcher choice used for play topology. Unlike the utility
+    // list above, these are large animated tiles whose picture carries the
+    // meaning: players, screens, linked cabinets or a network. `value` is
+    // used by the cabinet icon to show the chosen number of instances.
+    enum class mode_icon : uint8_t {
+        solo,
+        local_players,
+        split_screen,
+        linked_cabinets,
+        network,
+        cabinet_count,
+        display_wall,
+        settings,
+        controls,
+        storage,
+        scores,
+        folder,
+        audit,
+        information,
+        refresh,
+        cover_front,
+        cover_3d,
+        cover_back,
+        title_art,
+        screenshot_art,
+        marquee_art,
+        fan_art,
+        thumbnail_art,
+        exit,
+    };
+    struct mode_card {
+        std::string title;
+        std::string subtitle;
+        mode_icon icon{mode_icon::solo};
+        int value{};
+        bool unavailable{};
+        std::string status;
+        // Optional logo supplied by the caller. Pixels remain caller-owned
+        // for the duration of select_modes; null keeps the drawn icon.
+        const uint8_t* artwork{};
+        int artwork_width{};
+        int artwork_height{};
+        // Publisher/platform wordmark used while an online logo is still
+        // arriving, or when Commons has no image for an obscure maker.
+        // Empty preserves the normal graphical mode icon.
+        std::string artwork_fallback;
+
+        mode_card() = default;
+        mode_card(std::string title_in, std::string subtitle_in,
+                  mode_icon icon_in, int value_in = 0,
+                  bool unavailable_in = false,
+                  std::string status_in = {})
+            : title(std::move(title_in)), subtitle(std::move(subtitle_in)),
+              icon(icon_in), value(value_in),
+              unavailable(unavailable_in), status(std::move(status_in)) {}
+    };
+
+    // Returns a card index, -1 for Back, exit_requested for window close, or
+    // interrupted when the supplied network condition changes. Keyboard,
+    // controller and mouse are all accepted; unavailable cards stay visible
+    // but cannot be launched.
+    int select_modes(const std::string& title,
+                     const std::string& description,
+                     const std::vector<mode_card>& cards,
+                     const std::string& back_label = "Back",
+                     int initial_selection = 0,
+                     std::function<bool()> interrupt = {},
+                     std::function<bool()> tick = {});
+
     // Cover art for one grid card. The pixels are RGBA, owned by the caller
     // and only read during the call; a null pointer draws a title-only card,
     // which is what a game with no artwork yet gets.
@@ -73,6 +147,21 @@ public:
         // Colours the badge so the kind registers before the word is read:
         // 0 two players here, 1 two machines, 2 the cabinet link.
         int badge_tone{};
+    };
+
+    // All the artwork and metadata for one game, used by the game-detail
+    // (cover-flow) view to show a rich, single-game page.
+    struct game_media {
+        const uint8_t* box_pixels{};
+        int box_w{}, box_h{};
+        const uint8_t* marquee_pixels{};
+        int marquee_w{}, marquee_h{};
+        const uint8_t* snap_pixels{};
+        int snap_w{}, snap_h{};
+        std::string publisher;
+        std::string year;
+        std::string players;
+        std::string board_name;
     };
 
     // Cover-art grid selector, the console-style counterpart to select().
@@ -101,7 +190,30 @@ public:
                     // True renders the page as a single-column list with
                     // small thumbnails instead of the cover-art card grid -
                     // forty games scan faster as rows than as posters.
-                    bool list_view = false);
+                    bool list_view = false,
+                    // A single horizontal strip for wide cabinet marquees.
+                    // Left/right moves one game and artwork keeps its native
+                    // aspect ratio instead of being stretched like a cover.
+                    bool marquee_view = false,
+                    // Full-screen cover-flow carousel: large 2D box art with
+                    // game details, description, and optional video background.
+                    // Cards are laid out in a 3D-ish arc with the selected
+                    // game centred and largest; neighbours recede to the sides.
+                    bool coverflow_view = false,
+                    // Optional video snap path for the currently selected game.
+                    // Called each frame with the item index; return empty
+                    // string when no video is available. The video is decoded
+                    // and played back in the background of the cover-flow view.
+                    std::function<std::string(int)> video_for = {},
+                    // All artwork and metadata for one game index. Used by
+                    // cover-flow view to compose box, marquee, screenshot,
+                    // publisher, year, players and board name on one page.
+                    std::function<game_media(int)> media_for = {},
+                    // Optional synopsis aligned with `items`. The selected
+                    // game's text replaces the static header detail and
+                    // scrolls automatically when it is wider than the page.
+                    const std::vector<std::string>* item_descriptions =
+                        nullptr);
 
     // Picks several games from one grid rather than asking repeatedly. Cards
     // already chosen are numbered in the order they were taken, and the grid

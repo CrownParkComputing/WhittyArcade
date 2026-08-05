@@ -13,12 +13,12 @@
 #include <cstdlib>
 #include <string>
 
-namespace whitty_wall_log {
+namespace manx_wall_log {
 
 inline std::string log_path(int slot) {
     const char* home = std::getenv("HOME");
     std::string root = home && *home ? home : "/tmp";
-    root += "/.local/share/WhittyArcade";
+    root += "/.local/share/MANX";
     return root + "/wall-column-" + std::to_string(slot) + ".log";
 }
 
@@ -36,7 +36,7 @@ inline void begin_cabinet(int node) {
     if (sink() || node < 1 || node > 8) return;
     const char* home = std::getenv("HOME");
     std::string root = home && *home ? home : "/tmp";
-    root += "/.local/share/WhittyArcade/cabinet-" + std::to_string(node) +
+    root += "/.local/share/MANX/cabinet-" + std::to_string(node) +
             ".log";
     sink() = std::fopen(root.c_str(), "w");
     if (!sink()) return;
@@ -51,7 +51,7 @@ inline void begin_session() {
     if (sink()) return;
     const char* home = std::getenv("HOME");
     std::string root = home && *home ? home : "/tmp";
-    root += "/.local/share/WhittyArcade/session.log";
+    root += "/.local/share/MANX/session.log";
     sink() = std::fopen(root.c_str(), "w");
     if (!sink()) return;
     std::fprintf(sink(), "single cabinet\n");
@@ -84,4 +84,4 @@ inline void note(const char* format, ...) {
 // paths say what happened without filling the file.
 inline bool first(int& counter, int limit = 3) { return ++counter <= limit; }
 
-} // namespace whitty_wall_log
+} // namespace manx_wall_log

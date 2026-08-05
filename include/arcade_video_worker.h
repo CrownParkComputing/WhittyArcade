@@ -56,6 +56,8 @@ public:
         return m_wall_audible.load(std::memory_order_acquire);
     }
     bool paused() const { return m_paused.load(); }
+    // Shows or hides the launcher's own window, on the thread that owns it.
+    void set_host_window_visible(bool visible);
     void refresh_output();
     // Some cabinets expose exactly one video output. Keep the user's global
     // dual-screen preference intact while constraining only that session.

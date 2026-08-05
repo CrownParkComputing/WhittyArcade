@@ -47,7 +47,7 @@ std::array<int, 2> bounded_window_size(SDL_Window* window,
         (usable.h - border_top - border_bottom) * 4 / 3);
     // Linked cabinets that share one desktop are constrained to half the
     // usable width so the two side-by-side windows never overlap.
-    const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+    const char* node_text = std::getenv("MANX_CABINET_NODE");
     const bool cabinet_node = node_text && *node_text &&
         (node_text[0] == '1' || node_text[0] == '2');
     if (cabinet_node)
@@ -99,7 +99,7 @@ bool place_window_on_display(SDL_Window* window, int display_index,
 // left half, cabinet 2 → right half, so the two side-by-side windows fit
 // a single ultrawide without overlap.
 // Whether System 22 rasterises through Vulkan. On by default; set
-// WHITTY_VK_SYSTEM22=0 to fall back to the OpenGL route.
+// MANX_VK_SYSTEM22=0 to fall back to the OpenGL route.
 //
 // This gates the sheet uploads as well as the draw, because an unused path
 // must cost nothing at all - not even a texture upload. Building the scene
@@ -113,23 +113,23 @@ bool native_path_enabled(const char* variable, bool default_on) {
 
 bool native_system22_enabled() {
     static const bool enabled =
-        native_path_enabled("WHITTY_VK_SYSTEM22", true);
+        native_path_enabled("MANX_VK_SYSTEM22", true);
     return enabled;
 }
 
-// Model 2 through Vulkan. On by default; set WHITTY_VK_MODEL2=0 to fall back
+// Model 2 through Vulkan. On by default; set MANX_VK_MODEL2=0 to fall back
 // to the OpenGL route. Gates the uploads as well as the draw, for the reason
 // the System 22 gate does.
 bool native_model2_enabled() {
     static const bool enabled =
-        native_path_enabled("WHITTY_VK_MODEL2", true);
+        native_path_enabled("MANX_VK_MODEL2", true);
     return enabled;
 }
 
 bool place_window_on_cabinet_half(SDL_Window* window, int cabinet_node) {
-    const char* count_text = std::getenv("WHITTY_CABINET_COUNT");
+    const char* count_text = std::getenv("MANX_CABINET_COUNT");
     const int count = count_text ? std::atoi(count_text) : 2;
-    return whitty_window::place_cabinet_cell(window, cabinet_node,
+    return manx_window::place_cabinet_cell(window, cabinet_node,
                                              count >= 2 ? count : 2);
 }
 
@@ -137,7 +137,7 @@ bool place_window_on_cabinet_half(SDL_Window* window, int cabinet_node) {
 // node before the window exists, so both the OpenGL and alternate-presenter
 // paths can read it without threading it through their own settings.
 int cabinet_node_from_environment() {
-    const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+    const char* node_text = std::getenv("MANX_CABINET_NODE");
     const int node = node_text ? std::atoi(node_text) : 0;
     return node >= 1 && node <= 8 ? node : 1;
 }
@@ -1041,11 +1041,11 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     // Give Wayland compositors and X11 window managers a stable identity.
     // Hyprland can then float only this emulator window; tiled clients are
     // deliberately not allowed to honor SDL_SetWindowSize requests.
-    SDL_SetHint("SDL_APP_ID", "WhittyArcade");
-    SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "WhittyArcade");
-    SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "WhittyArcade");
+    SDL_SetHint("SDL_APP_ID", "MANX");
+    SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "MANX");
+    SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "MANX");
 
-    if (!whitty_platform::video_available()) {
+    if (!manx_platform::video_available()) {
         printf("No display available, initializing headless mode\n");
         printf("GPU renderer initialized (headless)\n");
         m_headless = true;
@@ -1054,7 +1054,7 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     }
 
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
-        whitty_wall_log::note("SDL video init FAILED: %s", SDL_GetError());
+        manx_wall_log::note("SDL video init FAILED: %s", SDL_GetError());
         std::fprintf(stderr, "SDL initialization failed: %s\n", SDL_GetError());
         return false;
     }
@@ -1078,7 +1078,7 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
         (settings.fullscreen && settings.display_index < 0 ?
              SDL_WINDOW_FULLSCREEN : 0);
     SDL_Window* window = SDL_CreateWindow(
-        alternate_output ? "WhittyArcade Render Worker" : "WhittyArcade",
+        alternate_output ? "MANX Render Worker" : "MANX",
         initial_width, initial_height,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
             output_visibility);
@@ -1303,7 +1303,7 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     if (!create_graphics_pipeline() || !create_model2_pipeline() ||
         !create_text_pipeline() ||
         !create_post_pipeline() || !create_settings_overlay()) {
-        whitty_wall_log::note("renderer pipeline setup FAILED");
+        manx_wall_log::note("renderer pipeline setup FAILED");
         shutdown();
         return false;
     }
@@ -1316,7 +1316,7 @@ bool polygon_renderer_gpu::initialize(const emulator_settings& settings) {
     m_network_video = std::make_unique<network_video_link>();
     apply_display_settings(settings);
     printf("GPU renderer initialized\n");
-    whitty_wall_log::note("renderer up: wanted=%d actual=%d window=%d "
+    manx_wall_log::note("renderer up: wanted=%d actual=%d window=%d "
                           "headless=%d",
                           static_cast<int>(settings.renderer),
                           m_alternate_presenter
@@ -1452,7 +1452,7 @@ void polygon_renderer_gpu::set_lightgun_cursor(bool enabled, uint8_t player) {
                 fmt, nullptr, colour[0], colour[1], colour[2], 255);
             SDL_FillSurfaceRect(surface, nullptr, transparent);
 
-            // WhittyArcade's light-gun sight is generated here rather than
+            // MANX's light-gun sight is generated here rather than
             // borrowed from a game or another emulator. Dark edging keeps
             // both vivid player colours readable against bright muzzle
             // flashes and dark scenery.
@@ -1510,17 +1510,17 @@ arcade_host_action polygon_renderer_gpu::process_events() {
         // exactly like the user quitting: SDL turns the last window closing
         // into SDL_EVENT_QUIT. Recording it separates the two.
         if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
-            whitty_wall_log::note("compositor asked window %u to close",
+            manx_wall_log::note("compositor asked window %u to close",
                                   static_cast<unsigned>(event.window.windowID));
         if (event.type == SDL_EVENT_WINDOW_DESTROYED)
-            whitty_wall_log::note("window %u destroyed",
+            manx_wall_log::note("window %u destroyed",
                                   static_cast<unsigned>(event.window.windowID));
         const arcade_host_action host_action = classify_arcade_host_event(
             event.type == SDL_EVENT_QUIT,
             key_down && event.key.key == SDLK_ESCAPE,
             key_down && event.key.repeat != 0);
         if (host_action != arcade_host_action::continue_running) {
-            whitty_wall_log::note(
+            manx_wall_log::note(
                 "host stop requested: sdl event %u (quit=%d escape=%d)",
                 static_cast<unsigned>(event.type),
                 event.type == SDL_EVENT_QUIT ? 1 : 0,
@@ -1543,7 +1543,7 @@ arcade_host_action polygon_renderer_gpu::process_events() {
             // themselves: each of them can see its own focus, but not whose
             // gain caused their loss.
             if (m_wall_column_active)
-                whitty_window::publish_wall_focus(
+                manx_window::publish_wall_focus(
                     m_display_settings.wall_slot);
         }
         if (!m_alternate_presenter &&
@@ -1839,7 +1839,7 @@ void polygon_renderer_gpu::arm_title_capture(
     }
     m_title_capture_name = short_name;
     m_title_capture_countdown = 1800;
-    whitty_wall_log::note("title capture armed for %s", short_name.c_str());
+    manx_wall_log::note("title capture armed for %s", short_name.c_str());
 }
 
 void polygon_renderer_gpu::set_window_visible(bool visible) {
@@ -1868,7 +1868,7 @@ void polygon_renderer_gpu::set_cabinet_status(std::string status) {
             static_cast<SDL_Window*>(m_ctx->window);
         if (window) {
             const std::string title = m_cabinet_status.empty() ?
-                "WhittyArcade" : "WhittyArcade - " + m_cabinet_status;
+                "MANX" : "MANX - " + m_cabinet_status;
             SDL_SetWindowTitle(window, title.c_str());
             // Cabinet 2's window opens last and takes the desktop focus
             // with it, so the keyboard starts out driving player 2. The
@@ -1878,7 +1878,7 @@ void polygon_renderer_gpu::set_cabinet_status(std::string status) {
             if (!m_raised_when_linked &&
                 m_cabinet_status.find("LINKED") != std::string::npos) {
                 const char* node_text =
-                    std::getenv("WHITTY_CABINET_NODE");
+                    std::getenv("MANX_CABINET_NODE");
                 if (node_text && std::atoi(node_text) == 1) {
                     SDL_RaiseWindow(window);
                     m_raised_when_linked = true;
@@ -2053,7 +2053,7 @@ void polygon_renderer_gpu::apply_display_settings(
     } else if (settings.wall_count > 1) {
         // Arcade wall: one column of several, each a different game.
         SDL_SetWindowFullscreen(window, false);
-        if (!whitty_window::place_wall_slot(window, settings.wall_slot,
+        if (!manx_window::place_wall_slot(window, settings.wall_slot,
                                             settings.wall_count))
             SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
                                   SDL_WINDOWPOS_CENTERED);
@@ -2081,7 +2081,7 @@ void polygon_renderer_gpu::apply_display_settings(
             // monitor host running two linked_network processes).
             // Fall back to a per-cabinet half of the primary display
             // so the two windows don't stack on top of each other.
-            const char* node_text = std::getenv("WHITTY_CABINET_NODE");
+            const char* node_text = std::getenv("MANX_CABINET_NODE");
             const int node = node_text ? std::atoi(node_text) : 0;
             if (!place_window_on_cabinet_half(window, node))
                 SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
@@ -2122,7 +2122,7 @@ bool polygon_renderer_gpu::configure_output_backend(
             m_alternate_presenter.reset();
             SDL_FlushEvent(SDL_EVENT_QUIT);
         }
-        SDL_SetWindowTitle(gl_window, "WhittyArcade - OpenGL");
+        SDL_SetWindowTitle(gl_window, "MANX - OpenGL");
         SDL_ShowWindow(gl_window);
         m_ctx->make_current();
         m_active_backend = backend;
@@ -2629,7 +2629,7 @@ void polygon_renderer_gpu::render_scene(const view_matrix& view, const rgba_colo
     // the OpenGL route below then runs exactly as before.
     // Opt-in while this path is still being brought up: System 22 has a
     // proven OpenGL route and there is no reason to risk it by default.
-    // Set WHITTY_VK_SYSTEM22=1 to rasterise natively instead.
+    // Set MANX_VK_SYSTEM22=1 to rasterise natively instead.
     if (m_alternate_presenter && native_system22_enabled()) {
         system22_scene scene;
         scene.width = SYSTEM22_SCREEN_WIDTH;
@@ -3147,12 +3147,12 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
             SDL_GLContext ctx = static_cast<SDL_GLContext>(m_ctx->gl_context);
             if (!m_ctx->window2) {
                 if (SDL_Window* w2 = SDL_CreateWindow(
-                        "WhittyArcade - Player 2", m_ctx->width, m_ctx->height,
+                        "MANX - Player 2", m_ctx->width, m_ctx->height,
                         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE)) {
                     if (!m_display_settings.twin_separate_monitors ||
                         !place_window_on_display(w2, 1, true)) {
                         if (!m_display_settings.twin_separate_monitors) {
-                            whitty_window::arrange_twin_windows(
+                            manx_window::arrange_twin_windows(
                                 w1, w2, m_display_settings.window_width);
                         } else {
                             int x = SDL_WINDOWPOS_CENTERED;
@@ -3163,14 +3163,14 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
                     }
                     m_ctx->window2 = w2;
                     if (m_display_settings.twin_separate_monitors)
-                        SDL_SetWindowTitle(w1, "WhittyArcade - Player 1");
+                        SDL_SetWindowTitle(w1, "MANX - Player 1");
                 }
             }
             if (SDL_Window* w2 = static_cast<SDL_Window*>(m_ctx->window2)) {
                 if (!m_display_settings.twin_separate_monitors &&
                     m_ctx->twin_layout_attempts < 6) {
                     SDL_PumpEvents();
-                    whitty_window::arrange_twin_windows(
+                    manx_window::arrange_twin_windows(
                         w1, w2, m_display_settings.window_width);
                     ++m_ctx->twin_layout_attempts;
                 }
@@ -3227,7 +3227,7 @@ void polygon_renderer_gpu::present_texture(uint32_t texture, int source_width,
             m_ctx->window2 = nullptr;
             m_ctx->twin_layout_attempts = 0;
             SDL_SetWindowTitle(static_cast<SDL_Window*>(m_ctx->window),
-                               "WhittyArcade");
+                               "MANX");
         }
     }
 }
@@ -3338,7 +3338,7 @@ bool polygon_renderer_gpu::present_native_scene(bool rasterised,
                                                 int height) {
     static int native_entries = 0;
     if (log_first(native_entries))
-        whitty_wall_log::note("present_native_scene(%s): rasterised=%d "
+        manx_wall_log::note("present_native_scene(%s): rasterised=%d "
                               "alternate=%d", board, rasterised ? 1 : 0,
                               m_alternate_presenter ? 1 : 0);
     const bool presented = rasterised &&
@@ -3425,25 +3425,25 @@ void polygon_renderer_gpu::maintain_gl_wall_placement() {
     if (m_display_settings.wall_count <= 1 || !m_ctx) return;
     if (--m_gl_wall_countdown > 0) return;
     m_gl_wall_countdown = 30;
-    const int focused = whitty_window::read_wall_focus();
+    const int focused = manx_window::read_wall_focus();
     bool needed = !m_gl_wall_placed || focused != m_gl_wall_focus;
     if (!needed) {
         int x = 0, y = 0, width = 0, height = 0;
-        if (whitty_window::compositor_window_geometry(x, y, width, height))
+        if (manx_window::compositor_window_geometry(x, y, width, height))
             needed = x != m_gl_wall_x || width != m_gl_wall_width ||
                      height != m_gl_wall_height;
     }
     if (!needed) return;
     m_gl_wall_focus = focused;
-    m_gl_wall_placed = whitty_window::place_wall_slot(
+    m_gl_wall_placed = manx_window::place_wall_slot(
         static_cast<SDL_Window*>(m_ctx->window), m_display_settings.wall_slot,
         m_display_settings.wall_count);
     if (m_gl_wall_placed) {
         int y = 0;
-        whitty_window::compositor_window_geometry(m_gl_wall_x, y,
+        manx_window::compositor_window_geometry(m_gl_wall_x, y,
                                                   m_gl_wall_width,
                                                   m_gl_wall_height);
-        whitty_wall_log::note("gl window placed at %d %dx%d", m_gl_wall_x,
+        manx_wall_log::note("gl window placed at %d %dx%d", m_gl_wall_x,
                               m_gl_wall_width, m_gl_wall_height);
     }
 }
@@ -3451,7 +3451,7 @@ void polygon_renderer_gpu::maintain_gl_wall_placement() {
 void polygon_renderer_gpu::recover_from_device_loss() {
     if (!m_alternate_presenter || !m_alternate_presenter->device_lost())
         return;
-    whitty_wall_log::note(
+    manx_wall_log::note(
         "vulkan device lost - switching to OpenGL presentation");
     std::fprintf(stderr,
                  "Vulkan device lost; presenting through OpenGL instead\n");
@@ -3478,7 +3478,7 @@ void polygon_renderer_gpu::present_rgba_frame(const uint8_t* pixels,
                                               int display_height) {
     static int rgba_entries = 0;
     if (log_first(rgba_entries))
-        whitty_wall_log::note("present_rgba_frame: pixels=%d %dx%d headless=%d "
+        manx_wall_log::note("present_rgba_frame: pixels=%d %dx%d headless=%d "
                               "ctx=%d alternate=%d",
                               pixels ? 1 : 0, width, height, m_headless ? 1 : 0,
                               m_ctx ? 1 : 0, m_alternate_presenter ? 1 : 0);
@@ -3489,7 +3489,7 @@ void polygon_renderer_gpu::present_rgba_frame(const uint8_t* pixels,
         // icon is the game as it draws itself.
         if (title_capture_write(m_title_capture_name, pixels, width,
                                 height, /*top_down=*/true))
-            whitty_wall_log::note("title captured for %s",
+            manx_wall_log::note("title captured for %s",
                                   m_title_capture_name.c_str());
         m_title_capture_name.clear();
         m_title_capture_countdown = -1;
@@ -3982,7 +3982,7 @@ bool polygon_renderer_gpu::create_settings_overlay() {
         return false;
     }
     m_ttf_initialized = true;
-    for (const std::filesystem::path& path : whitty_platform::font_paths()) {
+    for (const std::filesystem::path& path : manx_platform::font_paths()) {
         m_settings_font = TTF_OpenFont(path.string().c_str(), 20);
         if (m_settings_font) break;
     }

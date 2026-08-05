@@ -17,18 +17,18 @@ namespace fs = std::filesystem;
 namespace {
 
 fs::path config_root() {
-    const fs::path root = whitty_platform::config_root();
+    const fs::path root = manx_platform::config_root();
     return root.empty() ? fs::current_path() : root;
 }
 
 fs::path nvram_root() {
-    return config_root() / "WhittyArcade" / "nvram";
+    return config_root() / "MANX" / "nvram";
 }
 
 fs::path system246_save_root() {
-    fs::path root = whitty_platform::data_root();
+    fs::path root = manx_platform::data_root();
     if (root.empty()) root = fs::current_path();
-    return root / "WhittyArcade" / "play" / "arcadesaves";
+    return root / "MANX" / "play" / "arcadesaves";
 }
 
 std::string timestamp(bool filename_safe = false) {
@@ -278,7 +278,7 @@ std::string persistent_settings_report(const std::string& short_name) {
         }
     } else {
         report << "The image and size are valid, but this game's individual "
-                  "option offsets have not been verified. WhittyArcade will "
+                  "option offsets have not been verified. MANX will "
                   "not turn unknown bytes into misleading setting names. Use "
                   "the original service screen below; it is authoritative.\n";
     }
@@ -305,7 +305,7 @@ std::string persistent_settings_report(const std::string& short_name) {
                   "shown by the game. Exit through the service screen so its "
                   "checksum and EEPROM are committed.";
     } else if (model2) {
-        report << "Start Sega Rally and press D once. WhittyArcade performs "
+        report << "Start Sega Rally and press D once. MANX performs "
                   "a safe board reset with TEST held so the original service "
                   "screen opens. Once there, use 9 (SERVICE) to move/change "
                   "and F2 (TEST) to enter/select. Choose EXIT to return to "
@@ -350,7 +350,7 @@ persistent_action_result export_persistent_game(const std::string& short_name,
     const persistent_game_info* game = find_game(games, short_name);
     if (!game) return {false, "Unknown game save: " + short_name};
     const fs::path destination = fs::path(directory) /
-        ("WhittyArcade-" + game->short_name + "-save");
+        ("MANX-" + game->short_name + "-save");
     std::error_code error;
     fs::create_directories(destination, error);
     if (error) return {false, "Could not create export folder: " + error.message()};
@@ -419,7 +419,7 @@ persistent_action_result import_persistent_game(const std::string& short_name,
 bool load_system22_eeprom(const std::string& short_name,
                           void* destination, std::size_t size) {
     return size == 0x2000 && read_exact(
-        nvram_root() / whitty_platform::cabinet_scoped_name(short_name) /
+        nvram_root() / manx_platform::cabinet_scoped_name(short_name) /
             "eeprom",
         destination, size);
 }
@@ -427,7 +427,7 @@ bool load_system22_eeprom(const std::string& short_name,
 bool save_system22_eeprom(const std::string& short_name,
                           const void* source, std::size_t size) {
     return size == 0x2000 && write_exact(
-        nvram_root() / whitty_platform::cabinet_scoped_name(short_name) /
+        nvram_root() / manx_platform::cabinet_scoped_name(short_name) /
             "eeprom",
         source, size);
 }

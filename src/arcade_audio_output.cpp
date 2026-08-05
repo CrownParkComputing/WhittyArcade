@@ -1,4 +1,5 @@
 #include "arcade_audio_output.h"
+#include "arcade_feedback.h"
 
 #include <algorithm>
 #include <atomic>
@@ -120,6 +121,7 @@ void loudness_normalizer::reset() {
     m_active = false;
     m_programme_power = 0.0;
     m_gain = 1.0;
+    m_impact_detector.reset();
 }
 
 double loudness_normalizer::programme_rms() const {
@@ -190,6 +192,8 @@ metrics loudness_normalizer::process_in_place(
         sum_squares += sample * sample;
     }
     result.input_rms = std::sqrt(sum_squares / sample_count);
+    arcade_feedback::publish_impact(m_impact_detector.consume_int16(
+        samples, sample_count, channels));
     const double seconds = static_cast<double>(sample_count) /
         (static_cast<double>(channels) * sample_rate);
     update(sum_squares / sample_count, seconds, reference_level_percent);
@@ -232,6 +236,8 @@ metrics loudness_normalizer::process_from_int32(
         result.peak = std::max(
             result.peak, std::abs(static_cast<int>(output[index])));
     }
+    arcade_feedback::publish_impact(m_impact_detector.consume_int16(
+        output, sample_count, channels));
     return result;
 }
 

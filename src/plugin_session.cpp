@@ -15,9 +15,12 @@
 #include "arcade_frontend.h"
 #include "arcade_catalog.h"
 #include "game_plugin_host.h"
+#include "plugin_audio.h"
 
 #include <cstdio>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -78,6 +81,24 @@ public:
                          m_game.display_name.c_str());
             return false;
         }
+        // Cue names come from the plugin, so the bundle's sound files are
+        // matched to what the game actually emits rather than to a list the
+        // host guessed. A game with no audio reports none and stays silent.
+        const uint32_t cue_count =
+            m_plugin->api()->describe_audio_cues(nullptr, 0);
+        if (cue_count > 0) {
+            std::vector<const char*> raw(cue_count, nullptr);
+            const uint32_t written =
+                m_plugin->api()->describe_audio_cues(raw.data(), cue_count);
+            std::vector<std::string> names;
+            names.reserve(written);
+            for (uint32_t i = 0; i < written; ++i)
+                names.emplace_back(raw[i] != nullptr ? raw[i] : "");
+            m_audio = std::make_unique<plugin_audio>();
+            m_audio->initialize(names, m_game.bundle_path,
+                                settings.master_volume,
+                                settings.effects_volume);
+        }
         std::printf("%s (native plugin) initialized, %u seat(s)\n",
                     m_game.display_name.c_str(), m_game.max_players);
         return true;
@@ -88,7 +109,7 @@ public:
         m_input->update();
         const input_state& state = m_input->state();
 
-        whitty_game_input inputs[4]{};
+        manx_game_input inputs[4]{};
         // Seat one is this cabinet's pad. The remaining seats stay
         // disconnected until either a second local pad or the lobby fills
         // them - a game must not be handed four seats it has nobody for.
@@ -97,12 +118,22 @@ public:
         inputs[0].move_y = -axis(state.left_stick_y);
         inputs[0].aim_x = axis(state.right_stick_x);
         inputs[0].aim_y = -axis(state.right_stick_y);
-        if (state.buttons[0]) inputs[0].buttons |= whitty_game_button_fire;
-        if (state.buttons[1]) inputs[0].buttons |= whitty_game_button_bomb;
-        if (state.start) inputs[0].buttons |= whitty_game_button_start;
+        if (state.buttons[0]) inputs[0].buttons |= manx_game_button_fire;
+        if (state.buttons[1]) inputs[0].buttons |= manx_game_button_bomb;
+        if (state.start) inputs[0].buttons |= manx_game_button_start;
 
-        whitty_game_frame frame{};
+        manx_game_frame frame{};
         m_plugin->api()->run_frame(m_instance, inputs, 4, &frame);
+
+        // Drained every frame whether or not there is a device, so a silent
+        // host does not let cues pile up inside the plugin.
+        manx_game_audio_cue cues[32];
+        const uint32_t cue_count =
+            m_plugin->api()->take_audio_cues(m_instance, cues, 32);
+        if (m_audio)
+            for (uint32_t i = 0; i < cue_count; ++i)
+                m_audio->play(cues[i].cue, cues[i].gain, cues[i].pan);
+
         if (frame.pixels != nullptr)
             m_gpu_renderer->present_rgba_frame(
                 frame.pixels, static_cast<int>(frame.width),
@@ -120,6 +151,7 @@ public:
 
 protected:
     void set_audio_paused(bool paused) override {
+        if (m_audio) m_audio->set_paused(paused);
         if (m_instance != nullptr && m_plugin && m_plugin->valid())
             m_plugin->api()->set_paused(m_instance, paused ? 1u : 0u);
     }
@@ -127,8 +159,9 @@ protected:
 private:
     discovered_game m_game;
     std::unique_ptr<loaded_plugin> m_plugin;
-    whitty_game_instance* m_instance{nullptr};
+    manx_game_instance* m_instance{nullptr};
     std::unique_ptr<arcade_input> m_input;
+    std::unique_ptr<plugin_audio> m_audio;
 };
 
 } // namespace

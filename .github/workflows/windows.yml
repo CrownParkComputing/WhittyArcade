@@ -60,7 +60,7 @@ jobs:
         run: cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       # Moira's generated tables are memory-heavy under parallel GCC builds.
-      - name: Build WhittyArcade.exe
+      - name: Build MANX.exe
         run: cmake --build build-windows --parallel 2
 
       - name: Run Windows tests
@@ -69,29 +69,29 @@ jobs:
       - name: Stage portable Windows package
         run: |
           tools/stage_windows.sh \
-            build-windows/WhittyArcade.exe \
+            build-windows/MANX.exe \
             artifact-windows \
-            symbols/WhittyArcade.debug
-          WHITTYARCADE_HEADLESS=1 \
-            artifact-windows/WhittyArcade.exe --list-roms > /dev/null
-          (cd artifact-windows && zip -9 -r ../WhittyArcade-windows-x86_64.zip .)
-          sha256sum WhittyArcade-windows-x86_64.zip \
-            > WhittyArcade-windows-x86_64.zip.sha256
+            symbols/MANX.debug
+          MANX_HEADLESS=1 \
+            artifact-windows/MANX.exe --list-roms > /dev/null
+          (cd artifact-windows && zip -9 -r ../MANX-windows-x86_64.zip .)
+          sha256sum MANX-windows-x86_64.zip \
+            > MANX-windows-x86_64.zip.sha256
 
       - name: Upload Windows x86-64 package
         uses: actions/upload-artifact@v7
         with:
-          name: WhittyArcade-windows-x86_64
+          name: MANX-windows-x86_64
           path: |
-            WhittyArcade-windows-x86_64.zip
-            WhittyArcade-windows-x86_64.zip.sha256
+            MANX-windows-x86_64.zip
+            MANX-windows-x86_64.zip.sha256
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload private Windows debug symbols
         uses: actions/upload-artifact@v7
         with:
-          name: WhittyArcade-windows-x86_64-symbols
-          path: symbols/WhittyArcade.debug
+          name: MANX-windows-x86_64-symbols
+          path: symbols/MANX.debug
           if-no-files-found: error
           retention-days: 14

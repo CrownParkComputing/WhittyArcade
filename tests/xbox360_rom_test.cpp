@@ -70,7 +70,7 @@ void write_package(const fs::path& path, const char* magic,
 
 int main(int argc, char* argv[]) {
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-xbox360-rom-test-" +
+        ("manx-xbox360-rom-test-" +
          std::to_string(test_process_id()));
     fs::create_directories(root);
     write_xex(root / "default.xex",

@@ -1,6 +1,6 @@
 # MANX on Linux
 
-MANX (formerly WhittyArcade) builds on Linux with CMake, GCC or Clang,
+MANX (formerly MANX) builds on Linux with CMake, GCC or Clang,
 SDL3, OpenGL 4.3, Vulkan, OpenAL, and the bundled third-party cores
 (Musashi, moira). All Linux builds are GPL-3.
 
@@ -49,7 +49,7 @@ sudo dnf install \
 ./build-release/manx -rompath ./roms
 ```
 
-(The binary is currently still named `WhittyArcade` until the Phase 2
+(The binary is currently still named `MANX` until the Phase 2
 identifier rename; the manx symlink is staged for that release.)
 
 ## Building a flatpak

@@ -15,8 +15,8 @@ namespace system16 {
 namespace {
 
 fs::path data_root() {
-    const fs::path root = whitty_platform::data_root();
-    return (root.empty() ? fs::current_path() : root) / "WhittyArcade" /
+    const fs::path root = manx_platform::data_root();
+    return (root.empty() ? fs::current_path() : root) / "MANX" /
            "artwork" / "system16";
 }
 

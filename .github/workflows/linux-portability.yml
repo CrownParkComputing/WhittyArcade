@@ -82,7 +82,7 @@ jobs:
         run: cmake -S . -B build-${{ matrix.distro }} -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       # Moira's generated tables are memory-heavy under parallel GCC builds.
-      - name: Build WhittyArcade
+      - name: Build MANX
         run: cmake --build build-${{ matrix.distro }} --parallel 2
 
       - name: Run tests
@@ -90,19 +90,19 @@ jobs:
 
       - name: Stage ${{ matrix.distro }} executable
         run: |
-          package=WhittyArcade-${{ matrix.distro }}-x86_64
+          package=MANX-${{ matrix.distro }}-x86_64
           cmake -E make_directory "$package"
           cmake -E copy \
-            build-${{ matrix.distro }}/WhittyArcade "$package/WhittyArcade"
+            build-${{ matrix.distro }}/MANX "$package/MANX"
           cmake -E copy LINUX_README.md "$package/README.md"
           cmake -E copy LICENSE "$package/LICENSE.txt"
           cmake -E copy THIRD_PARTY_NOTICES.md \
             "$package/THIRD_PARTY_NOTICES.md"
-          strip --strip-unneeded "$package/WhittyArcade"
-          chmod +x "$package/WhittyArcade"
-          WHITTYARCADE_HEADLESS=1 \
-            "$package/WhittyArcade" --list-roms > /dev/null
-          (cd "$package" && sha256sum WhittyArcade > WhittyArcade.sha256)
+          strip --strip-unneeded "$package/MANX"
+          chmod +x "$package/MANX"
+          MANX_HEADLESS=1 \
+            "$package/MANX" --list-roms > /dev/null
+          (cd "$package" && sha256sum MANX > MANX.sha256)
           # See the CachyOS job: the archive has to be made here, where the
           # executable bit still exists.
           tar -czf "$package.tar.gz" "$package"
@@ -111,9 +111,9 @@ jobs:
       - name: Upload ${{ matrix.distro }} x86-64 build
         uses: actions/upload-artifact@v7
         with:
-          name: WhittyArcade-${{ matrix.distro }}-x86_64
+          name: MANX-${{ matrix.distro }}-x86_64
           path: |
-            WhittyArcade-${{ matrix.distro }}-x86_64.tar.gz
-            WhittyArcade-${{ matrix.distro }}-x86_64.tar.gz.sha256
+            MANX-${{ matrix.distro }}-x86_64.tar.gz
+            MANX-${{ matrix.distro }}-x86_64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30

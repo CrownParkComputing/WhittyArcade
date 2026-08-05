@@ -1,11 +1,11 @@
 // MANX System 246 board session (host side, plain GCC/C++17).
 //
-// This file is part of the main WhittyArcade binary and deliberately pulls in
-// NO PCSX2 headers or libraries -- only <dlfcn.h>, WhittyArcade headers and the
+// This file is part of the main MANX binary and deliberately pulls in
+// NO PCSX2 headers or libraries -- only <dlfcn.h>, MANX headers and the
 // flat C ABI in pcsx2_module.h. All PCSX2 code lives in libsystem246_pcsx2.so,
 // which we dlopen() at initialize() time. Keeping PCSX2 out of the main binary
 // avoids the collision between PCSX2's bundled glad GL loader / static
-// initialisers and WhittyArcade's GLEW-based OpenGL renderer (which previously
+// initialisers and MANX's GLEW-based OpenGL renderer (which previously
 // hung polygon_renderer_gpu::initialize at startup for every game).
 //
 // Structure mirrors src/xbox360_session.cpp: a video_emulator_session whose
@@ -15,6 +15,8 @@
 
 #include <dlfcn.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -25,6 +27,7 @@
 #include <unistd.h>
 
 #include "arcade_input.h"
+#include "arcade_feedback.h"
 #include "arcade_session_internal.h"
 #include "system246_rom.h" // System 246/256 game identification (host side)
 #include "system246/system246_loading_screen.h"
@@ -97,6 +100,7 @@ using get_frame_fn = int (*)(const unsigned int**, int*, int*, unsigned long lon
 using set_input_fn = void (*)(const wa_pcsx2_input*);
 using set_paused_fn = void (*)(int);
 using boot_status_fn = const char* (*)(unsigned long long*, unsigned long long*);
+using take_impact_fn = float (*)(void);
 using stop_fn = void (*)(void);
 
 // Directory containing the running executable, for locating the .so beside it.
@@ -147,7 +151,7 @@ public:
         const system246_game game = resolve_game(rom_path);
 
         if (!m_gpu_renderer->initialize(settings)) {
-            std::fprintf(stderr, "Failed to initialize WhittyArcade video\n");
+            std::fprintf(stderr, "Failed to initialize MANX video\n");
             return false;
         }
         m_loading_title = game.display_name;
@@ -164,10 +168,10 @@ public:
             return text && *text ? std::strtof(text, nullptr) : fallback;
         };
 
-        m_gun_scale_x = trim("WHITTY_GUN_SCALE_X", 1.0f);
-        m_gun_scale_y = trim("WHITTY_GUN_SCALE_Y", 1.0f);
-        m_gun_offset_x = trim("WHITTY_GUN_OFFSET_X", 0.0f);
-        m_gun_offset_y = trim("WHITTY_GUN_OFFSET_Y", 0.0f);
+        m_gun_scale_x = trim("MANX_GUN_SCALE_X", 1.0f);
+        m_gun_scale_y = trim("MANX_GUN_SCALE_Y", 1.0f);
+        m_gun_offset_x = trim("MANX_GUN_OFFSET_X", 0.0f);
+        m_gun_offset_y = trim("MANX_GUN_OFFSET_Y", 0.0f);
 
         m_input = std::make_unique<arcade_input>();
         if (!m_input->initialize(game.short_name))
@@ -237,6 +241,8 @@ public:
                         static_cast<unsigned long long>(sequence));
             std::fflush(stdout);
         }
+        if (m_take_impact && m_game_has_drawn)
+            arcade_feedback::publish_impact(m_take_impact());
     }
 
     void reload_input_mappings() override {
@@ -285,8 +291,11 @@ private:
             reinterpret_cast<set_paused_fn>(dlsym(m_module, "wa_pcsx2_set_paused"));
         m_boot_status = reinterpret_cast<boot_status_fn>(
             dlsym(m_module, "wa_pcsx2_boot_status"));
+        m_take_impact = reinterpret_cast<take_impact_fn>(
+            dlsym(m_module, "wa_pcsx2_take_impact"));
 
-        if (!m_start || !m_get_frame || !m_set_input || !m_stop) {
+        if (!m_start || !m_get_frame || !m_set_input || !m_stop ||
+            !m_take_impact) {
             std::fprintf(stderr,
                          "System 246: missing wa_pcsx2_* symbol in module\n");
             dlclose(m_module);
@@ -411,6 +420,7 @@ private:
     stop_fn m_stop{nullptr};
     set_paused_fn m_set_paused{nullptr};
     boot_status_fn m_boot_status{nullptr};
+    take_impact_fn m_take_impact{nullptr};
     bool m_prev_coin{false};
     bool m_prev_coin2{false};
     bool m_paused{false};

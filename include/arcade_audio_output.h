@@ -1,6 +1,8 @@
 // arcade_audio_output.h - common loudness and headroom for all boards.
 #pragma once
 
+#include "audio_impact_detector.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -67,6 +69,7 @@ private:
     bool m_active{};
     double m_programme_power{};
     double m_gain{1.0};
+    audio_impact_detector m_impact_detector;
 };
 
 } // namespace arcade_audio_output

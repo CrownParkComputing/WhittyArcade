@@ -14,21 +14,35 @@
 /* on-chip timer registers 0x08-0x0c are handled internally, not via callback */
 static uint8_t tmr_rd(m6801_t *c, uint16_t a){
     switch(a){
-    case 0x08: c->tcsr_read = true; return c->tcsr;
-    case 0x09: if(c->tcsr_read && (c->tcsr&TCSR_TOF)){ c->tcsr&=~TCSR_TOF; c->tcsr_read=false; } return c->frc>>8;
+    case 0x08: c->pending_tcsr = 0; return c->tcsr;
+    case 0x09: if (!(c->pending_tcsr & TCSR_TOF)) c->tcsr &= ~TCSR_TOF; return c->frc>>8;
     case 0x0a: return c->frc & 0xff;
-    case 0x0b: if(c->tcsr_read){ c->tcsr&=~TCSR_OCF; c->tcsr_read=false; } return c->ocr>>8;
-    case 0x0c: if(c->tcsr_read){ c->tcsr&=~TCSR_OCF; c->tcsr_read=false; } return c->ocr&0xff;
+    case 0x0b: return c->ocr>>8;
+    case 0x0c: return c->ocr&0xff;
     }
     return 0xff;
 }
 static void tmr_wr(m6801_t *c, uint16_t a, uint8_t v){
     switch(a){
-    case 0x08: c->tcsr = (c->tcsr & 0xe0) | (v & 0x1f); break;        /* status bits read-only */
-    case 0x09: c->frc = (c->frc & 0x00ff) | (v<<8); break;
-    case 0x0a: c->frc = (c->frc & 0xff00) | v; break;
-    case 0x0b: if(c->tcsr_read){ c->tcsr&=~TCSR_OCF; c->tcsr_read=false; } c->ocr=(c->ocr&0x00ff)|(v<<8); break;
-    case 0x0c: if(c->tcsr_read){ c->tcsr&=~TCSR_OCF; c->tcsr_read=false; } c->ocr=(c->ocr&0xff00)|v; break;
+    case 0x08:
+        c->tcsr = (c->tcsr & 0xe0) | (v & 0x1f);
+        c->pending_tcsr &= c->tcsr;
+        break;
+    case 0x09:
+        c->counter_high_latch = v;
+        c->frc = 0xfff8;
+        break;
+    case 0x0a:
+        c->frc = ((uint16_t)c->counter_high_latch << 8) | v;
+        break;
+    case 0x0b:
+        if (!(c->pending_tcsr & TCSR_OCF)) c->tcsr &= ~TCSR_OCF;
+        c->ocr=(c->ocr&0x00ff)|(v<<8);
+        break;
+    case 0x0c:
+        if (!(c->pending_tcsr & TCSR_OCF)) c->tcsr &= ~TCSR_OCF;
+        c->ocr=(c->ocr&0xff00)|v;
+        break;
     }
 }
 static inline uint8_t m_read(m6801_t *c, uint16_t a){
@@ -94,9 +108,11 @@ static void enter_irq(m6801_t *c, uint16_t vec){
 }
 
 void m6801_reset(m6801_t *c){
+    c->inhibit_interrupts=false;
     c->cycles=0; c->cc = M6801_I | 0xC0; c->irq1=false; c->wai=false; c->halted=false;
     c->trap_op=0; c->trap_pc=0; c->a=c->b=0; c->x=0; c->sp=0;
-    c->frc=0; c->ocr=0xffff; c->tcsr=0; c->tcsr_read=false;
+    c->frc=0; c->ocr=0xffff; c->tcsr=0; c->pending_tcsr=0;
+    c->counter_high_latch=0;
     c->pc = rd16(c, M6801_VEC_RESET);
 }
 
@@ -135,7 +151,7 @@ int m6801_step(m6801_t *c)
     if (c->halted) return c->trap_op;
 
     /* interrupts taken at the instruction boundary: timer OCF, TOF, then IRQ1 */
-    if (!(c->cc & M6801_I)) {
+    if (!c->inhibit_interrupts && !(c->cc & M6801_I)) {
         if ((c->tcsr & TCSR_OCF) && (c->tcsr & TCSR_EOCI)) { enter_irq(c, M6801_VEC_OCF); c->cycles+=12; return 0; }
         if ((c->tcsr & TCSR_TOF) && (c->tcsr & TCSR_ETOI)) { enter_irq(c, M6801_VEC_TOF); c->cycles+=12; return 0; }
         if (c->irq1) { c->irq1=false; enter_irq(c, M6801_VEC_IRQ1); c->cycles+=12; return 0; }
@@ -143,8 +159,15 @@ int m6801_step(m6801_t *c)
 
     if (c->wai) {                        /* asleep until an interrupt; keep the timer ticking */
         unsigned d = 4;
-        if ((uint16_t)(c->ocr - c->frc) < d) c->tcsr |= TCSR_OCF;
-        if ((unsigned)c->frc + d > 0xffff)   c->tcsr |= TCSR_TOF;
+        const uint16_t compare_distance = (uint16_t)(c->ocr - c->frc);
+        if (compare_distance != 0 && compare_distance <= d) {
+            c->tcsr |= TCSR_OCF;
+            c->pending_tcsr |= TCSR_OCF;
+        }
+        if ((unsigned)c->frc + d > 0xffff) {
+            c->tcsr |= TCSR_TOF;
+            c->pending_tcsr |= TCSR_TOF;
+        }
         c->frc += d; c->cycles += d;
         return 0;
     }
@@ -377,8 +400,15 @@ int m6801_step(m6801_t *c)
 
     /* advance the free-running timer by the cycles this instruction took */
     { unsigned d = (unsigned)(c->cycles - c0);
-      if ((uint16_t)(c->ocr - c->frc) < d) c->tcsr |= TCSR_OCF;       /* output-compare reached */
-      if ((unsigned)c->frc + d > 0xffff)   c->tcsr |= TCSR_TOF;       /* counter overflow       */
+      const uint16_t compare_distance = (uint16_t)(c->ocr - c->frc);
+      if (compare_distance != 0 && compare_distance <= d) {
+          c->tcsr |= TCSR_OCF;
+          c->pending_tcsr |= TCSR_OCF;
+      }
+      if ((unsigned)c->frc + d > 0xffff) {
+          c->tcsr |= TCSR_TOF;
+          c->pending_tcsr |= TCSR_TOF;
+      }
       c->frc = (uint16_t)(c->frc + d); }
     return c->trap_op;
 }

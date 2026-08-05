@@ -26,25 +26,25 @@ bool loaded_plugin::open(const std::string& library_path, std::string& error) {
     // RTLD_LOCAL above matters: two games may each carry their own copy of a
     // helper with the same name, and a global load would let the first one
     // loaded answer for both.
-    auto entry = reinterpret_cast<whitty_game_entry_fn>(
-        dlsym(m_handle, WHITTY_GAME_ENTRY_SYMBOL));
+    auto entry = reinterpret_cast<manx_game_entry_fn>(
+        dlsym(m_handle, MANX_GAME_ENTRY_SYMBOL));
     if (entry == nullptr) {
-        error = "not a game plugin: no " WHITTY_GAME_ENTRY_SYMBOL " symbol";
+        error = "not a game plugin: no " MANX_GAME_ENTRY_SYMBOL " symbol";
         dlclose(m_handle);
         m_handle = nullptr;
         return false;
     }
-    const whitty_game_api* api = entry();
+    const manx_game_api* api = entry();
     if (api == nullptr) {
         error = "plugin entry point returned nothing";
         dlclose(m_handle);
         m_handle = nullptr;
         return false;
     }
-    if (api->abi_version != WHITTY_GAME_ABI_VERSION) {
+    if (api->abi_version != MANX_GAME_ABI_VERSION) {
         error = "built for plugin ABI " + std::to_string(api->abi_version) +
                 ", this arcade speaks " +
-                std::to_string(WHITTY_GAME_ABI_VERSION);
+                std::to_string(MANX_GAME_ABI_VERSION);
         dlclose(m_handle);
         m_handle = nullptr;
         return false;
@@ -55,7 +55,9 @@ bool loaded_plugin::open(const std::string& library_path, std::string& error) {
     if (api->describe == nullptr || api->create == nullptr ||
         api->destroy == nullptr || api->run_frame == nullptr ||
         api->reset == nullptr || api->set_paused == nullptr ||
-        api->score == nullptr || api->state_checksum == nullptr) {
+        api->score == nullptr || api->state_checksum == nullptr ||
+        api->take_audio_cues == nullptr ||
+        api->describe_audio_cues == nullptr) {
         error = "plugin table has a null entry";
         dlclose(m_handle);
         m_handle = nullptr;
@@ -73,7 +75,7 @@ void game_plugin_library::consider(const std::string& library_path,
         m_rejected.push_back(rejected_plugin{library_path, error});
         return;
     }
-    whitty_game_info info{};
+    manx_game_info info{};
     plugin.api()->describe(&info);
     if (info.short_name == nullptr || *info.short_name == '\0') {
         m_rejected.push_back(
@@ -124,18 +126,29 @@ void game_plugin_library::scan(const std::string& root) {
     std::vector<std::pair<std::string, std::string>> candidates;
     for (const fs::directory_entry& entry :
          fs::directory_iterator(root, ec)) {
-        if (ec) break;
-        if (entry.is_directory(ec)) {
+        // Each query gets its OWN error_code, and the loop never breaks on one.
+        //
+        // Sharing `ec` with the queries below cost a whole afternoon. A bundle
+        // directory with no library in it - which every recomp-imported title
+        // is, since those ship sfx/ and art/ and no .so - makes
+        // is_regular_file set "No such file or directory", and the next
+        // iteration then hit `if (ec) break;` and abandoned the scan. Every
+        // game the filesystem happened to return after that one silently did
+        // not exist: no rejection, no message, just a launcher missing games.
+        // Here it was `spacegiraffe/` doing it, and the two Geometry Wars
+        // plugins were only found because they came back first.
+        std::error_code query;
+        if (entry.is_directory(query)) {
             // <root>/<short name>/<short name>.so
             const fs::path expected =
                 entry.path() / (entry.path().filename().string() + ".so");
-            if (fs::is_regular_file(expected, ec))
+            if (fs::is_regular_file(expected, query))
                 candidates.emplace_back(expected.string(),
                                         entry.path().string());
             continue;
         }
         // A bare .so in the root: the game's data, if it has any, is the root.
-        if (entry.is_regular_file(ec) && entry.path().extension() == ".so")
+        if (entry.is_regular_file(query) && entry.path().extension() == ".so")
             candidates.emplace_back(entry.path().string(), root);
     }
     std::sort(candidates.begin(), candidates.end());

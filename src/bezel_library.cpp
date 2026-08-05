@@ -21,7 +21,7 @@
 #include <thread>
 #include <utility>
 
-#if defined(WHITTY_HAVE_CURL)
+#if defined(MANX_HAVE_CURL)
 #include <curl/curl.h>
 #endif
 
@@ -34,8 +34,8 @@ namespace bezel {
 namespace {
 
 fs::path bezel_root() {
-    const fs::path root = whitty_platform::data_root();
-    return (root.empty() ? fs::current_path() : root) / "WhittyArcade" /
+    const fs::path root = manx_platform::data_root();
+    return (root.empty() ? fs::current_path() : root) / "MANX" /
            "artwork" / "bezels";
 }
 
@@ -184,7 +184,7 @@ struct library::worker {
         }
     }
 
-#if defined(WHITTY_HAVE_CURL)
+#if defined(MANX_HAVE_CURL)
     static std::size_t append(char* data, std::size_t size, std::size_t count,
                               void* userdata) {
         auto* body = static_cast<std::string*>(userdata);
@@ -203,7 +203,7 @@ struct library::worker {
         std::string body;
         curl_easy_setopt(handle, CURLOPT_URL, url.c_str());
         curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(handle, CURLOPT_USERAGENT, "WhittyArcade");
+        curl_easy_setopt(handle, CURLOPT_USERAGENT, "MANX");
         curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 5L);
         curl_easy_setopt(handle, CURLOPT_TIMEOUT, 30L);
         // Not the main thread, so libcurl must not reach for alarm()/SIGALRM.
@@ -231,7 +231,7 @@ library::library() : m_worker(std::make_unique<worker>()) {}
 library::~library() = default;
 
 bool library::configured() {
-#if defined(WHITTY_HAVE_CURL)
+#if defined(MANX_HAVE_CURL)
     return true;
 #else
     return false;

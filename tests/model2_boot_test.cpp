@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
         if (!test_set_environment("XDG_CONFIG_HOME", config)) return 2;
     } else {
         if (!test_set_environment("XDG_CONFIG_HOME",
-                                  "/nonexistent/whitty-boot-test"))
+                                  "/nonexistent/manx-boot-test"))
             return 2;
     }
     model2_machine machine;

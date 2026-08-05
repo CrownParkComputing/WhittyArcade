@@ -25,6 +25,9 @@ std::unique_ptr<emulator_session> create_emulator_session(
         return make_xbox360_session(std::move(video),
                                     std::move(cabinet_state));
     case arcade_board_type::xbox:
+        if (burnout3_dxvk_available())
+            return make_xbox_burnout3_dxvk_session(std::move(video),
+                                                   std::move(cabinet_state));
         return make_xbox_burnout3_session(std::move(video),
                                           std::move(cabinet_state));
     case arcade_board_type::model1:
@@ -49,6 +52,12 @@ std::unique_ptr<emulator_session> create_emulator_session(
     case arcade_board_type::namco_system1:
         return make_namco_system1_session(std::move(video),
                                           std::move(cabinet_state));
+    case arcade_board_type::taito_z:
+        return make_taitoz_session(std::move(video),
+                                   std::move(cabinet_state));
+    case arcade_board_type::midway:
+        return make_midway_session(std::move(video),
+                                   std::move(cabinet_state));
     case arcade_board_type::game_plugin:
         return make_plugin_session(std::move(video),
                                    std::move(cabinet_state));

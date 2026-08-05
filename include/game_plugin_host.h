@@ -16,7 +16,7 @@
 // rather than loaded.
 #pragma once
 
-#include "whitty_game_plugin.h"
+#include "manx_game_plugin.h"
 
 #include <memory>
 #include <string>
@@ -54,12 +54,12 @@ public:
     loaded_plugin& operator=(const loaded_plugin&) = delete;
 
     bool open(const std::string& library_path, std::string& error);
-    const whitty_game_api* api() const noexcept { return m_api; }
+    const manx_game_api* api() const noexcept { return m_api; }
     bool valid() const noexcept { return m_api != nullptr; }
 
 private:
     void* m_handle{nullptr};
-    const whitty_game_api* m_api{nullptr};
+    const manx_game_api* m_api{nullptr};
 };
 
 class game_plugin_library {

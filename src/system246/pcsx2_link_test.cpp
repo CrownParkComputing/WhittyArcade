@@ -1,6 +1,6 @@
 // MANX System 246/256 board bring-up: PCSX2 core embed link test.
 //
-// FOUNDATION MILESTONE ONLY. This standalone executable proves that WhittyArcade
+// FOUNDATION MILESTONE ONLY. This standalone executable proves that MANX
 // can link against the prebuilt PCSX2 static libraries (libpcsx2.a et al) and
 // stand up + tear down the PCSX2 CPU thread headlessly. It does NOT boot a game,
 // create a GS device, a window, audio or any UI.

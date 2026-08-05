@@ -5,14 +5,14 @@
 // Keeping that here rather than inside a consumer means a second consumer can
 // be added by including the header alone.
 //
-// src/igdb_cover_library.cpp and src/bezel_library.cpp both consume it by
+// The media and bezel libraries consume it by
 // including the header alone.
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
 #define STBI_NO_STDIO
 #define STBI_NO_FAILURE_STRINGS
-// Bezels are 1920x1080 and IGDB covers smaller still, so anything larger is
+// Bezels are 1920x1080 and game covers smaller still, so anything larger is
 // not artwork this program asked for.
 #define STBI_MAX_DIMENSIONS 4096
 #include "stb_image.h"

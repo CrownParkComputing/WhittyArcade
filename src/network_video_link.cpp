@@ -61,7 +61,7 @@ bool socket_retryable() {
 #endif
 
 uint16_t environment_port() {
-    const char* text = std::getenv("WHITTY_VIDEO_PORT");
+    const char* text = std::getenv("MANX_VIDEO_PORT");
     if (!text || !*text) return 0;
     const unsigned long value = std::strtoul(text, nullptr, 10);
     return value > 1024 && value <= 65535 ?
@@ -69,7 +69,7 @@ uint16_t environment_port() {
 }
 
 int environment_role() {
-    const char* text = std::getenv("WHITTY_VIDEO_ROLE");
+    const char* text = std::getenv("MANX_VIDEO_ROLE");
     const int value = text ? std::atoi(text) : 0;
     return value == 1 || value == 2 ? value : 0;
 }

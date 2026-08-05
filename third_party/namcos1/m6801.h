@@ -29,11 +29,13 @@ struct m6801 {
     unsigned long cycles;
     bool     irq1;                 /* external IRQ1 line (level)  */
     bool     wai, halted;
+    bool     inhibit_interrupts;    /* board scheduler defers boundary */
     /* HD63701 on-chip free-running timer (regs 0x08-0x0c) */
     uint16_t frc;                  /* free-running counter        */
     uint16_t ocr;                  /* output-compare register     */
     uint8_t  tcsr;                 /* timer control/status        */
-    bool     tcsr_read;            /* for OCF/TOF clear sequence   */
+    uint8_t  pending_tcsr;         /* flags set since last TCSR read */
+    uint8_t  counter_high_latch;   /* staged 6301 counter write    */
     int      trap_op;              /* nonzero = hit an unimplemented opcode */
     uint16_t trap_pc;
     void    *user;

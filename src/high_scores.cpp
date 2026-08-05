@@ -301,19 +301,19 @@ std::size_t expected_size(const score_spec& spec) {
 }
 
 fs::path config_root() {
-    const fs::path root = whitty_platform::config_root();
+    const fs::path root = manx_platform::config_root();
     return root.empty() ? fs::current_path() : root;
 }
 
 fs::path score_root() {
-    if (const char* override_path = std::getenv("WHITTYARCADE_HISCORE_PATH"))
+    if (const char* override_path = std::getenv("MANX_HISCORE_PATH"))
         return fs::path(override_path);
-    return config_root() / "WhittyArcade" / "hi";
+    return config_root() / "MANX" / "hi";
 }
 
 fs::path own_score_path(const std::string& short_name) {
     return score_root() /
-        (whitty_platform::cabinet_scoped_name(short_name) + ".hi");
+        (manx_platform::cabinet_scoped_name(short_name) + ".hi");
 }
 
 std::vector<fs::path> score_candidates(const std::string& short_name) {
@@ -321,7 +321,7 @@ std::vector<fs::path> score_candidates(const std::string& short_name) {
     if (short_name == "shinobi4") names.push_back("shinobi");
     std::vector<fs::path> result;
     result.push_back(own_score_path(short_name));
-    if (const fs::path home = whitty_platform::home_root(); !home.empty()) {
+    if (const fs::path home = manx_platform::home_root(); !home.empty()) {
         for (const std::string& name : names) {
             result.push_back(home / ".mame" / "hi" / (name + ".hi"));
             result.push_back(home / ".local" / "share" / "mame" / "hi" /
@@ -562,7 +562,7 @@ void high_score_runtime::update(const read_callback& read,
 
         const fs::path own = own_score_path(m_short_name);
         // Create a local file for a new table, or copy a compatible MAME file
-        // into WhittyArcade's own store without modifying the MAME original.
+        // into MANX's own store without modifying the MAME original.
         if (!found || source != own) write_file(own, m_last_snapshot);
         return;
     }

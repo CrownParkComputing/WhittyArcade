@@ -11,7 +11,7 @@
 
 struct WindowInfo;
 
-namespace WhittyArcadeHost
+namespace MANXHost
 {
 	// Render-window registration (unused by the surfaceless session; kept for
 	// the windowed pcsx2_boot_rrv.cpp harness).
@@ -62,4 +62,4 @@ namespace WhittyArcadeHost
 	// "not drawing yet" from "drawing".
 	void NoteCapturedFrame(bool has_content);
 	void GetCaptureCounts(std::uint64_t& frames, std::uint64_t& with_content);
-} // namespace WhittyArcadeHost
+} // namespace MANXHost

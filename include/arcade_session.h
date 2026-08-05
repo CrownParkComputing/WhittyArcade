@@ -35,6 +35,17 @@ public:
     virtual void run_frame() = 0;
 
     virtual arcade_host_action process_events() = 0;
+
+    // True when the game opens and owns its own window, as a recompiled native
+    // title does - it is a separate process with its own renderer, and
+    // MANX only started it.
+    //
+    // The launcher's own window must get out of the way when that happens. Left
+    // up, there are two windows on screen: the game draws in one while the
+    // launcher holds the focus in the other, so the pad appears dead. The game
+    // is running perfectly and reports the controller it opened - it simply is
+    // not the window being typed at.
+    virtual bool owns_its_own_window() const noexcept { return false; }
     virtual void set_rom_choices(const std::vector<rom_choice>& choices) = 0;
     virtual bool take_rom_selection(std::string& path) = 0;
     virtual bool take_operator_settings_request() = 0;

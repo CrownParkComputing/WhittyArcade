@@ -252,6 +252,10 @@ int main() {
     bus.write_mcu_shared_byte(0x21, 0xa5);
     if (!expect(bus.read8(0x60004021) == 0xa5,
                 "C74 shared-RAM writes must be visible to the MC68020")) return 1;
+    bus.write_mcu_shared_byte(0x41, 0x81);
+    if (!expect(bus.wheel_motor_command() == 0x81,
+                "System 22 wheel force command must expose shared word 0x40"))
+        return 1;
 
     bus.write16(0x60005000, 0x1234);
     if (!expect(bus.read_c74_shared_byte(0x1000) == 0x34 &&

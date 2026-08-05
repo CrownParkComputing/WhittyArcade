@@ -69,7 +69,7 @@ input_binding controller_axis(SDL_GamepadAxis axis, int direction) {
 }
 
 fs::path config_root() {
-    return whitty_platform::config_root();
+    return manx_platform::config_root();
 }
 
 std::optional<int> parse_integer(std::string_view text) {
@@ -367,8 +367,8 @@ input_mapping_config default_input_mapping_config() {
 std::string input_mapping_path() {
     const fs::path root = config_root();
     const fs::path path = root.empty() ?
-        fs::path("WhittyArcade-input.ini") :
-        root / "WhittyArcade" / "input.ini";
+        fs::path("MANX-input.ini") :
+        root / "MANX" / "input.ini";
     return path.string();
 }
 
@@ -477,7 +477,7 @@ bool save_input_mappings(const input_mapping_config& config,
     temporary += ".tmp";
     std::ofstream output(temporary, std::ios::trunc);
     if (!output) return false;
-    output << "# WhittyArcade input mappings. Edit through the launcher.\n";
+    output << "# MANX input mappings. Edit through the launcher.\n";
     for (const input_action_descriptor& action : actions) {
         output << "keyboard." << action.id << '='
                << serialize_binding(

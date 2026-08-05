@@ -92,10 +92,10 @@ int main() {
     assert(!decode_high_score_table("phoenix", invalid, table, &error));
 
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-high-score-test-" +
+        ("manx-high-score-test-" +
          std::to_string(test_process_id()));
     fs::create_directories(root);
-    if (!test_set_environment("WHITTYARCADE_HISCORE_PATH", root)) return 1;
+    if (!test_set_environment("MANX_HISCORE_PATH", root)) return 1;
     if (!test_set_environment("HOME", root)) return 1;
 
     std::array<std::uint8_t, 0x10000> memory{};

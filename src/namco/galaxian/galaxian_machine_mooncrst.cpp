@@ -44,10 +44,20 @@ constexpr std::array<const char*, 4> kUniwarsCharRoms = {
     "egg10", "h01_2.bin", "egg9", "k01_2.bin"};
 constexpr char kUniwarsPaletteRom[] = "uniwars.clr";
 
+constexpr std::array<const char*, 5> kWarofbugProgramRoms = {
+    "warofbug.u", "warofbug.v", "warofbug.w", "warofbug.y", "warofbug.z"};
+constexpr std::array<const char*, 2> kWarofbugCharRoms = {
+    "warofbug.1k", "warofbug.1j"};
+constexpr char kWarofbugPaletteRom[] = "warofbug.clr";
+
 enum class galaxian_discrete_profile : uint8_t {
     galaxian,
     mooncrst,
     uniwars,
+    // War of the Bugs is unmodified Galaxian hardware; it differs from the
+    // galaxian profile only in its ROM filenames and factory DIPs, so every
+    // "not Moon Cresta" branch below already treats it correctly.
+    warofbug,
 };
 
 const char* profile_name(galaxian_discrete_profile profile) {
@@ -55,6 +65,7 @@ const char* profile_name(galaxian_discrete_profile profile) {
     case galaxian_discrete_profile::galaxian: return "Galaxian";
     case galaxian_discrete_profile::mooncrst: return "Moon Cresta";
     case galaxian_discrete_profile::uniwars: return "UniWar S";
+    case galaxian_discrete_profile::warofbug: return "War of the Bugs";
     }
     return "Galaxian-family game";
 }
@@ -64,6 +75,7 @@ const char* profile_short_name(galaxian_discrete_profile profile) {
     case galaxian_discrete_profile::galaxian: return "galaxian";
     case galaxian_discrete_profile::mooncrst: return "mooncrst";
     case galaxian_discrete_profile::uniwars: return "uniwars";
+    case galaxian_discrete_profile::warofbug: return "warofbug";
     }
     return "";
 }
@@ -164,6 +176,10 @@ public:
         } else if (m_profile == galaxian_discrete_profile::galaxian) {
             dip1 = 0x00;
             dip2 = 0x04;
+        } else if (m_profile == galaxian_discrete_profile::warofbug) {
+            // 1 coin/1 credit, 3 lives, bonus life at 500000.
+            dip1 = 0x00;
+            dip2 = 0x0a;
         }
     }
 
@@ -406,6 +422,13 @@ private:
             char_roms = kUniwarsCharRoms.data();
             char_rom_count = kUniwarsCharRoms.size();
             palette_rom = kUniwarsPaletteRom;
+            break;
+        case galaxian_discrete_profile::warofbug:
+            program_roms = kWarofbugProgramRoms.data();
+            program_rom_count = kWarofbugProgramRoms.size();
+            char_roms = kWarofbugCharRoms.data();
+            char_rom_count = kWarofbugCharRoms.size();
+            palette_rom = kWarofbugPaletteRom;
             break;
         }
         const char* title = profile_name(m_profile);
@@ -746,6 +769,11 @@ std::unique_ptr<galaxian_board_interface> make_mooncrst_board_interface() {
 std::unique_ptr<galaxian_board_interface> make_galaxian_board_interface() {
     return std::make_unique<galaxian_discrete_board_interface>(
         galaxian_discrete_profile::galaxian);
+}
+
+std::unique_ptr<galaxian_board_interface> make_warofbug_board_interface() {
+    return std::make_unique<galaxian_discrete_board_interface>(
+        galaxian_discrete_profile::warofbug);
 }
 
 std::unique_ptr<galaxian_board_interface> make_uniwars_board_interface() {

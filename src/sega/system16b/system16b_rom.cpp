@@ -115,8 +115,12 @@ bool read_game_entry(const std::string& archive_path,
     const fs::path selected(archive_path);
     std::error_code error;
     const fs::path directory = selected.parent_path();
-    const std::array<const char*, 3> companions{
-        "shinobi.zip", "shinobi4.zip", "shinobi6.zip"};
+    const std::array<const char*, 5> companions{
+        "shinobi.zip", "shinobi4.zip", "shinobi6.zip",
+        // Bay Route (set 1, US) is an unprotected child of the encrypted
+        // `bayroute` parent; split collections keep its chips in a separate
+        // bayroute1.zip, and merged ones hide them under bayroute1/.
+        "bayroute.zip", "bayroute1.zip"};
     for (fs::directory_iterator iterator(directory, error), end;
          !error && iterator != end; iterator.increment(error)) {
         std::string filename = iterator->path().filename().string();
@@ -202,6 +206,25 @@ system16b_rom_set system16b_rom_loader::identify_set(const std::string& path) {
     if (read_entry(path, "epr-12266.a4", tmp) &&
         read_entry(path, "317-0099.c2", tmp))
         return system16b_rom_set::tough_turf;
+    // Bay Route (set 1, US, unprotected): identified by its 68000 pair.
+    if (read_entry(path, "br.a1", tmp) &&
+        read_entry(path, "br.a4", tmp))
+        return system16b_rom_set::bay_route;
+    // E-SWAT (MAME `eswatd`): the pre-decrypted clone of the FD1094
+    // 317-0130 parent. Only the two program chips carry the `bootleg_`
+    // prefix, and they are what distinguishes this set -- the encrypted
+    // parent's epr-12658/59 must never match, because there is no FD1094
+    // decryptor here to make its code executable.
+    if (read_entry(path, "bootleg_epr-12658.a1", tmp) &&
+        read_entry(path, "bootleg_epr-12659.a2", tmp))
+        return system16b_rom_set::eswat;
+    // Wonder Boy III: Monster Lair (MAME `wb33d`), the pre-decrypted
+    // clone of the FD1094 317-0089 set. The similarly named `wb31d` is a
+    // System 16A board with entirely different chip names, so keying on
+    // this set's own two program chips cannot pick up the wrong board.
+    if (read_entry(path, "bootleg_epr-12136.a5", tmp) &&
+        read_entry(path, "bootleg_epr-12137.a7", tmp))
+        return system16b_rom_set::wonder_boy3;
     // A directory must contain either shinobi_main.bin (the staged
     // 256 KiB program image) OR the MAME file names. A ZIP must contain
     // at least one of shinobi_main.bin or mpr-11363.a14.
@@ -222,9 +245,23 @@ const char* system16b_rom_loader::set_short_name(system16b_rom_set set) {
     case system16b_rom_set::altered_beast: return "altbeast";
     case system16b_rom_set::dynamite_dux: return "ddux1";
     case system16b_rom_set::tough_turf: return "tturfu";
+    case system16b_rom_set::bay_route: return "bayroute1";
+    case system16b_rom_set::eswat: return "eswatd";
+    case system16b_rom_set::wonder_boy3: return "wb33d";
     case system16b_rom_set::unknown: return "";
     }
     return "";
+}
+
+bool system16b_rom_loader::set_has_sample_rom(system16b_rom_set set) {
+    switch (set) {
+    // Both ship a Z80 program and nothing for the uPD7759 to play.
+    case system16b_rom_set::dynamite_dux:
+    case system16b_rom_set::wonder_boy3:
+        return false;
+    default:
+        return true;
+    }
 }
 
 const char* system16b_rom_loader::set_display_name(system16b_rom_set set) {
@@ -244,6 +281,12 @@ const char* system16b_rom_loader::set_display_name(system16b_rom_set set) {
         return "Dynamite Dux (Sega System 16B, set 1, i8751)";
     case system16b_rom_set::tough_turf:
         return "Tough Turf (Sega System 16B, set 1 US, i8751)";
+    case system16b_rom_set::bay_route:
+        return "Bay Route (Sega System 16B, set 1 US, unprotected)";
+    case system16b_rom_set::eswat:
+        return "Cyber Police E-SWAT (Sega System 16B, decrypted set 4)";
+    case system16b_rom_set::wonder_boy3:
+        return "Wonder Boy III: Monster Lair (Sega System 16B, decrypted)";
     case system16b_rom_set::unknown:    return "Unknown Shinobi-style set";
     }
     return "Unknown Shinobi-style set";
@@ -336,6 +379,100 @@ system16b_rom_load_result load_alien_syndrome(const std::string& path) {
                      {"epr-10726.a10", 0x20000}}};
         for (const auto& [name, base] : samples) {
             if (read_game_entry(path, name, tmp) && tmp.size() == 0x8000)
+                std::memcpy(r.roms.sound_data.data() + base, tmp.data(),
+                            tmp.size());
+        }
+    }
+    return r;
+}
+
+// Bay Route (MAME `bayroute1`, set 1 US, ROM board 171-5358, unprotected).
+// The parent `bayroute` set encrypts its 68000 code for the FD1094
+// (317-0116 key) and is skipped; set 1 ships plain ROMs in the same
+// 171-5358 layout as Alien Syndrome: three word-interleaved 64 KiB
+// program pairs, three 64 KiB tile planes, four word-interleaved sprite
+// pairs, and the uPD7759 bank data in four 64 KiB chips.
+system16b_rom_load_result load_bay_route(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::bay_route;
+
+    struct pair_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<pair_spec, 3> program_pairs{{
+        {"br.a4", "br.a1", 0x00000},
+        {"br.a5", "br.a2", 0x20000},
+        {"br.a6", "br.a3", 0x40000},
+    }};
+    r.roms.program.fill(0xff);
+    for (const pair_spec& pair : program_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x10000 || odd.size() != 0x10000) {
+            r.error = std::string("missing program pair ") + pair.even +
+                      " + " + pair.odd;
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x10000; ++i) {
+            r.roms.program[pair.base + i * 2]     = even[i];
+            r.roms.program[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Tiles: three 64 KiB planes (same layout as Alien Syndrome).
+    const auto read_tile = [&](const char* name, auto& plane) {
+        std::vector<uint8_t> tmp;
+        if (!read_game_entry(path, name, tmp) || tmp.size() != 0x10000)
+            return false;
+        plane.fill(0);
+        std::memcpy(plane.data(), tmp.data(), tmp.size());
+        return true;
+    };
+    if (!read_tile("opr-12462.a14", r.roms.tile_plane0) ||
+        !read_tile("opr-12463.a15", r.roms.tile_plane1) ||
+        !read_tile("opr-12464.a16", r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (opr-12462/63/64)";
+        return r;
+    }
+
+    // Sprites: four word-interleaved pairs of 64 KiB ROMs, even file on
+    // even bytes (missing sprites render silently, like Shinobi).
+    struct sprite_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<sprite_spec, 4> sprite_pairs{{
+        {"br_obj0e.b5", "br_obj0o.b1", 0x00000},
+        {"br_obj1e.b6", "br_obj1o.b2", 0x20000},
+        {"br_obj2e.b7", "br_obj2o.b3", 0x40000},
+        {"br.b8",       "br_obj3o.b4", 0x60000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x10000 || odd.size() != 0x10000)
+            continue;  // like Shinobi: missing sprites render silently
+        for (std::size_t i = 0; i < 0x10000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Sound: the Z80 program is the first half of sound.a7 (the 64 KiB
+    // chip ships with both halves identical); sound.a8..a11 are the four
+    // uPD7759 sample banks. All optional; the boot proceeds without them.
+    {
+        std::vector<uint8_t> tmp;
+        if (read_game_entry(path, "sound.a7", tmp) && tmp.size() >= 0x8000)
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(),
+                        r.roms.sound_prog.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+        static constexpr std::array<std::pair<const char*, std::size_t>, 4>
+            samples{{{"sound.a8",  0x00000},
+                     {"sound.a9",  0x10000},
+                     {"sound.a10", 0x20000},
+                     {"sound.a11", 0x30000}}};
+        for (const auto& [name, base] : samples) {
+            if (read_game_entry(path, name, tmp) && tmp.size() == 0x10000)
                 std::memcpy(r.roms.sound_data.data() + base, tmp.data(),
                             tmp.size());
         }
@@ -909,6 +1046,178 @@ system16b_rom_load_result load_tough_turf(const std::string& path) {
     }
     return r;
 }
+
+// E-SWAT (MAME `eswatd`, ROM board 171-5797). The parent `eswat` encrypts
+// its 68000 code for the FD1094 (317-0130 key); the `d` clone ships the
+// same program pre-decrypted as bootleg_epr-12658/59 and takes every
+// other chip from the parent, so a merged archive supplies both.
+//
+// The 5797 is a bigger board than anything here so far: one 512 KiB
+// program window instead of two 256 KiB ones, three full 256 KiB tile
+// chips (one per plane, all eight bank pages populated), and six 256 KiB
+// sprite chips that MAME splits with ROM_CONTINUE -- each chip's first
+// half at its bank and its second half 0x100000 further on. Note the
+// even/odd pairing is the reverse of Golden Axe's: b4/b5/b6 drive the
+// even bytes and b1/b2/b3 the odd ones.
+system16b_rom_load_result load_eswat(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::eswat;
+
+    // Program: one 512 KiB window, word-interleaved from the two
+    // pre-decrypted 256 KiB chips.
+    r.roms.program.fill(0xff);
+    {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, "bootleg_epr-12659.a2", even) ||
+            !read_game_entry(path, "bootleg_epr-12658.a1", odd) ||
+            even.size() != 0x40000 || odd.size() != 0x40000) {
+            r.error = "missing decrypted program pair bootleg_epr-12659.a2 "
+                      "+ bootleg_epr-12658.a1";
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x40000; ++i) {
+            r.roms.program[i * 2]     = even[i];
+            r.roms.program[i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Tiles: one 256 KiB chip per plane, filling the plane buffer exactly
+    // and giving the 5797 tile bank register all eight 4096-tile pages.
+    const auto read_plane = [&](const char* name, auto& plane) {
+        std::vector<uint8_t> tmp;
+        if (!read_game_entry(path, name, tmp) || tmp.size() != 0x40000)
+            return false;
+        std::memcpy(plane.data(), tmp.data(), tmp.size());
+        return true;
+    };
+    if (!read_plane("mpr-12624.b11", r.roms.tile_plane0) ||
+        !read_plane("mpr-12625.b12", r.roms.tile_plane1) ||
+        !read_plane("mpr-12626.b13", r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (mpr-12624/25/26)";
+        return r;
+    }
+
+    // Sprites: three word-interleaved pairs of 256 KiB chips, every chip
+    // split across two banks 0x100000 apart.
+    struct sprite_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<sprite_spec, 3> sprite_pairs{{
+        {"mpr-12621.b4", "mpr-12618.b1", 0x000000},
+        {"mpr-12622.b5", "mpr-12619.b2", 0x040000},
+        {"mpr-12623.b6", "mpr-12620.b3", 0x080000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x40000 || odd.size() != 0x40000)
+            continue;  // like Shinobi: missing sprites render silently
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+            r.roms.sprite_gfx[pair.base + 0x100000 + i * 2] =
+                even[0x20000 + i];
+            r.roms.sprite_gfx[pair.base + 0x100000 + i * 2 + 1] =
+                odd[0x20000 + i];
+        }
+    }
+
+    // Z80 program + a single 256 KiB uPD7759 sample chip, which fills the
+    // bank window exactly (window base = MAME region + 0x10000).
+    {
+        std::vector<uint8_t> tmp;
+        if (read_game_entry(path, "epr-12617.a13", tmp) &&
+            tmp.size() == r.roms.sound_prog.size())
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(), tmp.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+        if (read_game_entry(path, "mpr-12616.a11", tmp) &&
+            tmp.size() == r.roms.sound_data.size())
+            std::memcpy(r.roms.sound_data.data(), tmp.data(), tmp.size());
+    }
+    return r;
+}
+
+// Wonder Boy III: Monster Lair (MAME `wb33d`, ROM board 171-5704). The
+// `wb3` parent needs an i8751 whose program was never dumped; the FD1094
+// set 3 has a pre-decrypted clone, so that is the one that can run.
+//
+// Small for a 5704: a single 256 KiB program window, 64 KiB tile chips,
+// eight half-size sprite chips that populate only every other 128 KiB
+// bank, and a Z80 program with no uPD7759 sample ROM at all.
+system16b_rom_load_result load_wonder_boy3(const std::string& path) {
+    system16b_rom_load_result r{};
+    r.set = system16b_rom_set::wonder_boy3;
+
+    r.roms.program.fill(0xff);
+    {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, "bootleg_epr-12137.a7", even) ||
+            !read_game_entry(path, "bootleg_epr-12136.a5", odd) ||
+            even.size() != 0x20000 || odd.size() != 0x20000) {
+            r.error = "missing decrypted program pair bootleg_epr-12137.a7 "
+                      "+ bootleg_epr-12136.a5";
+            return r;
+        }
+        for (std::size_t i = 0; i < 0x20000; ++i) {
+            r.roms.program[i * 2]     = even[i];
+            r.roms.program[i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Tiles: one 64 KiB chip per plane, so only the first two 4096-tile
+    // bank pages exist; the rest of the buffer stays clear.
+    const auto read_plane = [&](const char* name, auto& plane) {
+        std::vector<uint8_t> tmp;
+        if (!read_game_entry(path, name, tmp) || tmp.size() != 0x10000)
+            return false;
+        plane.fill(0);
+        std::memcpy(plane.data(), tmp.data(), tmp.size());
+        return true;
+    };
+    if (!read_plane("epr-12124.a14", r.roms.tile_plane0) ||
+        !read_plane("epr-12125.a15", r.roms.tile_plane1) ||
+        !read_plane("epr-12126.a16", r.roms.tile_plane2)) {
+        r.error = "Missing one of the tile ROMs (epr-12124/25/26)";
+        return r;
+    }
+
+    // Sprites: four word-interleaved pairs of 64 KiB chips. Each pair
+    // fills only the first half of its 128 KiB bank, so banks 1, 3, 5 and
+    // 7 have no ROM behind them at all -- the board is wired for larger
+    // chips than this game shipped.
+    struct sprite_spec { const char* even; const char* odd; std::size_t base; };
+    static constexpr std::array<sprite_spec, 4> sprite_pairs{{
+        {"epr-12094.b5", "epr-12090.b1", 0x000000},
+        {"epr-12095.b6", "epr-12091.b2", 0x040000},
+        {"epr-12096.b7", "epr-12092.b3", 0x080000},
+        {"epr-12097.b8", "epr-12093.b4", 0x0c0000},
+    }};
+    for (const sprite_spec& pair : sprite_pairs) {
+        std::vector<uint8_t> even, odd;
+        if (!read_game_entry(path, pair.even, even) ||
+            !read_game_entry(path, pair.odd, odd) ||
+            even.size() != 0x10000 || odd.size() != 0x10000)
+            continue;  // like Shinobi: missing sprites render silently
+        for (std::size_t i = 0; i < 0x10000; ++i) {
+            r.roms.sprite_gfx[pair.base + i * 2]     = even[i];
+            r.roms.sprite_gfx[pair.base + i * 2 + 1] = odd[i];
+        }
+    }
+
+    // Sound: the Z80 program only. There is no sample chip, so the uPD7759
+    // bank window stays empty.
+    {
+        std::vector<uint8_t> tmp;
+        if (read_game_entry(path, "epr-12127.a10", tmp) &&
+            tmp.size() == r.roms.sound_prog.size())
+            std::memcpy(r.roms.sound_prog.data(), tmp.data(), tmp.size());
+        else
+            r.roms.sound_prog.fill(0xff);
+        r.roms.sound_data.fill(0);
+    }
+    return r;
+}
 }  // namespace
 
 system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
@@ -932,6 +1241,12 @@ system16b_rom_load_result system16b_rom_loader::load(const std::string& path) {
         return load_dynamite_dux(path);
     if (r.set == system16b_rom_set::tough_turf)
         return load_tough_turf(path);
+    if (r.set == system16b_rom_set::bay_route)
+        return load_bay_route(path);
+    if (r.set == system16b_rom_set::eswat)
+        return load_eswat(path);
+    if (r.set == system16b_rom_set::wonder_boy3)
+        return load_wonder_boy3(path);
 
     // 1) Program image (256 KiB - Shinobi's own size, half the shared
     //    buffer). Prefer the consolidated flat image; otherwise assemble

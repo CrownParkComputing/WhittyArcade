@@ -21,14 +21,14 @@
  * - addition of CMOS features
  * - internal memory maps
  *
- * Standalone adaptation for WhittyArcade: the MAME device scaffolding
+ * Standalone adaptation for MANX: the MAME device scaffolding
  * (address spaces, devcb, save states, debugger) is replaced with plain
  * member storage and std::function callbacks. The instruction, timer,
  * interrupt and serial implementation is the MAME code, unchanged.
  *****************************************************************************/
 
-#ifndef WHITTY_MCS51_MCS51_H
-#define WHITTY_MCS51_MCS51_H
+#ifndef MANX_MCS51_MCS51_H
+#define MANX_MCS51_MCS51_H
 
 #pragma once
 
@@ -45,8 +45,8 @@ using u16 = uint16_t;
 using u32 = uint32_t;
 using u64 = uint64_t;
 
-#ifndef WHITTY_MCS51_LINE_STATES
-#define WHITTY_MCS51_LINE_STATES
+#ifndef MANX_MCS51_LINE_STATES
+#define MANX_MCS51_LINE_STATES
 enum { CLEAR_LINE = 0, ASSERT_LINE = 1 };
 #endif
 
@@ -411,4 +411,4 @@ public:
 	i8751_cpu() : mcs51_cpu_device(12, 7) {}
 };
 
-#endif // WHITTY_MCS51_MCS51_H
+#endif // MANX_MCS51_MCS51_H

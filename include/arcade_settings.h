@@ -35,6 +35,13 @@ struct emulator_settings {
     // to work before the first-run wizard is completed.
     std::string rom_directory;
     std::string chd_directory;
+    // Optional private media source. This is deliberately a filesystem path
+    // rather than a download URL: a mounted NAS share supplies MAME media for
+    // the explicit installed-games import into MANX's per-user local mirror.
+    std::string media_directory;
+    // Artwork category shown in the game grid. It is strict: a missing file
+    // draws the game's name rather than silently substituting old artwork.
+    std::string media_artwork_category{"box2d"};
     bool library_setup_complete{false};
     // Runtime-only physical display assignment used by paired cabinet
     // processes. -1 follows the desktop/window-manager default. This is not

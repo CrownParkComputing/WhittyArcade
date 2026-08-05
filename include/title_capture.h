@@ -25,7 +25,7 @@ inline std::string title_capture_directory() {
         const char* home = std::getenv("HOME");
         root = std::string(home && *home ? home : ".") + "/.local/share";
     }
-    return root + "/WhittyArcade/titles";
+    return root + "/MANX/titles";
 }
 
 inline std::string title_capture_path(const std::string& short_name) {

@@ -11,8 +11,8 @@ would be rebuilding something the tree already does.
 
 Frame streaming is **not** the fallback for emulated boards. This project already
 moved to lockstep for every board, and the streaming path is dead code:
-`src/main.cpp` sets `WHITTY_NETPLAY=1` and explicitly unsets `WHITTY_VIDEO_ROLE`
-and `WHITTY_VIDEO_PORT` for every non-native-link networked launch, and nothing
+`src/main.cpp` sets `MANX_NETPLAY=1` and explicitly unsets `MANX_VIDEO_ROLE`
+and `MANX_VIDEO_PORT` for every non-native-link networked launch, and nothing
 in the tree ever sets them — so `network_video_link` always sees role 0 and never
 starts its thread, and both branches in `polygon_renderer_gpu::present_texture`
 that use it are unreachable.
@@ -46,10 +46,9 @@ including the relay cost below.
   operator data is hashed before frame 0, so two machines with different NVRAM are
   caught before the first frame rather than ninety seconds in.
 - **HTTP, JSON and an offline doctrine.** libcurl is already linked and
-  `third_party/json` is vendored. `include/igdb_artwork.h` states the contract the
-  account layer should copy verbatim: every entry point returns immediately, all
-  HTTP and disk work happens on one worker thread, results are cached on disk, and
-  a machine with no network degrades to exactly one behaviour.
+  `third_party/json` is vendored. Every network entry point must return
+  immediately, keep HTTP and disk work off the render thread, cache durable
+  results, and degrade predictably when the cabinet has no network.
 - **Presence transport for free.** The system libcurl speaks `wss` and ships
   `curl/websockets.h`, so a WebSocket presence channel costs no new dependency.
 
@@ -58,7 +57,7 @@ including the relay cost below.
 **Every socket in the tree is broadcast or loopback** — the lobby, the input
 link, the System 22 C139 transport and the Model 2 bus. There is no unicast peer
 plumbing anywhere. This is the largest gap and the highest-leverage refactor:
-extract a `whitty_link` datagram interface with three backends — `broadcast`
+extract a `manx_link` datagram interface with three backends — `broadcast`
 (today's behaviour, unchanged, so LAN keeps working with the cable unplugged),
 `direct` (unicast to a known address), and `ice`.
 
@@ -110,12 +109,10 @@ packets over a protocol designed for a metre of cable.
 
 **RFC 8628 device authorization grant.** The client posts its public `client_id`,
 shows an 8-character code fullscreen, and polls while the player approves it on a
-phone. No `client_secret` is ever shipped — note the existing anti-pattern to
-avoid: `WHITTY_IGDB_CLIENT_SECRET` is compiled into the binary and anyone with
-`strings` has it.
+phone. No `client_secret` is ever shipped in the binary.
 
 Access token 15 minutes, memory only. Refresh token rotating and
-server-revocable, written `0600` under `whitty_platform::config_root()`. No OS
+server-revocable, written `0600` under `manx_platform::config_root()`. No OS
 keychain: that is three platform integrations for a threat model where the
 attacker already reads `$HOME`, and at that point they have the ROMs and saves
 anyway.
@@ -185,7 +182,7 @@ an unverifiable global ladder is worse than none.
 
 Each ships independently.
 
-0. **Make LAN lockstep internet-shaped.** The `whitty_link` interface and its
+0. **Make LAN lockstep internet-shaped.** The `manx_link` interface and its
    `direct` backend, 8-frame redundancy, negotiated delay, hashed-short-name game
    mask, and wiring plugin `state_checksum()` into the desync channel. No server,
    no accounts, no new dependency; testable with two local processes under

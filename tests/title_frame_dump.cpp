@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
     const int frames = std::atoi(argv[3]);
     const char* out = argv[4];
 
-    if (set == "galaga" || set == "pacmania") {
+    if (set == "galaga" || set == "pacmania" || set == "galaga88") {
         const namco::load_result loaded = namco::rom_loader::load(rom);
         if (!loaded) {
             std::fprintf(stderr, "%s\n", loaded.error.c_str());
@@ -72,7 +72,11 @@ int main(int argc, char** argv) {
                              namco::galaga_machine::height) ? 0 : 1;
         }
         namco::system1_machine machine;
-        if (!machine.initialize(loaded.pacmania)) return 1;
+        // Both Namco System 1 games share this machine; only the ROM set
+        // handed to initialize() differs.
+        if (!(set == "galaga88" ? machine.initialize(loaded.galaga88)
+                                : machine.initialize(loaded.pacmania)))
+            return 1;
         input_state idle{};
         machine.set_input(idle, 0xff);
         for (int frame = 0; frame < frames; ++frame) machine.run_frame();
@@ -85,6 +89,7 @@ int main(int argc, char** argv) {
     if (set == "galaxian") board = make_galaxian_board_interface();
     else if (set == "mooncrst") board = make_mooncrst_board_interface();
     else if (set == "uniwars") board = make_uniwars_board_interface();
+    else if (set == "warofbug") board = make_warofbug_board_interface();
     else if (set == "phoenix") board = make_phoenix_board_interface();
     if (!board) {
         std::fprintf(stderr, "unknown set %s\n", set.c_str());

@@ -1,5 +1,8 @@
 #include "xbox360_native_runtime.h"
 
+#include "arcade_audio_output.h"
+
+
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -58,20 +61,61 @@ fs::path build_tree_binary(const fs::path& runtime_root,
 // The defaults tools/play.sh supplies: a window, and sixty frames a second
 // because the console presented at sixty and the present rate IS the game speed.
 //
-// Deliberately NOT here: WHITTY_XMA_BYPASS. It plays the decoder's output on a
+// Deliberately NOT here: MANX_XMA_BYPASS. It plays the decoder's output on a
 // stream of its own beside whatever the title mixes, which was how the music was
 // first made audible before the hardware handshake worked. The title now reads
 // the decoded audio out of the output ring and mixes it itself, so setting it
 // plays every sound TWICE, unsynchronised. It is a diagnostic, not a default.
 constexpr std::pair<const char*, const char*> kRuntimeDefaults[] = {
-    {"WHITTY_WINDOW", "1"},
-    {"WHITTY_FPS", "60"},
+    {"MANX_WINDOW", "1"},
+    {"MANX_FPS", "60"},
+    // No cabinet surround from the runtime. It draws its own frame, plaque and
+    // controller artwork around the picture, which is the right thing when the
+    // title is launched on its own - but MANX is already a cabinet and
+    // draws its own bezel, so the runtime's is a second cabinet inside the
+    // first.
+    {"MANX_SURROUND", "0"},
 };
+
+// The output the title should play through.
+//
+// Left to itself the runtime takes the system default, and on a machine whose
+// default is an HDMI output nothing is plugged into, the game runs perfectly
+// and in silence - with nothing reported, because the samples were accepted.
+// The shipped per-title launchers work around this by picking the first analog
+// stereo sink, and this does the same so a game started from the arcade behaves
+// like one started from its own launcher.
+//
+// Returns empty when there is no analog sink to prefer, or no way to ask; the
+// runtime's own default is then left alone, which is the best answer available.
+std::string preferred_audio_device() {
+#if defined(_WIN32)
+    return {};
+#else
+    std::FILE* pipe = ::popen(
+        "pactl list sinks 2>/dev/null | sed -n 's/^\\s*Description: //p'", "r");
+    if (pipe == nullptr) return {};
+    std::string chosen;
+    char line[512];
+    while (std::fgets(line, sizeof(line), pipe) != nullptr) {
+        std::string description(line);
+        while (!description.empty() &&
+               (description.back() == '\n' || description.back() == '\r'))
+            description.pop_back();
+        if (description.find("Analog Stereo") != std::string::npos) {
+            chosen = description;
+            break;
+        }
+    }
+    ::pclose(pipe);
+    return chosen;
+#endif
+}
 
 } // namespace
 
 std::vector<std::string> xbox360_native_runtime_candidates(
-        const std::string& short_name) {
+        const std::string& short_name, const std::string& preferred_binary) {
     std::vector<std::string> candidates;
     if (short_name.empty()) return candidates;
     const auto add = [&candidates](const fs::path& path) {
@@ -79,42 +123,49 @@ std::vector<std::string> xbox360_native_runtime_candidates(
             candidates.push_back(path.lexically_normal().string());
     };
 
-    // An explicit binary always wins, so a developer can point WhittyArcade at
+    // An explicit binary always wins, so a developer can point MANX at
     // a build they are working on without moving anything.
     const std::string explicit_binary =
-        environment_value("WHITTY_XENON_RUNTIME");
+        environment_value("MANX_XENON_RUNTIME");
     if (!explicit_binary.empty()) add(fs::path(explicit_binary));
 
-    const std::string runtime_root = environment_value("WHITTY_XENON_ROOT");
+    // Then whatever the caller already knows about - for a converted title,
+    // the binary the workbench recorded. Ahead of any build tree, because the
+    // recorded one is what was tested and shipped while a build tree may hold a
+    // half-finished rebuild or nothing at all.
+    if (!preferred_binary.empty()) add(fs::path(preferred_binary));
+
+    const std::string runtime_root = environment_value("MANX_XENON_ROOT");
     if (!runtime_root.empty())
         add(build_tree_binary(fs::path(runtime_root), short_name));
 
-    // Installed beside WhittyArcade itself.
+    // Installed beside MANX itself.
     const fs::path here = executable_directory();
     if (!here.empty()) {
         add(here / (short_name + kRuntimeSuffix));
-        add(here / "whitty_xenon" / (short_name + kRuntimeSuffix));
+        add(here / "manx_xenon" / (short_name + kRuntimeSuffix));
     }
 
     // The runtime's own checkout, as it sits during development.
     const std::string home = environment_value("HOME");
     if (!home.empty())
         add(build_tree_binary(fs::path(home) / "development" /
-                                  "xenon-native" / "projects" / "whitty_xenon",
+                                  "xenon-native" / "projects" / "manx_xenon",
                               short_name));
     return candidates;
 }
 
 xbox360_native_launch plan_xbox360_native_launch(
         const std::string& short_name,
-        const xbox360_native_content& content) {
+        const xbox360_native_content& content,
+        const std::string& preferred_binary) {
     xbox360_native_launch launch;
     if (short_name.empty() || !content) {
         launch.error = "No Xbox 360 title was given to launch.";
         return launch;
     }
     const std::vector<std::string> candidates =
-        xbox360_native_runtime_candidates(short_name);
+        xbox360_native_runtime_candidates(short_name, preferred_binary);
     for (const std::string& candidate : candidates) {
         std::error_code error;
         const fs::path path(candidate);
@@ -131,8 +182,8 @@ xbox360_native_launch plan_xbox360_native_launch(
         for (const std::string& candidate : candidates)
             launch.error += "\n  " + candidate;
         launch.error += "\nBuild it with TITLE=" + short_name +
-                        " tools/build_recompiled_cpu.sh in the whitty_xenon "
-                        "checkout, or set WHITTY_XENON_RUNTIME to the binary.";
+                        " tools/build_recompiled_cpu.sh in the manx_xenon "
+                        "checkout, or set MANX_XENON_RUNTIME to the binary.";
         return launch;
     }
 
@@ -147,6 +198,30 @@ xbox360_native_launch plan_xbox360_native_launch(
     for (const auto& [name, value] : kRuntimeDefaults) {
         if (std::getenv(name) != nullptr) continue;
         launch.environment.emplace_back(name, value);
+    }
+    // Loudness. A native title runs in its own process and so never passes
+    // through the normaliser every emulated board here goes through - it is
+    // simply as loud as the console mix was authored, and titles differ from
+    // each other by more than 10 dB. Next to a board that has been matched to a
+    // target, that reads as the game being broken.
+    //
+    // The runtime runs the same normaliser, so what is handed over is
+    // loudness_normalizer's OWN target, converted from its int16 units to the
+    // -1..1 the runtime mixes in. Passing a fixed gain instead would be a guess
+    // that happened to suit one title; passing the target means a quiet game
+    // and a loud one both arrive at the level everything else here plays at.
+    if (std::getenv("MANX_AUDIO_TARGET_RMS") == nullptr) {
+        const double target =
+            arcade_audio_output::loudness_normalizer::target_rms / 32768.0;
+        char text[32];
+        std::snprintf(text, sizeof(text), "%.6f", target);
+        launch.environment.emplace_back("MANX_AUDIO_TARGET_RMS", text);
+    }
+
+    if (std::getenv("MANX_AUDIO_DEVICE") == nullptr) {
+        const std::string device = preferred_audio_device();
+        if (!device.empty())
+            launch.environment.emplace_back("MANX_AUDIO_DEVICE", device);
     }
     return launch;
 }
@@ -188,7 +263,7 @@ bool xbox360_native_process::start(const xbox360_native_launch& launch,
     }
     if (child == 0) {
         // In the child: the environment is set here rather than in the parent
-        // so a launch cannot change WhittyArcade's own settings.
+        // so a launch cannot change MANX's own settings.
         for (const auto& [name, value] : launch.environment)
             ::setenv(name.c_str(), value.c_str(), 1);
         ::execv(launch.binary.c_str(), native_arguments.data());

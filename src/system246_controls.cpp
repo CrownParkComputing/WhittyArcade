@@ -19,7 +19,7 @@ uint8_t scale_axis(uint16_t value, uint16_t minimum, uint16_t maximum,
 system246_drive_controls translate_system246_controls(
         const input_state& input) noexcept {
     system246_drive_controls result;
-    // Whitty's cabinet ADC range deliberately leaves safety margins around
+    // MANX's cabinet ADC range deliberately leaves safety margins around
     // its 12-bit endpoints. Rescale that useful range to Play!'s full byte.
     result.wheel = scale_axis(input.steering, 0x280, 0xd80, 0xff);
     const uint8_t gas = scale_axis(input.gas, 0, 0x610, 0x7f);

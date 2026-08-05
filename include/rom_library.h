@@ -13,7 +13,7 @@ struct rom_audit_result {
     std::string message;
 };
 
-// Folders WhittyArcade reads from directly. Drop MAME set ZIPs into the ROM
+// Folders MANX reads from directly. Drop MAME set ZIPs into the ROM
 // folder and disc images into the CHD folder; nothing is copied or repacked.
 std::string rom_library_path();
 std::string chd_library_path();

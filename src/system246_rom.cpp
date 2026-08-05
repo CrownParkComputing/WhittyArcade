@@ -415,10 +415,10 @@ std::string system246_rom_loader::find_disc_path(
         if (!found.empty()) return found.lexically_normal().string();
     }
 
-    // WhittyArcade reads disc images from its configured CHD folder. Keep the
+    // MANX reads disc images from its configured CHD folder. Keep the
     // historical per-user location as the default for upgraded/CLI installs.
     const fs::path chd_root = configured_chd_directory.empty() ?
-        whitty_platform::data_root() / "WhittyArcade" / "chd" :
+        manx_platform::data_root() / "MANX" / "chd" :
         fs::path(configured_chd_directory);
     const fs::path chd_candidate = chd_root / disc_name;
     if (fs::is_regular_file(chd_candidate, error))

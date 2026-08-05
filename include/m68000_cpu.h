@@ -35,6 +35,11 @@ public:
     // Level-triggered interrupt pins, 0 (no interrupt) .. 7 (NMI).
     // System 16 boards use autovectored interrupts, which is the default.
     void set_irq(unsigned level);
+    // MAME HOLD_LINE semantics: the request stays pending -- even while
+    // the CPU has interrupts masked -- and drops by itself once the CPU
+    // services it. Dropping a masked pulse instead loses interrupts, and
+    // games that count vblanks in an IRQ handler drift out of phase.
+    void set_irq_hold(unsigned level);
     unsigned irq_level() const;
 
     uint32_t program_counter() const;

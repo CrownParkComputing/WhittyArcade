@@ -5,22 +5,22 @@
 #   scripts/netplay_test.sh [rom]
 # Defaults to Galaxian.
 
-ROM="${1:-$HOME/.local/share/WhittyArcade/roms/galaxian/galaxian.zip}"
-LOGS="${TMPDIR:-/tmp}/whitty-netplay"
+ROM="${1:-$HOME/.local/share/MANX/roms/galaxian/galaxian.zip}"
+LOGS="${TMPDIR:-/tmp}/manx-netplay"
 mkdir -p "$LOGS"
 cd "$(dirname "$0")/.." || exit 1
 [ -f "$ROM" ] || { echo "No ROM at $ROM"; exit 1; }
 
-pkill -f "build/WhittyArcade --network-cabinet" 2>/dev/null
+pkill -f "build/MANX --network-cabinet" 2>/dev/null
 sleep 1
 # Floating, so the compositor does not tile or stack the two cabinets.
 hyprctl keyword windowrule "float, class:^([Ww]hitty[Aa]rcade)$" >/dev/null 2>&1
 
-./build/WhittyArcade --network-cabinet --cabinet-node 1 --pair-port-base 35112 \
+./build/MANX --network-cabinet --cabinet-node 1 --pair-port-base 35112 \
     "$ROM" > "$LOGS/player1.log" 2>&1 &
 P1=$!
 sleep 3
-./build/WhittyArcade --network-cabinet --cabinet-node 2 --pair-port-base 35112 \
+./build/MANX --network-cabinet --cabinet-node 2 --pair-port-base 35112 \
     "$ROM" > "$LOGS/player2.log" 2>&1 &
 P2=$!
 sleep 6
@@ -76,4 +76,4 @@ echo "Logs: $LOGS/player1.log  $LOGS/player2.log"
 echo "Watch for sync trouble with:"
 echo "  grep -i desync $LOGS/player*.log"
 echo
-echo "Stop both:  pkill -f 'build/WhittyArcade --network-cabinet'"
+echo "Stop both:  pkill -f 'build/MANX --network-cabinet'"

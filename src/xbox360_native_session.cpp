@@ -1,6 +1,6 @@
 // The Xbox 360 board's session for a natively recompiled title.
 //
-// Unlike every emulated board in WhittyArcade, this one has no machine to step
+// Unlike every emulated board in MANX, this one has no machine to step
 // and no frames to present. A native port is a finished executable: it opens its
 // own Vulkan window, reads the pad itself and plays its own audio. So this
 // session derives straight from emulator_session rather than from
@@ -12,6 +12,8 @@
 // application alive while it plays, and return to the menu the moment it exits.
 #include "arcade_session_internal.h"
 #include "xbox360_native_runtime.h"
+#include "arcade_catalog.h"
+#include "native_title_library.h"
 #include "xbox360_rom.h"
 
 #include <cstdio>
@@ -29,6 +31,37 @@ public:
 
     bool initialize(const std::string& rom_path, const std::string&,
                     const emulator_settings&) override {
+        // A converted title answers all of this itself - which binary, which
+        // owned game, and how the runtime wants to be handed it - so it is
+        // asked first. The ROM loader below only recognises the handful of
+        // titles compiled into it, and would refuse Geometry Wars outright
+        // despite a perfectly good conversion being installed.
+        if (const native_title* converted = find_native_title_for_game(rom_path)) {
+            const xbox360_native_content content =
+                converted->packaged()
+                    ? xbox360_native_content::package(converted->package_path)
+                    : xbox360_native_content::extracted(converted->xex_path,
+                                                        converted->game_root);
+            const xbox360_native_launch launch =
+                plan_xbox360_native_launch(converted->short_name, content,
+                                           converted->binary_path);
+            if (!launch) {
+                std::fprintf(stderr, "%s\n", launch.error.c_str());
+                return false;
+            }
+            std::string error;
+            if (!m_process.start(launch, error)) {
+                std::fprintf(stderr, "%s\n", error.c_str());
+                return false;
+            }
+            std::printf("%s started as a native port: %s\n",
+                        converted->display_name.c_str(), launch.binary.c_str());
+            std::printf("The game owns its own window; closing it returns to "
+                        "the MANX menu.\n");
+            m_started = true;
+            return true;
+        }
+
         const xbox360_rom_info game = xbox360_rom_loader::inspect(rom_path);
         if (!game) {
             std::fprintf(stderr, "%s\n", game.error.c_str());
@@ -56,7 +89,7 @@ public:
                     xbox360_rom_loader::set_display_name(game.set),
                     launch.binary.c_str());
         std::printf("The game owns its own window; closing it returns to the "
-                    "WhittyArcade menu.\n");
+                    "MANX menu.\n");
         m_started = true;
         return true;
     }
@@ -64,9 +97,11 @@ public:
     // The title advances itself in its own process, at its own rate.
     void run_frame() override {}
 
+    bool owns_its_own_window() const noexcept override { return true; }
+
     arcade_host_action process_events() override {
         if (!m_started) return arcade_host_action::return_to_menu;
-        // Quitting the game is not quitting WhittyArcade: the launcher comes
+        // Quitting the game is not quitting MANX: the launcher comes
         // back, exactly as it does when an emulated cabinet is left.
         if (!m_process.running()) {
             m_started = false;

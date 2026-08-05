@@ -54,7 +54,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       # Moira's generated tables are memory-heavy under parallel GCC builds.
-      - name: Build WhittyArcade
+      - name: Build MANX
         run: cmake --build build --parallel 2
 
       - name: Run tests
@@ -62,17 +62,17 @@ jobs:
 
       - name: Stage Linux executable
         run: |
-          package=WhittyArcade-cachyos-x86_64
+          package=MANX-cachyos-x86_64
           cmake -E make_directory "$package"
-          cmake -E copy build/WhittyArcade "$package/WhittyArcade"
+          cmake -E copy build/MANX "$package/MANX"
           cmake -E copy RELEASE_README.md "$package/README.md"
           cmake -E copy LICENSE "$package/LICENSE.txt"
           cmake -E copy THIRD_PARTY_NOTICES.md \
             "$package/THIRD_PARTY_NOTICES.md"
-          strip --strip-unneeded "$package/WhittyArcade"
-          chmod +x "$package/WhittyArcade"
-          "$package/WhittyArcade" --list-roms > /dev/null
-          (cd "$package" && sha256sum WhittyArcade > WhittyArcade.sha256)
+          strip --strip-unneeded "$package/MANX"
+          chmod +x "$package/MANX"
+          "$package/MANX" --list-roms > /dev/null
+          (cd "$package" && sha256sum MANX > MANX.sha256)
           # Tarred here rather than in the release job: an uploaded artifact
           # is a zip, which loses the executable bit, so what ships has to be
           # the archive this job built and not a repack of its contents.
@@ -82,9 +82,9 @@ jobs:
       - name: Upload CachyOS x86_64 build
         uses: actions/upload-artifact@v7
         with:
-          name: WhittyArcade-cachyos-x86_64
+          name: MANX-cachyos-x86_64
           path: |
-            WhittyArcade-cachyos-x86_64.tar.gz
-            WhittyArcade-cachyos-x86_64.tar.gz.sha256
+            MANX-cachyos-x86_64.tar.gz
+            MANX-cachyos-x86_64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30

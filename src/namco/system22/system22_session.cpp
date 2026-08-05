@@ -83,6 +83,11 @@ private:
     std::size_t m_last_sprite_count{0};
     std::string m_nvram_short_name;
     ridge_racer_rom_set m_game_set{ridge_racer_rom_set::unknown};
+    bool m_feedback_output_previous{false};
+    bool m_feedback_trigger_previous{false};
+    int m_feedback_command_previous{0};
+
+    void update_pad_feedback();
 
 public:
     system22_emulator(std::shared_ptr<arcade_video_worker> video,
@@ -173,6 +178,15 @@ bool system22_emulator::initialize(const std::string& rom_path,
     }
     m_audio->set_mix_levels(settings.master_volume, settings.music_volume,
                             settings.effects_volume);
+    m_audio->set_driving_feedback(
+        game_set == ridge_racer_rom_set::ridge_racer ||
+        game_set == ridge_racer_rom_set::ridge_racer_full_scale ||
+        game_set == ridge_racer_rom_set::ridge_racer_2 ||
+        game_set == ridge_racer_rom_set::rave_racer ||
+        game_set == ridge_racer_rom_set::ace_driver ||
+        game_set == ridge_racer_rom_set::victory_lap ||
+        game_set == ridge_racer_rom_set::dirt_dash ||
+        game_set == ridge_racer_rom_set::aqua_jet);
 
     m_main_cpu = std::make_unique<mc68020_core>(*m_bus);
     // Load ROMs and set up CPU
@@ -416,6 +430,7 @@ void system22_emulator::run_frame() {
         previous_dsp = dsp_target;
         previous_mcu = mcu_target;
     }
+    update_pad_feedback();
 
     std::vector<polygon_object> polygons = m_dsp->take_rendered_polygons();
     m_last_sprite_count = 0;
@@ -618,6 +633,66 @@ void system22_emulator::run_frame() {
                         m_bus->read16(0x60004036),
                         m_bus->read16(0x6000403a));
         }
+    }
+}
+
+void system22_emulator::update_pad_feedback() {
+    if (!m_input || !m_bus || !m_mcu) return;
+    const input_state& state = m_input->state();
+
+    if (m_game_set == ridge_racer_rom_set::time_crisis) {
+        const bool solenoid = (m_mcu->cabinet_output_data() & 0x02) != 0;
+        // Keep trigger-edge fallback for firmware revisions that operate the
+        // solenoid before their output strobe is observable by the host.
+        if ((solenoid && !m_feedback_output_previous) ||
+            (state.buttons[0] && !m_feedback_trigger_previous))
+            m_input->pulse_rumble(0x5800, 0xffff, 95);
+        m_feedback_output_previous = solenoid;
+        m_feedback_trigger_previous = state.buttons[0];
+        return;
+    }
+
+    if (m_game_set == ridge_racer_rom_set::cyber_commando) {
+        const bool firing = state.shift_down || state.shift_up;
+        if (firing && !m_feedback_trigger_previous)
+            m_input->pulse_rumble(0x4800, 0xe800, 85);
+        m_feedback_trigger_previous = firing;
+        return;
+    }
+
+    if (m_game_set == ridge_racer_rom_set::dirt_dash) {
+        // Pad feedback for driving games is event-only. The cabinet's
+        // continuous motor/fan outputs are not suitable pad effects.
+        return;
+    }
+
+    if (m_game_set == ridge_racer_rom_set::aqua_jet) {
+        return;
+    }
+
+    switch (m_game_set) {
+    case ridge_racer_rom_set::ridge_racer:
+    case ridge_racer_rom_set::ridge_racer_full_scale:
+    case ridge_racer_rom_set::ridge_racer_2:
+    case ridge_racer_rom_set::rave_racer:
+    case ridge_racer_rom_set::ace_driver:
+    case ridge_racer_rom_set::victory_lap: {
+        const int command =
+            static_cast<int8_t>(m_bus->wheel_motor_command());
+        if (std::getenv("RRACER_FEEDBACK_TRACE") &&
+            command != m_feedback_command_previous) {
+            std::printf("System22 feedback frame=%llu wheel=%d delta=%d\n",
+                static_cast<unsigned long long>(m_frame_number), command,
+                command - m_feedback_command_previous);
+        }
+        m_feedback_command_previous = command;
+        // The arcade's wheel motor is continuous directional resistance. Do
+        // not translate it to an always-on pad motor; collision and slide
+        // audio events supply the tactile feedback instead.
+        return;
+    }
+    default:
+        return;
     }
 }
 

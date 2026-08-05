@@ -13,7 +13,7 @@ namespace fs = std::filesystem;
 
 int main() {
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-persistent-test-" +
+        ("manx-persistent-test-" +
          std::to_string(test_process_id()));
     const fs::path config = root / "config";
     fs::create_directories(config);
@@ -44,14 +44,14 @@ int main() {
     const fs::path exported = root / "export";
     fs::create_directories(exported);
     assert(export_persistent_game("ridgerac", exported.string()).success);
-    assert(fs::file_size(exported / "WhittyArcade-ridgerac-save" /
+    assert(fs::file_size(exported / "MANX-ridgerac-save" /
                          "eeprom") == 0x2000);
 
     assert(reset_persistent_game("ridgerac").success);
     assert(!fs::exists(ridge->files[0].path));
     assert(import_persistent_game(
         "ridgerac",
-        (exported / "WhittyArcade-ridgerac-save" / "eeprom").string()).success);
+        (exported / "MANX-ridgerac-save" / "eeprom").string()).success);
     assert(load_system22_eeprom("ridgerac", actual.data(), actual.size()));
     assert(actual == expected);
     const fs::path wrong = root / "wrong.bin";

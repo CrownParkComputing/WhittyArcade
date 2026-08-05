@@ -271,7 +271,7 @@ bool save_or_report(launcher_menu& menu, input_mapping_config& config,
     edited = previous;
     menu.show_text(
         "Could Not Save Controls",
-        "WhittyArcade could not write the input mapping file:\n\n" +
+        "MANX could not write the input mapping file:\n\n" +
             input_mapping_path() +
             "\n\nThe previous mappings have been restored.",
         "Back to Controls");
@@ -476,7 +476,7 @@ void edit_device(launcher_menu& menu, input_mapping_config& config,
                 "Copy this controller from another game...");
         rows.emplace_back(per_game ?
             "Use General mappings for every control" :
-            "Reset this device to WhittyArcade defaults");
+            "Reset this device to MANX defaults");
 
         const int chosen = menu.select(profile.display_name + " - " + title,
             "Choose a control tab. Each tab contains only one type of arcade "
@@ -498,7 +498,7 @@ void edit_device(launcher_menu& menu, input_mapping_config& config,
                     "Remove every game-specific override for this device? "
                     "This game will follow its General mappings again." :
                     "Replace every mapping for this device with "
-                    "WhittyArcade's defaults?",
+                    "MANX's defaults?",
                 {per_game ? "Use all General mappings" :
                             "Reset all mappings"},
                 "Cancel", -1);
@@ -625,7 +625,7 @@ void copy_device_profile(
         *target_bindings = previous;
         menu.show_text(
             "Could Not Copy Controls",
-            "WhittyArcade could not save the copied profile. Existing "
+            "MANX could not save the copied profile. Existing "
             "mappings have been restored.\n\n" + input_mapping_path(),
             "Back to Controls");
         return;

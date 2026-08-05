@@ -60,6 +60,22 @@ struct line_vertex {
     float a{};
 };
 
+// The sounds this game asks for. Named rather than numbered so a bundle can
+// match its files by name, and ordered so the index IS the cue id. Appending is
+// safe; reordering would silently repoint every installed bundle's sounds.
+enum class audio_cue : uint32_t {
+    shot,
+    enemy_death,
+    player_death,
+    spawn,
+    bomb,
+    black_hole_collapse,
+    multiplier_up,
+    count,
+};
+
+const char* audio_cue_name(audio_cue cue) noexcept;
+
 // The enemies of Retro Evolved, kept as behaviours rather than as art. Each
 // one is a different answer to "where do I go", which is what makes the arena
 // read as a crowd rather than a swarm of one thing.
@@ -86,6 +102,12 @@ public:
     // next. Valid until the next advance().
     const std::vector<line_vertex>& lines() const noexcept { return m_lines; }
 
+    // The sounds the last advance() asked for, oldest first. Drained by the
+    // caller: a cue is an event, and playing it twice because a frame was
+    // skipped is worse than dropping it.
+    std::size_t take_audio_cues(audio_cue* out, float* gain, float* pan,
+                                std::size_t max_cues) noexcept;
+
     edition which() const noexcept { return m_edition; }
     uint64_t score() const noexcept { return m_score; }
     // Seat one's lives, which is the whole story in a single-player game and
@@ -104,6 +126,17 @@ public:
         return true;
     }
     std::size_t enemy_count() const noexcept { return m_enemies.size(); }
+
+    // A black hole as anything outside the simulation may see it: the HUD, a
+    // minimap, and the tests that have to aim at one. Read-only and copied, so
+    // nothing outside can move it.
+    struct black_hole_view {
+        float x, y, radius, health;
+    };
+    std::size_t black_hole_count() const noexcept {
+        return m_black_holes.size();
+    }
+    black_hole_view black_hole_at(std::size_t index) const noexcept;
 
     // Everything the simulation depends on, hashed. Two machines playing the
     // same match must agree on this every frame; the instant they do not, they
@@ -190,6 +223,8 @@ private:
                int count, float speed) noexcept;
     const ship* nearest_ship(float x, float y) const noexcept;
 
+    // `x` positions the sound across the arena, which the host turns into pan.
+    void emit_cue(audio_cue cue, float gain, float x) noexcept;
     void emit_line(float x0, float y0, float x1, float y1,
                    float r, float g, float b, float a) noexcept;
     void draw_arena() noexcept;
@@ -204,6 +239,10 @@ private:
     std::vector<enemy> m_enemies;
     std::vector<particle> m_particles;
     std::vector<black_hole> m_black_holes;
+    // Deliberately NOT in the state checksum: sound is output, and two machines
+    // that disagree about what they played are still playing the same game.
+    struct pending_cue { audio_cue cue; float gain; float pan; };
+    std::vector<pending_cue> m_cues;
     ship m_ships[4]{};
     uint64_t m_score{};
     uint32_t m_lives{3}; // legacy mirror; per-seat lives are authoritative

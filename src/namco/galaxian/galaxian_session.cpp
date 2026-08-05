@@ -64,6 +64,12 @@ public:
             m_machine = std::make_unique<galaxian_machine>(
                 make_galaxian_board_interface());
             synth = make_galaxian_sound_synth();
+        } else if (m_set == galaxian_rom_set::warofbug) {
+            // Unmodified Galaxian hardware, so it shares the discrete
+            // sound board; only the ROM names and factory DIPs differ.
+            m_machine = std::make_unique<galaxian_machine>(
+                make_warofbug_board_interface());
+            synth = make_galaxian_sound_synth();
         } else if (m_set == galaxian_rom_set::uniwars) {
             m_machine = std::make_unique<galaxian_machine>(
                 make_uniwars_board_interface());

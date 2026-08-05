@@ -12,7 +12,7 @@ submission.
 
 **Conditional go as an independently branded emulator; no-go as-is.**
 
-WhittyArcade's original code can remain private and proprietary while the
+MANX's original code can remain private and proprietary while the
 Android application is sold through Google Play. The current permissive
 BSD/MIT/zlib components do not inherently prevent commercial distribution.
 Google Play's current policies do not state a blanket ban on emulators, but an
@@ -33,7 +33,7 @@ Submission is blocked until all of the following are true:
 5. the Android ARM64 build, original no-ROM review demo, privacy materials and
    Play Console declarations pass their acceptance gates.
 
-The safest product is **WhittyArcade**, using only CrownParkComputing artwork
+The safest product is **MANX**, using only CrownParkComputing artwork
 in the listing, importing only user-selected local files, and making it
 unmistakable before purchase that no games or firmware are included. Marketing
 it as a paid "Ridge Racer" or "Time Crisis" product, or using their logos,
@@ -44,7 +44,7 @@ written rights from the relevant owner.
 
 | Gate | Current state | Decision |
 |---|---|---|
-| Original WhittyArcade code | Private repository and proprietary licence; one Git author identity | Promising, but document ownership of the initial import and the legal owner/trading entity |
+| Original MANX code | Private repository and proprietary licence; one Git author identity | Promising, but document ownership of the initial import and the legal owner/trading entity |
 | ROM/firmware inclusion | None in source or release packages | Pass; this must remain invariant |
 | App networking/analytics/ads | No HTTP client, socket integration, analytics, ads or account system in the native application | Pass for the current tree; re-audit every Android SDK |
 | Permissive compiled components | Musashi, Moira core, chips Z80, ymfm and individually marked BSD MAME adaptations | Conditional pass after provenance/SBOM audit and notices |
@@ -62,7 +62,7 @@ written rights from the relevant owner.
 
 ### Original materials
 
-[`LICENSE`](../LICENSE) correctly separates original WhittyArcade materials
+[`LICENSE`](../LICENSE) correctly separates original MANX materials
 from third-party code and states that no game, firmware or trade-mark licence
 is granted. As copyright owner, Jonathan Whittingham/CrownParkComputing can
 charge for official copies while granting purchasers personal use.
@@ -77,7 +77,7 @@ copyright:
 - obtain assignments from any other contributor or contractor;
 - retain design notes and source/provenance records for the large initial Git
   import, whose earlier authorship history is not visible in this repository;
-- clear and, if worthwhile, register the WhittyArcade/CrownParkComputing marks
+- clear and, if worthwhile, register the MANX/CrownParkComputing marks
   before investing in a global listing.
 
 Google does not require the proprietary source to be published. An AAB/APK
@@ -122,7 +122,7 @@ bring its own native dependencies:
 - libmpg123 is LGPL 2.1:
   [upstream](https://www.mpg123.de/).
 
-LGPL does not automatically require publishing the original WhittyArcade
+LGPL does not automatically require publishing the original MANX
 engine. It does require preserving the user's applicable rights to the LGPL
 library, notices/source and, depending on how it is combined, modification and
 relinking. Android app signing and AAB delivery make a casual static-link
@@ -172,7 +172,7 @@ to distribute or market:
 - Namco, Bandai Namco, Sega, Lucasfilm/Star Wars or other names/marks beyond
   uses permitted by applicable trade-mark law;
 - arcade manuals, cabinet art or promotional copy;
-- a representation that WhittyArcade is official, endorsed or licensed.
+- a representation that MANX is official, endorsed or licensed.
 
 ROM filenames, checksums and manifest metadata copied from upstream drivers
 also need the same provenance record as code. A disclaimer is useful to avoid
@@ -182,7 +182,7 @@ confusion but does not create missing copyright or trade-mark permission.
 
 Use:
 
-- product title `WhittyArcade`;
+- product title `MANX`;
 - original CrownParkComputing icon, colours, crosshairs and diagnostic art;
 - original launcher/diagnostic screenshots containing no game frame, logo,
   character, music or publisher artwork;
@@ -224,7 +224,7 @@ approval risk.
 ### Emulator/ROM execution
 
 The current policy set does not expressly prohibit a CPU/GPU emulator. ROMs
-run inside WhittyArcade's interpreters and do not become Android DEX/JAR/SO
+run inside MANX's interpreters and do not become Android DEX/JAR/SO
 code or gain access to Android APIs. That should fit the virtual-machine/
 interpreter exception in the
 [Device and Network Abuse policy](https://support.google.com/googleplay/android-developer/answer/16559646?hl=en),
@@ -267,7 +267,7 @@ a business forecast.
 
 ### Play distribution agreement and EULA
 
-The current WhittyArcade licence is suitable as a private-source/desktop
+The current MANX licence is suitable as a private-source/desktop
 starting point but must not be used unchanged for Play. Google's current
 [Developer Distribution Agreement](https://play.google/developer-distribution-agreement.html)
 includes rights and obligations that override a conflicting product EULA,
@@ -354,7 +354,7 @@ A fresh install currently has useful ROM-management UI but cannot demonstrate
 actual emulation without data that Google reviewers should not be given by us.
 That creates quality/review friction even though it is correct legally.
 
-Add an original `WhittyArcade Diagnostics` mode which needs no external ROM
+Add an original `MANX Diagnostics` mode which needs no external ROM
 and is clearly not an arcade-game dump. It should:
 
 - render an original animated test scene through the same Android GPU path;
@@ -382,7 +382,7 @@ engineering base, with these Play-specific additions:
 ### Package and platform
 
 - Reserve and register a durable package such as
-  `com.crownparkcomputing.whittyarcade`; never put a third-party game/brand in
+  `com.crownparkcomputing.manx`; never put a third-party game/brand in
   the package name.
 - Use `minSdk 26`, `arm64-v8a` first and a declared GLES 3.2 requirement.
 - Target Android 16/API 36 from the start because submissions on or after
@@ -453,7 +453,7 @@ that mandatory minimum.
 
 - [ ] Seller/legal entity and copyright ownership documented.
 - [ ] Contributor/contractor assignments complete.
-- [ ] WhittyArcade/CrownParkComputing trade-mark clearance complete.
+- [ ] MANX/CrownParkComputing trade-mark clearance complete.
 - [ ] Per-file MAME/adaptation provenance and licence opinion complete.
 - [ ] SoftFloat decision approved.
 - [ ] Android dependency/SBOM and notices approved.

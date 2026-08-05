@@ -27,7 +27,7 @@ pacing — minus everything launcher-shaped.
 | Area | Sources |
 | --- | --- |
 | Session | `src/xbox/burnout3_session.cpp`, `burnout3_bridge.c`, `burnout3_importer.c` |
-| Game code | static lib `burnout3_recomp` (kernel shim, native game layer, frame pump, `vulkan_d3d8.c`, TXD/BGV/AWD/track loaders, `fe_menu.c`, `rw_bridge.c`, `rw_renderer.c`) plus `whitty_fmv` for the intro reel |
+| Game code | static lib `burnout3_recomp` (kernel shim, native game layer, frame pump, `vulkan_d3d8.c`, TXD/BGV/AWD/track loaders, `fe_menu.c`, `rw_bridge.c`, `rw_renderer.c`) plus `manx_fmv` for the intro reel |
 | Presentation | `arcade_video_worker.cpp`, `arcade_renderer.cpp`, `arcade_presenter.cpp`, the generated SPIR-V shader headers |
 | Input | `arcade_input.cpp` (the "daytona" driving mapping), `input_mapping.cpp` |
 | Settings | `arcade_settings.cpp` (`settings.ini` load/save) |
@@ -35,7 +35,7 @@ pacing — minus everything launcher-shaped.
 | Header-only | `arcade_session_internal.h` (`video_emulator_session`), `title_capture.h`, `wall_log.h`, `wall_layout.h`, `twin_window_layout.h`, `platform_paths.h` |
 
 External libraries: SDL3, SDL3_ttf, Vulkan, GLEW/OpenGL, minizip/zlib,
-ffmpeg (via `whitty_fmv`), shaderc, threads.
+ffmpeg (via `manx_fmv`), shaderc, threads.
 
 ### Launcher-only code it excludes
 
@@ -43,7 +43,7 @@ ffmpeg (via `whitty_fmv`), shaderc, threads.
   cabinet spawning/ring, netplay status plumbing, tool commands.
 - Frontend: `arcade_frontend.cpp`, `launcher_menu.cpp`, `input_mapper.cpp`
   (remap UI), `multiplayer_lobby.cpp`, `banner_library.cpp`,
-  `igdb_artwork/igdb_cover_library`, `play_stats`, `high_scores`,
+  `media_library`, `play_stats`, `high_scores`,
   `persistent_data`, platform file dialogs.
 - Other boards: `arcade_session.cpp` (the all-boards factory) and every
   machine/audio/session module for System 22, Model 1/2, System 246,
@@ -67,7 +67,7 @@ cutting if standalone ports become routine:
    `rom_library`/`native_title_library` (and with them minizip and the
    JSON reader) into a build that can never switch games. Splitting the
    picker out of the renderer behind a small interface — or a compile-time
-   `WHITTY_NO_LIBRARY_UI` — would cut the catalog out of standalone ports.
+   `MANX_NO_LIBRARY_UI` — would cut the catalog out of standalone ports.
 2. **Model 2 frame decode lives in the board-neutral renderer.** The
    present path calls `model2_build_draw_vertices`/`model2_build_color_table`,
    so `model2_draw_list.cpp` + `model2_geometry.cpp` link even though this
@@ -87,11 +87,11 @@ cutting if standalone ports become routine:
 
 ## Framework promotion candidates
 
-Generic pieces built for Burnout 3 that belong in the WhittyArcade
+Generic pieces built for Burnout 3 that belong in the MANX
 framework layer rather than the port:
 
-- **FMV playback — done.** `include/whitty_fmv.h` + `src/fmv/whitty_fmv.c`
-  (static lib `whitty_fmv`, present only when the ffmpeg dev libraries
+- **FMV playback — done.** `include/manx_fmv.h` + `src/fmv/manx_fmv.c`
+  (static lib `manx_fmv`, present only when the ffmpeg dev libraries
   are). Wall-clock, pts-paced decode of anything ffmpeg demuxes, with BGRA
   output for D3D8-style texture staging or RGBA for
   `present_rgba_frame`. It replaces the port-private `xmv_player` and the
@@ -120,6 +120,6 @@ framework layer rather than the port:
 ## Boot log contract
 
 `fe_menu.c` prints `[XMV] playing <path>` per intro movie (the line the
-smoke checks grep for); `whitty_fmv` prints `[FMV] playing <path> (WxH
+smoke checks grep for); `manx_fmv` prints `[FMV] playing <path> (WxH
 codec)` with the decoder detail. Both appear once per movie in a healthy
 boot.

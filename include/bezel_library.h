@@ -1,6 +1,6 @@
 // bezel_library.h - the background half of the cabinet-bezel path.
 //
-// Same contract as igdb::cover_library, and for the same reason: a bezel is
+// Background-loaded bezel artwork; a bezel is
 // decoration and must never hold a launch back. request() returns immediately,
 // all HTTP and disk work happens on one worker thread, and a fetched bezel is
 // cached on disk so a game is looked up at most once. A machine with no

@@ -106,16 +106,16 @@ void make_package(const fs::path& path, std::uint32_t title_id,
 int main() {
     // Keep discovery isolated from the machine's real PCSX2 arcade tree so the
     // System 246 .acgame scan does not add extra games to this fixture.
-    set_test_environment("WHITTY_SYSTEM246_ACGAME_ROOT", "/nonexistent-system246-acgame-root");
+    set_test_environment("MANX_SYSTEM246_ACGAME_ROOT", "/nonexistent-system246-acgame-root");
     // And from the machine's real extracted Xbox 360 titles, for the same
     // reason: the native-port scan would otherwise add whatever is installed.
-    set_test_environment("WHITTY_XBOX360_GAME_ROOT", "/nonexistent-xbox360-game-root");
+    set_test_environment("MANX_XBOX360_GAME_ROOT", "/nonexistent-xbox360-game-root");
     // And from the machine's downloaded Xbox 360 packages, which is where the
     // package scan looks by default.
-    set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT",
+    set_test_environment("MANX_XBOX360_PACKAGE_ROOT",
              "/nonexistent-xbox360-package-root");
     const fs::path root = fs::temp_directory_path() /
-        ("whittyarcade-rom-library-test-" +
+        ("manx-rom-library-test-" +
          std::to_string(test_process_id()));
     const fs::path data = root / "data";
     fs::create_directories(data);
@@ -128,7 +128,7 @@ int main() {
     settings.library_setup_complete = true;
     if (!save_settings(settings)) return 1;
 
-    // WhittyArcade reads set ZIPs straight from its ROM folder. Drop a merged
+    // MANX reads set ZIPs straight from its ROM folder. Drop a merged
     // ridgerac.zip (per-set subdir, identified by basename) plus the C71/C74
     // device archives directly into the folder - there is no import step.
     const fs::path rom_folder(rom_library_path());
@@ -150,7 +150,7 @@ int main() {
     assert(fs::path(rom_library_path()) == root / "my-roms");
     assert(fs::path(chd_library_path()) == root / "my-discs");
     // Custom locations are used directly rather than being copied beneath a
-    // WhittyArcade-managed import tree.
+    // MANX-managed import tree.
 
     const std::string required_sets = required_rom_sets_text();
     assert(supported_rom_sets().size() >= 15);
@@ -170,9 +170,9 @@ int main() {
     {
         const auto discover_package = [&](const fs::path& packages,
                                           const fs::path& package) {
-            set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT", packages.string().c_str());
+            set_test_environment("MANX_XBOX360_PACKAGE_ROOT", packages.string().c_str());
             const auto found = discover_library_roms("");
-            set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT",
+            set_test_environment("MANX_XBOX360_PACKAGE_ROOT",
                      "/nonexistent-xbox360-package-root");
             const std::string wanted =
                 fs::absolute(package).lexically_normal().string();
@@ -238,13 +238,13 @@ int main() {
 
         const auto giraffes = [](const fs::path& game_root,
                                  const fs::path& package_root) {
-            set_test_environment("WHITTY_XBOX360_GAME_ROOT", game_root.string().c_str());
-            set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT",
+            set_test_environment("MANX_XBOX360_GAME_ROOT", game_root.string().c_str());
+            set_test_environment("MANX_XBOX360_PACKAGE_ROOT",
                      package_root.string().c_str());
             const auto found = discover_library_roms("");
-            set_test_environment("WHITTY_XBOX360_GAME_ROOT",
+            set_test_environment("MANX_XBOX360_GAME_ROOT",
                      "/nonexistent-xbox360-game-root");
-            set_test_environment("WHITTY_XBOX360_PACKAGE_ROOT",
+            set_test_environment("MANX_XBOX360_PACKAGE_ROOT",
                      "/nonexistent-xbox360-package-root");
             std::vector<rom_choice> listed;
             for (const rom_choice& choice : found)
