@@ -18,6 +18,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 
 // ---- Internal state --------------------------------------------------------
 
@@ -155,6 +156,15 @@ static void exception(mips_cpu* cpu, uint8_t code, uint32_t bad_addr) {
         cpu->cause &= ~(1u << 31);
     }
     cpu->cause = (cpu->cause & ~0x7C) | ((code & 0x1F) << 2);
+    if (getenv("KI_TRACE_EXC")) {
+        static int n = 0;
+        if (n < 40) {
+            fprintf(stderr, "[EXC] #%d code=%u epc=0x%08X last_pc=0x%08X "
+                    "bad=0x%08X bd=%d\n", n, code, cpu->epc, cpu->last_pc,
+                    bad_addr, in_delay);
+            ++n;
+        }
+    }
     // Jump to exception handler (BEV=1: 0xBFC00380, else 0x80000080).
     const bool bev = (cpu->sr >> 22) & 1;
     cpu->pc = bev ? 0xBFC00380 : 0x80000080;
@@ -415,10 +425,10 @@ uint32_t mips_step(mips_cpu* cpu) {
     else if (opcode == 0x01) {
         switch (rt) {
         case 0x00: // BLTZ
-            if (GPR(rs) < 0) cpu->next_pc = cpu->pc + 4 + (simm << 2);
+            if (GPR(rs) < 0) cpu->next_pc = cpu->last_pc + 4 + (simm << 2);
             break;
         case 0x01: // BGEZ
-            if (GPR(rs) >= 0) cpu->next_pc = cpu->pc + 4 + (simm << 2);
+            if (GPR(rs) >= 0) cpu->next_pc = cpu->last_pc + 4 + (simm << 2);
             break;
         case 0x02: { // BLTZL (likely)
             if (GPR(rs) < 0) {
@@ -473,11 +483,11 @@ uint32_t mips_step(mips_cpu* cpu) {
     // ---- BEQ / BNE (opcodes 0x04, 0x05) --------------------------------
     else if (opcode == 0x04) { // BEQ
         if (GPRU(rs) == GPRU(rt))
-            cpu->next_pc = cpu->pc + 4 + (simm << 2);
+            cpu->next_pc = cpu->last_pc + 4 + (simm << 2);
     }
     else if (opcode == 0x05) { // BNE
         if (GPRU(rs) != GPRU(rt))
-            cpu->next_pc = cpu->pc + 4 + (simm << 2);
+            cpu->next_pc = cpu->last_pc + 4 + (simm << 2);
     }
     // ---- BEQL / BNEL / BLEZL / BGTZL (opcodes 0x14-0x17) -------------
     // Branch-likely: when taken, nullify the delay slot by overriding
@@ -497,12 +507,12 @@ uint32_t mips_step(mips_cpu* cpu) {
     // ---- BLEZ (opcode 0x06) --------------------------------------------
     else if (opcode == 0x06) { // BLEZ
         if (GPR(rs) <= 0)
-            cpu->next_pc = cpu->pc + 4 + (simm << 2);
+            cpu->next_pc = cpu->last_pc + 4 + (simm << 2);
     }
     // ---- BGTZ (opcode 0x07) --------------------------------------------
     else if (opcode == 0x07) { // BGTZ
         if (GPR(rs) > 0)
-            cpu->next_pc = cpu->pc + 4 + (simm << 2);
+            cpu->next_pc = cpu->last_pc + 4 + (simm << 2);
     }
     else if (opcode == 0x16) { // BLEZL
         if (GPR(rs) <= 0) {
@@ -519,7 +529,14 @@ uint32_t mips_step(mips_cpu* cpu) {
     // ---- ADDI / ADDIU (opcodes 0x08, 0x09) ----------------------------
     else if (opcode == 0x08) { // ADDI
         const int32_t result = GPR(rs) + simm;
-        if (((GPR(rs) ^ simm) & (GPR(rs) ^ result)) >> 31)
+        // Signed-overflow test for ADDITION: both operands' sign differs from
+        // the result's. The previous form was the SUBTRACTION pattern
+        // ((a^b)&(a^r)), which fired whenever the operands merely had opposite
+        // signs - so `addi $x,$x,-1` crossing zero (0 -> -1) threw a spurious
+        // overflow. KI's boot ROM counts its 48-entry TLB-init loop down with
+        // exactly that instruction, so the bogus trap restarted the loop
+        // forever and the machine never left CPU init.
+        if (((GPR(rs) ^ result) & (simm ^ result)) >> 31)
             exception(cpu, 12, 0);
         else
             cpu->r[rt] = sign_ext32(static_cast<uint32_t>(result));

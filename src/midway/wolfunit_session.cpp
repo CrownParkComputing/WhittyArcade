@@ -48,32 +48,36 @@ namespace {
 
 // ---- Midway Wolf Unit constants -------------------------------------------
 
-constexpr uint32_t ram_size       = 16 * 1024 * 1024;  // 16 MB
+// Real Midway Wolf Unit map, decoded on the 29-bit physical address
+// (KSEG0/1/KUSEG all fold to the same phys). Taken from MAME
+// src/mame/rare/kinst.cpp kinst_map(); the previous map here - a 16 MB RAM
+// block, an I/O window at 0x1F000000, IDE at 0x1F500000 and a game-ROM
+// window at 0x1F800000 - was invented, which is why the boot ROM polled a
+// drive that was not there (first_ide stayed 0) and nothing ever rendered.
+constexpr uint32_t ram0_size      = 0x00080000;  // 512 KiB low bank; holds FB
+constexpr uint32_t ram1_base      = 0x08000000;
+constexpr uint32_t ram1_size      = 0x00800000;  // 8 MiB main work RAM
 constexpr uint32_t boot_rom_base  = 0x1FC00000;
-constexpr uint32_t boot_rom_size  = 0x80000;          // 512 KiB
-constexpr uint32_t io_base        = 0x1F000000;
-constexpr uint32_t io_size        = 0x00C00000;  // covers up to 0x1FBFFFFF
-constexpr uint32_t game_rom_base  = 0x1F800000;  // game ROMs u10-u36
-constexpr uint32_t game_rom_size  = 0x400000;    // 8 x 512KB = 4MB
+constexpr uint32_t boot_rom_size  = 0x80000;     // 512 KiB (u98), mirrored
 
-// I/O register offsets from io_base
-constexpr uint32_t dcs_offset          = 0x200000;
-constexpr uint32_t video_control_offset = 0x400000;
-constexpr uint32_t blitter_offset       = 0x400100;
-constexpr uint32_t p1_input_offset      = 0x400400;
-constexpr uint32_t p2_input_offset      = 0x400C00;
-constexpr uint32_t coin_dip_offset      = 0x401000;
+// I/O ports (dword each) at 0x10000080..0x100000BF. The register meanings
+// are shuffled between kinst and kinst2, handled at the access site.
+constexpr uint32_t io_ports_base  = 0x10000080;
+constexpr uint32_t io_ports_end   = 0x100000C0;
 
-// IDE register offsets
-constexpr uint32_t ide_data_offset      = 0x500000;
-constexpr uint32_t ide_error_offset     = 0x500004;
-constexpr uint32_t ide_sector_count     = 0x500008;
-constexpr uint32_t ide_sector_num       = 0x50000C;
-constexpr uint32_t ide_cylinder_low     = 0x500010;
-constexpr uint32_t ide_cylinder_high    = 0x500014;
-constexpr uint32_t ide_drive_head       = 0x500018;
-constexpr uint32_t ide_command_status   = 0x50001C;
-constexpr uint32_t ide_alt_status_ctrl  = 0x500020;
+// IDE: cs0 registers at 0x10000100..0x1000013F on EIGHT-byte spacing
+// (ide_r does cs0_r(offset/2), offset being the dword index), and the cs1
+// alternate-status / device-control byte at 0x10000170.
+constexpr uint32_t ide_cs0_base   = 0x10000100;
+constexpr uint32_t ide_cs0_end    = 0x10000140;
+constexpr uint32_t ide_cs1_base   = 0x10000170;
+
+// Framebuffer lives inside the low RAM bank; vram_control bit 2 flips the
+// page. 320x240, packed two BGR-555 pixels per 32-bit word, 640 bytes/row.
+constexpr uint32_t video_fb_page0 = 0x30000;
+constexpr uint32_t video_fb_page1 = 0x58000;
+constexpr int      video_width    = 320;
+constexpr int      video_height   = 240;
 
 // IDE status bits
 constexpr uint8_t ide_status_err  = 0x01;
@@ -104,10 +108,10 @@ public:
                      std::shared_ptr<arcade_cabinet_state> cabinet)
         : m_video(std::move(video)),
           m_cabinet_state(std::move(cabinet)),
-          m_ram(ram_size),
+          m_ram(ram0_size),
+          m_ram1(ram1_size),
           m_boot_rom(boot_rom_size),
-          m_game_roms(game_rom_size, 0xFF),
-          m_framebuffer(320 * 240 * 4)
+          m_framebuffer(video_width * video_height * 4)
     {}
 
     ~wolfunit_session() override {
@@ -149,12 +153,13 @@ public:
         std::memcpy(m_boot_rom.data(), loaded.boot_rom.data(),
                     std::min(loaded.boot_rom.size(), m_boot_rom.size()));
 
-        // Copy game ROMs (u10-u36).
+        // u10-u36 are DCS sound data, not CPU-addressable game code: the game
+        // itself is on the IDE drive. Keep the bytes for the DCS side; they
+        // are deliberately not mapped into the CPU bus.
         if (!loaded.game_roms.empty()) {
-            std::memcpy(m_game_roms.data(), loaded.game_roms.data(),
-                       std::min(loaded.game_roms.size(), m_game_roms.size()));
-            fprintf(stderr, "[KI]   Game ROMs loaded: %zu bytes\n",
-                    loaded.game_roms.size());
+            m_dcs_rom = std::move(loaded.game_roms);
+            fprintf(stderr, "[KI]   DCS sound data: %zu bytes\n",
+                    m_dcs_rom.size());
         }
 
         // Dump first 4 instructions at reset vector (physical 0x1FC00000).
@@ -278,6 +283,12 @@ public:
         // Poll input once per frame.
         poll_inputs();
 
+        // Clear last frame's VBLANK pulse before running this one.
+        if (m_vblank_asserted) {
+            m_vblank_asserted = false;
+            mips_clear_interrupt(m_cpu, 0x04);
+        }
+
         // KI's R4600 runs at ~100 MHz; at 60 Hz that's ~1,666,667 cycles/frame.
         constexpr uint32_t cycles_per_frame = 2000000;
         uint32_t ran = 0;
@@ -318,18 +329,19 @@ public:
         }
 
         if (first_frame) {
-            fprintf(stderr, "[KI] Frame 0: %u cycles, %u blits, first_ide=%d\n",
-                    ran, m_blit_count, m_ide_read_count);
-            fprintf(stderr, "[KI]   VBLANK assert (IP1 set, held until ASIC write)\n");
+            fprintf(stderr, "[KI] Frame 0: %u cycles, ide_reg_touches=%d, "
+                    "sector_reads=%d, PC=0x%08X\n",
+                    ran, m_ide_access_count, m_ide_read_count,
+                    mips_last_pc(m_cpu));
         }
 
         { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: CPU loop done, ran=%u cycles, blits=%u, PC=0x%08X\n", ran, m_blit_count, mips_last_pc(m_cpu)); fclose(f); } }
 
-        // VBLANK interrupt.
-        // Assert IP1 and leave it set until the game's interrupt handler
-        // acknowledges it by writing to the video ASIC control register.
+        // VBLANK interrupt. MAME wires the screen's vblank to maincpu input
+        // line 0, which is hardware interrupt IP2 (cause bit 10). Pulse it
+        // once per frame: assert here, cleared at the top of the next frame.
         m_vblank_asserted = true;
-        mips_set_interrupt(m_cpu, 0x02);  // IP1
+        mips_set_interrupt(m_cpu, 0x04);  // IP2
 
         // Copy framebuffer to output.
         { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: calling render_frame\n"); fclose(f); } }
@@ -452,355 +464,179 @@ private:
         static_cast<wolfunit_session*>(user)->bus_write8(addr, val);
     }
 
-    uint32_t bus_read32(uint32_t addr) {
-        uint32_t phys = addr & 0x1FFFFFFF;
-
-        // Reset PCI-domain flag when the CPU reads outside Voodoo space.
-        if (phys < 0x10000000 || phys >= 0x1F000000)
-            m_in_pci_domain = false;
-
-        // PCI / Voodoo Graphics space (0x10000000 - 0x1EFFFFFF).
-        // The boot ROM JALs to 0xB4036BFC (phys 0x14036BFC) for GPU
-        // init. When the CPU is FETCHING from this window, return JR $ra
-        // so the function returns cleanly (NOP for the delay slot).
-        // A DATA read of the window is a different thing entirely: MAME
-        // maps kinst with unmap_value_high, so device-absent polls read
-        // 0xFFFFFFFF and fall through. Serving those polls the JR $ra
-        // opcode as data left the game spinning at 0x1007C03C forever.
-        if (phys >= 0x10000000 && phys < 0x1F000000) {
-            static int pci_log = 0;
-            if (pci_log < 10) {
-                { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[PCI-R32] #%d PC=0x%08X phys=0x%08X\n", pci_log, mips_last_pc(m_cpu), phys); fclose(f); } }
-                ++pci_log;
-            }
-            const uint32_t pc_phys = mips_last_pc(m_cpu) & 0x1FFFFFFF;
-            const bool fetching =
-                pc_phys >= 0x10000000 && pc_phys < 0x1F000000;
-            if (fetching) {
-                if (!m_in_pci_domain) {
-                    m_in_pci_domain = true;
-                    m_pci_entry_phys = phys;
-                    // Inject GPU-done flags into RAM.
-                    if (0x5AD4 < ram_size)
-                        write32_le(&m_ram[0x5AD4], 0x00000001u);
-                    if (0x6268 < ram_size)
-                        write32_le(&m_ram[0x6268], 0x00000001u);
-                    return 0x03E00008;  // JR $ra on entry
-                }
-                // Still in PCI: NOP for the delay slot and any subsequent
-                // linear execution. After JR $ra returns, the CPU is back
-                // in mapped memory, which resets m_in_pci_domain above.
-                return 0x00000000;  // NOP
-            }
-            return 0xFFFFFFFFu;  // open bus, as MAME's unmap_value_high
-        }
-
-        // Log ALL unmapped reads (not RAM/ROM/I/O) to find status checks.
-        if (phys >= 0x10000000 || phys >= ram_size) {
-            static int unmapped_log = 0;
-            if (unmapped_log < 30 && phys < 0x1F000000) {
-                { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[UNMAPPED-R32] #%d PC=0x%08X phys=0x%08X\n", unmapped_log, mips_last_pc(m_cpu), phys); fclose(f); } }
-                ++unmapped_log;
-            }
-        }
-
-        if (addr < ram_size)
-            return read32_le(&m_ram[addr]);
-        if (addr >= boot_rom_base && addr < boot_rom_base + boot_rom_size)
-            return read32_le(&m_boot_rom[addr - boot_rom_base]);
-        if (addr >= game_rom_base && addr < game_rom_base + game_rom_size)
-            return read32_le(&m_game_roms[addr - game_rom_base]);
-        if (addr >= io_base && addr < io_base + io_size)
-            return io_read32(addr);
-        return 0;
+    // A memory helper for the three access widths. Everything decodes on
+    // the 29-bit physical address so KSEG0, KSEG1 and KUSEG all reach the
+    // same devices; open bus reads back 0xFFFFFFFF, matching MAME's
+    // unmap_value_high.
+    template <typename T>
+    T mem_read(uint32_t addr) {
+        const uint32_t phys = addr & 0x1FFFFFFF;
+        const uint32_t a = phys & ~(sizeof(T) - 1);
+        if (phys < ram0_size)
+            return load_le<T>(&m_ram[a]);
+        if (phys >= ram1_base && phys < ram1_base + ram1_size)
+            return load_le<T>(&m_ram1[a - ram1_base]);
+        if (phys >= boot_rom_base && phys < boot_rom_base + boot_rom_size)
+            return load_le<T>(&m_boot_rom[(a - boot_rom_base) &
+                                          (boot_rom_size - 1)]);
+        if (phys >= io_ports_base && phys < ide_cs1_base + 4)
+            return static_cast<T>(io_read(phys, sizeof(T)));
+        return static_cast<T>(~static_cast<T>(0));
     }
 
-    void bus_write32(uint32_t addr, uint32_t val) {
-        if (addr < ram_size) {
-            write32_le(&m_ram[addr], val);
-            return;
+    template <typename T>
+    void mem_write(uint32_t addr, T val) {
+        const uint32_t phys = addr & 0x1FFFFFFF;
+        const uint32_t a = phys & ~(sizeof(T) - 1);
+        if (phys < ram0_size) { store_le<T>(&m_ram[a], val); return; }
+        if (phys >= ram1_base && phys < ram1_base + ram1_size) {
+            store_le<T>(&m_ram1[a - ram1_base], val); return;
         }
-        if (addr >= io_base && addr < io_base + io_size) {
-            io_write32(addr, val);
-            return;
-        }
+        if (phys >= io_ports_base && phys < ide_cs1_base + 4)
+            io_write(phys, val, sizeof(T));
+        // ROM and open bus swallow writes.
     }
 
-    uint16_t bus_read16(uint32_t addr) {
-        uint32_t phys = addr & 0x1FFFFFFF;
-        if (phys >= 0x10000000 && phys < 0x1F000000)
-            return 0xFFFF;  // open bus, as MAME's unmap_value_high
-        if (addr < ram_size)
-            return read16_le(&m_ram[addr & ~1u]);
-        if (addr >= boot_rom_base && addr < boot_rom_base + boot_rom_size)
-            return read16_le(&m_boot_rom[(addr & ~1u) - boot_rom_base]);
-        if (addr >= game_rom_base && addr < game_rom_base + game_rom_size)
-            return read16_le(&m_game_roms[(addr & ~1u) - game_rom_base]);
-        if (addr >= io_base && addr < io_base + io_size)
-            return io_read16(addr);
-        return 0;
-    }
+    uint32_t bus_read32(uint32_t addr) { return mem_read<uint32_t>(addr); }
+    uint16_t bus_read16(uint32_t addr) { return mem_read<uint16_t>(addr); }
+    uint8_t  bus_read8(uint32_t addr)  { return mem_read<uint8_t>(addr); }
+    void bus_write32(uint32_t addr, uint32_t v) { mem_write<uint32_t>(addr, v); }
+    void bus_write16(uint32_t addr, uint16_t v) { mem_write<uint16_t>(addr, v); }
+    void bus_write8(uint32_t addr, uint8_t v)   { mem_write<uint8_t>(addr, v); }
 
-    void bus_write16(uint32_t addr, uint16_t val) {
-        if (addr < ram_size) {
-            write16_le(&m_ram[addr & ~1u], val);
-            return;
-        }
-        if (addr >= io_base && addr < io_base + io_size) {
-            io_write16(addr, val);
-            return;
-        }
+    template <typename T>
+    static T load_le(const void* p) {
+        const uint8_t* b = static_cast<const uint8_t*>(p);
+        T v = 0;
+        for (unsigned i = 0; i < sizeof(T); ++i)
+            v |= static_cast<T>(b[i]) << (8 * i);
+        return v;
     }
-
-    uint8_t bus_read8(uint32_t addr) {
-        uint32_t phys = addr & 0x1FFFFFFF;
-        if (phys >= 0x10000000 && phys < 0x1F000000)
-            return 0xFF;  // open bus, as MAME's unmap_value_high
-        if (addr < ram_size)
-            return m_ram[addr];
-        if (addr >= boot_rom_base && addr < boot_rom_base + boot_rom_size)
-            return m_boot_rom[addr - boot_rom_base];
-        if (addr >= game_rom_base && addr < game_rom_base + game_rom_size)
-            return m_game_roms[addr - game_rom_base];
-        if (addr >= io_base && addr < io_base + io_size)
-            return io_read8(addr);
-        return 0xFF;
-    }
-
-    void bus_write8(uint32_t addr, uint8_t val) {
-        if (addr < ram_size) {
-            m_ram[addr] = val;
-            return;
-        }
-        if (addr >= io_base && addr < io_base + io_size) {
-            io_write8(addr, val);
-            return;
-        }
+    template <typename T>
+    static void store_le(void* p, T v) {
+        uint8_t* b = static_cast<uint8_t*>(p);
+        for (unsigned i = 0; i < sizeof(T); ++i)
+            b[i] = static_cast<uint8_t>(v >> (8 * i));
     }
 
     // ---- I/O read/write ---------------------------------------------------
 
-    uint32_t io_read32(uint32_t addr) {
-        uint32_t offset = addr - io_base;
-
-        // Diagnostic: log ALL I/O reads for first 80 accesses.
-        static int io_log_count = 0;
-        if (io_log_count < 80) {
-            { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[IO-R32] #%d PC=0x%08X offset=0x%06X\n", io_log_count, mips_last_pc(m_cpu), offset); fclose(f); } }
-            ++io_log_count;
+    // Control ports and the IDE controller share the 0x10000000 decode.
+    // `size` is 1/2/4; the CPU accesses these as 32-bit loads/stores but the
+    // narrower widths are handled so nothing traps.
+    uint32_t io_read(uint32_t phys, unsigned size) {
+        if (phys >= ide_cs0_base && phys < ide_cs0_end) {
+            const unsigned reg = (phys - ide_cs0_base) / 8;  // 8-byte spacing
+            return ide_cs0_read(reg);
         }
-
-        // DCS audio (0x200000 - 0x200100)
-        if (offset >= dcs_offset && offset < dcs_offset + 0x100)
-            return dcs_read32(offset);
-
-        // IDE controller (0x500000 - 0x500020)
-        // The IDE data register is 16-bit at offsets 0x00/0x01.
-        // Assemble the full 32-bit word so that 16-bit and 8-bit
-        // sub-accesses get their correct bytes.
-        // Use the full offset from io_base; ide_read subtracts
-        // ide_data_offset internally.
-        if (offset >= ide_data_offset && offset < ide_data_offset + 0x20) {
-            uint32_t aligned_full = offset & ~3u;
-            uint32_t word = static_cast<uint32_t>(ide_read(aligned_full)) << 24;
-            word |= static_cast<uint32_t>(ide_read(aligned_full + 1)) << 16;
-            word |= static_cast<uint32_t>(ide_read(aligned_full + 2)) << 8;
-            word |= static_cast<uint32_t>(ide_read(aligned_full + 3));
-            return word;
-        }
-
-        // Player 1 inputs (0x400400 - 0x400500)
-        if (offset >= p1_input_offset && offset < p1_input_offset + 0x100) {
-            uint32_t reg = (offset - p1_input_offset) & ~3u;
-            if (reg == 0x00) return m_p1_inputs;
-            return 0xFFFFFFFFu;  // Unused inputs = not pressed
-        }
-
-        // Player 2 inputs (0x400C00 - 0x400D00)
-        if (offset >= p2_input_offset && offset < p2_input_offset + 0x100) {
-            uint32_t reg = (offset - p2_input_offset) & ~3u;
-            if (reg == 0x00) return m_p2_inputs;
-            return 0xFFFFFFFFu;
-        }
-
-        // Coin / Service / DIP switches (0x401000 - 0x401100)
-        if (offset >= coin_dip_offset && offset < coin_dip_offset + 0x100) {
-            uint32_t reg = (offset - coin_dip_offset) & ~3u;
-            switch (reg) {
-            case 0x00: {
-                // DIP switches + service/test
-                uint32_t dips = m_ki_dip_switches;
-                if (m_service_pressed) dips &= ~(1u << 0);  // Service switch
-                if (m_test_mode)       dips &= ~(1u << 1);  // Test switch
-                return dips;
-            }
-            case 0x04: return m_coin_counter;
-            default:   return 0xFFFFFFFFu;
-            }
-        }
-
-        // ASIC video registers (0x400000 - 0x400100)
-        if (offset >= video_control_offset &&
-            offset < video_control_offset + 0x100) {
-            uint32_t reg = (offset - video_control_offset) & ~3u;
-            switch (reg) {
-            case 0x00: return m_asic_fb_base;
-            case 0x04: return m_asic_display_list;
-            case 0x08: return m_asic_control;
-            case 0x0C: return (m_frame_count & 1) ? 0 : 1; // vsync
-            case 0x10: return m_asic_fb_stride;
-            default:   return 0;
-            }
-        }
-
-        // DMA Blitter (0x400100 - 0x400200)
-        if (offset >= blitter_offset && offset < blitter_offset + 0x100) {
-            uint32_t reg = (offset - blitter_offset) & ~3u;
-            switch (reg) {
-            case 0x00: return m_blit_src;
-            case 0x04: return m_blit_dst;
-            case 0x08: return m_blit_size;
-            case 0x0C: return m_blit_strides;
-            case 0x10: return m_blit_control;
-            case 0x14: return 0;  // command: always idle on read
-            case 0x18: return m_blit_fill_color;
-            default:   return 0;
-            }
-        }
-
-        // Diagnostic: log reads to expanded I/O range (0x800000+)
-        if (offset >= 0x800000 && offset < 0xC00000) {
-            static int diag_logged = 0;
-            if (diag_logged < 8) {
-                fprintf(stderr, "[KI IO] read32 offset=0x%X (addr=0x%X) returning 0\n",
-                        offset, addr);
-                ++diag_logged;
-            }
-        }
-
-        return 0;
+        if (phys >= ide_cs1_base && phys < ide_cs1_base + 4)
+            return ide_status();                              // alt status
+        if (phys >= io_ports_base && phys < io_ports_end)
+            return port_read((phys - io_ports_base) & ~3u);
+        (void)size;
+        return 0xFFFFFFFFu;
     }
 
-    void io_write32(uint32_t addr, uint32_t val) {
-        uint32_t offset = addr - io_base;
-
-        // DCS audio writes
-        if (offset >= dcs_offset && offset < dcs_offset + 0x100) {
-            dcs_write32(offset, val);
+    void io_write(uint32_t phys, uint32_t val, unsigned size) {
+        if (phys >= ide_cs0_base && phys < ide_cs0_end) {
+            ide_cs0_write((phys - ide_cs0_base) / 8, val);
             return;
         }
-
-        // IDE command register
-        if (offset >= ide_command_status &&
-            offset < ide_command_status + 4) {
-            ide_command(val >> 24);
+        if (phys >= ide_cs1_base && phys < ide_cs1_base + 4) {
+            // Device control: SRST is bit 2.
+            if (val & 0x04) { m_ide_error = 0; m_ide_busy = false;
+                              m_ide_drq = false; }
             return;
         }
+        if (phys >= io_ports_base && phys < io_ports_end)
+            port_write((phys - io_ports_base) & ~3u, val);
+        (void)size;
+    }
 
-        // IDE data + registers (0x500000 - 0x500020)
-        // Write all four bytes individually so that sub-word stores
-        // (io_write16, io_write8) work through read-modify-write.
-        // Use the full offset from io_base; ide_write subtracts
-        // ide_data_offset internally.
-        if (offset >= ide_data_offset && offset < ide_data_offset + 0x20) {
-            uint32_t aligned_full = offset & ~3u;
-            ide_write(aligned_full,     static_cast<uint8_t>(val >> 24));
-            ide_write(aligned_full + 1, static_cast<uint8_t>(val >> 16));
-            ide_write(aligned_full + 2, static_cast<uint8_t>(val >> 8));
-            ide_write(aligned_full + 3, static_cast<uint8_t>(val));
-            return;
-        }
-
-        // IDE alternate status / device control
-        if (offset >= ide_alt_status_ctrl &&
-            offset < ide_alt_status_ctrl + 4) {
-            if ((val >> 26) & 1) {
-                // SRST: software reset
-                m_ide_error = 0;
-                m_ide_busy = false;
-                m_ide_drq = false;
-            }
-            return;
-        }
-
-        // ASIC video registers
-        if (offset >= video_control_offset &&
-            offset < video_control_offset + 0x100) {
-            uint32_t reg = (offset - video_control_offset) & ~3u;
-            switch (reg) {
-            case 0x00: m_asic_fb_base   = val; break;
-            case 0x04: m_asic_display_list = val; break;
-            case 0x08: {
-                m_asic_control = val;
-                // Writing to control register acknowledges VBLANK interrupt.
-                if (m_vblank_asserted) {
-                    m_vblank_asserted = false;
-                    mips_clear_interrupt(m_cpu, 0x02);
-                }
-                break;
-            }
-            case 0x10: m_asic_fb_stride = val; break;
-            default: break;
-            }
-            return;
-        }
-
-        // DMA Blitter registers
-        if (offset >= blitter_offset && offset < blitter_offset + 0x100) {
-            uint32_t reg = (offset - blitter_offset) & ~3u;
-            switch (reg) {
-            case 0x00: m_blit_src    = val; break;
-            case 0x04: m_blit_dst    = val; break;
-            case 0x08: m_blit_size   = val; break;
-            case 0x0C: m_blit_strides = val; break;
-            case 0x10: m_blit_control = val; break;
-            case 0x14: blit_execute();     break;
-            case 0x18: m_blit_fill_color = val; break;
-            default: break;
-            }
-            return;
-        }
-
-        // Coin counter / DIP writes (counters)
-        if (offset >= coin_dip_offset && offset < coin_dip_offset + 0x100) {
-            uint32_t reg = (offset - coin_dip_offset) & ~3u;
-            if (reg == 0x04) {
-                m_coin_counter = val;
-            }
-            return;
+    // The control-port block. kinst and kinst2 assign the same eight dword
+    // slots to different jobs, so the port index is resolved through the set.
+    uint32_t port_read(uint32_t slot) {
+        const bool k2 = m_game_set == midway_rom_set::killer_instinct_2;
+        switch (slot) {
+        case 0x00: return k2 ? m_ki_volume : m_p1_inputs;      // P1 / VOLUME
+        case 0x08: return k2 ? read_dsw()  : m_p2_inputs;      // P2 / DSW
+        case 0x10: return k2 ? m_p2_inputs : m_ki_volume;      // VOLUME / P2
+        case 0x18: return k2 ? m_p1_inputs : 0xFFFFFFFFu;      // UNUSED / P1
+        case 0x20: return k2 ? 0xFFFFFFFFu : read_dsw();       // DSW / UNUSED
+        default:   return 0xFFFFFFFFu;
         }
     }
 
-    uint16_t io_read16(uint32_t addr) {
-        uint32_t word = io_read32(addr & ~3u);
-        // Little-endian: the low half-word lives at the lower address.
-        return static_cast<uint16_t>((addr & 2) ? (word >> 16)
-                                                : (word & 0xFFFF));
+    void port_write(uint32_t slot, uint32_t val) {
+        const bool k2 = m_game_set == midway_rom_set::killer_instinct_2;
+        // vram_control, sound_reset, sound_control, sound_data and
+        // coin_control, at whichever slot this set puts them.
+        auto vram    = [&]{ m_vram_control = val; };
+        auto s_reset = [&]{ m_sound_reset = val; };
+        auto s_ctrl  = [&]{ m_sound_control = val; };
+        auto s_data  = [&]{ m_sound_data = val; };
+        auto coin    = [&]{ m_coin_counter = val; };
+        if (!k2) {
+            switch (slot) {
+            case 0x00: vram(); break; case 0x08: s_reset(); break;
+            case 0x10: s_ctrl(); break; case 0x18: s_data(); break;
+            case 0x30: coin(); break; default: break;
+            }
+        } else {
+            switch (slot) {
+            case 0x00: s_ctrl(); break; case 0x10: s_reset(); break;
+            case 0x18: vram(); break;  case 0x20: s_data(); break;
+            case 0x38: coin(); break; default: break;
+            }
+        }
     }
 
-    void io_write16(uint32_t addr, uint16_t val) {
-        uint32_t aligned = addr & ~3u;
-        uint32_t current = io_read32(aligned);
-        if (addr & 2)
-            io_write32(aligned, (current & 0x0000FFFFu) |
-                                (static_cast<uint32_t>(val) << 16));
-        else
-            io_write32(aligned, (current & 0xFFFF0000u) | val);
+    uint32_t read_dsw() const {
+        uint32_t dips = m_ki_dip_switches;
+        if (m_service_pressed) dips &= ~(1u << 0);
+        if (m_test_mode)       dips &= ~(1u << 1);
+        return dips;
     }
 
-    uint8_t io_read8(uint32_t addr) {
-        uint32_t word = io_read32(addr & ~3u);
-        // Little-endian: byte 0 is bits 7:0.
-        uint8_t shift = static_cast<uint8_t>((addr & 3) * 8);
-        return static_cast<uint8_t>(word >> shift);
+    // ---- IDE register file (ATA over cs0, 8 registers) -------------------
+    uint32_t ide_cs0_read(unsigned reg) {
+        ++m_ide_access_count;
+        switch (reg) {
+        case 0: {  // data: two bytes, low first
+            uint32_t lo = ide_pop_data_byte(0);
+            uint32_t hi = ide_pop_data_byte(1);
+            return lo | (hi << 8);
+        }
+        case 1: return m_ide_error;
+        case 2: return m_ide_sector_count_val;
+        case 3: return m_ide_sector_num_val;
+        case 4: return m_ide_cylinder_low_val;
+        case 5: return m_ide_cylinder_high_val;
+        case 6: return m_ide_drive_head_val;
+        case 7: return ide_status();
+        default: return 0xFFFFFFFFu;
+        }
     }
 
-    void io_write8(uint32_t addr, uint8_t val) {
-        uint32_t aligned = addr & ~3u;
-        uint8_t shift = static_cast<uint8_t>((addr & 3) * 8);
-        uint32_t mask = ~(0xFFu << shift);
-        uint32_t current = io_read32(aligned);
-        io_write32(aligned, (current & mask) | (static_cast<uint32_t>(val) << shift));
+    void ide_cs0_write(unsigned reg, uint32_t val) {
+        ++m_ide_access_count;
+        const uint8_t b = static_cast<uint8_t>(val);
+        switch (reg) {
+        case 0:  // data
+            if (m_ide_writing) {
+                ide_capture_write_byte(static_cast<uint8_t>(val), 0);
+                ide_capture_write_byte(static_cast<uint8_t>(val >> 8), 1);
+            }
+            break;
+        case 1: m_ide_features = b; break;
+        case 2: m_ide_sector_count_val = b; break;
+        case 3: m_ide_sector_num_val = b; break;
+        case 4: m_ide_cylinder_low_val = b; break;
+        case 5: m_ide_cylinder_high_val = b; break;
+        case 6: m_ide_drive_head_val = b; break;
+        case 7: ide_command(b); break;
+        default: break;
+        }
     }
 
     // ---- DCS Audio stubs -------------------------------------------------
@@ -809,120 +645,7 @@ private:
     // register responses so the game's audio driver doesn't hang.
     // Real implementation would need full ADSP-2105 emulation.
 
-    uint32_t dcs_read32(uint32_t offset) {
-        uint32_t reg = (offset - dcs_offset) & ~3u;
-        switch (reg) {
-        case 0x00: return m_dcs_control;     // Control/status
-        case 0x04: return m_dcs_data;        // Data register
-        case 0x08: return 0x00000001;        // Always "ready" for commands
-        case 0x0C: return m_dcs_reset_state; // Reset state
-        default:   return 0;
-        }
-    }
-
-    void dcs_write32(uint32_t offset, uint32_t val) {
-        uint32_t reg = (offset - dcs_offset) & ~3u;
-        switch (reg) {
-        case 0x00: m_dcs_control = val; break;
-        case 0x04: m_dcs_data    = val; break;
-        case 0x08:
-            // Command register: acknowledge immediately
-            m_dcs_control |= 0x00000001;  // Set "transfer done"
-            break;
-        case 0x0C:
-            if (val == 0x00000001) {
-                // Reset: set state to running after reset
-                m_dcs_reset_state = 0x00000003;
-                m_dcs_control = 0x00000001;
-            }
-            break;
-        default: break;
-        }
-    }
-
-    // ---- DMA Blitter -----------------------------------------------------
-
-    void blit_execute() {
-        if (m_blit_src >= ram_size || m_blit_dst >= ram_size) return;
-        const uint32_t width  = m_blit_size & 0xFFFF;
-        const uint32_t height = (m_blit_size >> 16) & 0xFFFF;
-        if (width == 0 || height == 0 || width > 2048 || height > 2048) return;
-
-        const uint32_t src_stride = m_blit_strides & 0xFFFF;
-        const uint32_t dst_stride = (m_blit_strides >> 16) & 0xFFFF;
-        const uint32_t row_bytes  = width * 2;
-        const bool     transparent = (m_blit_control & 1) != 0;
-        const uint16_t color_key   = static_cast<uint16_t>(
-            (m_blit_control >> 8) & 0xFFFF);
-
-        m_last_blit_pc = mips_last_pc(m_cpu);
-        ++m_blit_count;
-
-        for (uint32_t y = 0; y < height; ++y) {
-            uint32_t src_row = m_blit_src + y * (src_stride != 0 ? src_stride : row_bytes);
-            uint32_t dst_row = m_blit_dst + y * (dst_stride != 0 ? dst_stride : row_bytes);
-            if (src_row + row_bytes > ram_size || dst_row + row_bytes > ram_size)
-                continue;
-
-            for (uint32_t x = 0; x < width; ++x) {
-                uint32_t src = src_row + x * 2;
-                uint32_t dst = dst_row + x * 2;
-                uint16_t pixel = (static_cast<uint16_t>(m_ram[src]) << 8) |
-                                  m_ram[src + 1];
-                if (transparent && pixel == color_key) continue;
-                m_ram[dst]     = static_cast<uint8_t>(pixel >> 8);
-                m_ram[dst + 1] = static_cast<uint8_t>(pixel);
-            }
-        }
-
-        // Record the framebuffer location from large blits.
-        if (height > 100) {
-            m_asic_fb_base = m_blit_dst;
-            m_asic_fb_stride = (dst_stride != 0) ? dst_stride : static_cast<uint32_t>(width * 2);
-        }
-    }
-
-    // ---- IDE Controller --------------------------------------------------
-
-    uint16_t m_ide_data_reg{};
-
-    uint8_t ide_read(uint32_t offset) {
-        uint32_t reg = offset - ide_data_offset;
-        switch (reg) {
-        case 0x00: return ide_pop_data_byte(0);
-        case 0x01: return ide_pop_data_byte(1);
-        case 0x04: return m_ide_error;
-        case 0x08: return m_ide_sector_count_val;
-        case 0x0C: return m_ide_sector_num_val;
-        case 0x10: return m_ide_cylinder_low_val;
-        case 0x14: return m_ide_cylinder_high_val;
-        case 0x18: return m_ide_drive_head_val;
-        case 0x1C: return ide_status();
-        default:   return 0;
-        }
-    }
-
-    void ide_write(uint32_t offset, uint8_t val) {
-        uint32_t reg = offset - ide_data_offset;
-        switch (reg) {
-        case 0x00:
-            m_ide_data_reg = (m_ide_data_reg & 0xFF00) | val;
-            if (m_ide_writing) ide_capture_write_byte(val, 0);
-            break;
-        case 0x01:
-            m_ide_data_reg = (m_ide_data_reg & 0x00FF) |
-                             (static_cast<uint16_t>(val) << 8);
-            if (m_ide_writing) ide_capture_write_byte(val, 1);
-            break;
-        case 0x08: m_ide_sector_count_val = val; break;
-        case 0x0C: m_ide_sector_num_val   = val; break;
-        case 0x10: m_ide_cylinder_low_val  = val; break;
-        case 0x14: m_ide_cylinder_high_val = val; break;
-        case 0x18: m_ide_drive_head_val    = val; break;
-        default: break;
-        }
-    }
-
+    // ---- IDE Controller register state ----------------------------------
     uint8_t ide_status() const {
         uint8_t status = ide_status_rdy;
         if (m_ide_busy) status |= ide_status_bsy;
@@ -1232,114 +955,44 @@ private:
 
     // ---- Rendering -------------------------------------------------------
 
+    // The framebuffer is plain RAM in the low bank: 320x240, two BGR-555
+    // pixels per 32-bit word, 640 bytes per row, at page 0x30000 or 0x58000
+    // depending on vram_control bit 2. There is no ASIC register and no
+    // blitter - the game software-renders straight into this RAM.
     void render_frame() {
         if (!m_video) return;
-
-        // KI framebuffer: typically 400x254 or 512x256. Use 512x256 RGBA.
-        constexpr int fb_width  = 512;
-        constexpr int fb_height = 256;
-        m_framebuffer.resize(fb_width * fb_height * 4);
-
-        bool got_frame = false;
-
-        // Log frame info for debugging
-        static int frame_log_count = 0;
-        if ((m_frame_count % 30) == 0 && frame_log_count < 5) {
-            fprintf(stderr, "[KI] Frame %d: asic_fb_base=0x%08X blit_count=%d\n",
-                    m_frame_count, m_asic_fb_base, m_blit_count);
-            ++frame_log_count;
-        }
-
-        // Priority 1: ASIC-configured framebuffer address.
-        if (m_asic_fb_base != 0 &&
-            m_asic_fb_base < ram_size - fb_width * fb_height * 2) {
-            got_frame = scan_asic_framebuffer(fb_width, fb_height);
-        }
-
-        // Priority 2: Last large blit destination.
-        if (!got_frame && m_blit_count > 0 && m_blit_dst != 0) {
-            uint32_t blit_h = (m_blit_size >> 16) & 0xFFFF;
-            uint32_t blit_w = m_blit_size & 0xFFFF;
-            if (m_blit_dst < ram_size && blit_w > 0 && blit_h > 0) {
-                int w = static_cast<int>(std::min(blit_w,
-                    static_cast<uint32_t>(fb_width)));
-                int h = static_cast<int>(std::min(blit_h,
-                    static_cast<uint32_t>(fb_height)));
-                got_frame = scan_rgb565_at(m_blit_dst, w, h);
+        constexpr int W = video_width, H = video_height;
+        m_framebuffer.resize(W * H * 4);
+        const uint32_t base = (m_vram_control & 0x04) ? video_fb_page1
+                                                      : video_fb_page0;
+        bool any = false;
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; x += 2) {
+                const uint32_t off = base + y * 640 + x * 2;
+                uint32_t word = 0;
+                if (off + 3 < m_ram.size()) word = load_le<uint32_t>(&m_ram[off]);
+                if (word) any = true;
+                put_bgr555(x, y, static_cast<uint16_t>(word & 0x7FFF));
+                put_bgr555(x + 1, y, static_cast<uint16_t>((word >> 16) & 0x7FFF));
             }
         }
-
-        // Priority 3: Scan known framebuffer locations.
-        if (!got_frame) {
-            got_frame = scan_ram_for_fb(fb_width, fb_height);
-        }
-
-        // Priority 4: Diagnostic display.
-        if (!got_frame) {
-            draw_debug_frame(fb_width, fb_height);
-        }
-
-        m_video->present_rgba_frame(m_framebuffer.data(), fb_width, fb_height);
+        if (!any) draw_debug_frame(W, H);
+        m_video->present_rgba_frame(m_framebuffer.data(), W, H);
         ++m_frame_count;
     }
 
-    bool scan_asic_framebuffer(int fb_width, int fb_height) {
-        if (m_asic_fb_base == 0 || m_asic_fb_base >= ram_size) return false;
-        bool any_pixel = false;
-        for (int y = 0; y < fb_height; ++y) {
-            for (int x = 0; x < fb_width; ++x) {
-                uint32_t src_offset = m_asic_fb_base +
-                    y * (m_asic_fb_stride != 0 ? m_asic_fb_stride : fb_width * 2) +
-                    x * 2;
-                if (src_offset + 1 >= ram_size) continue;
-                uint16_t rgb565 = (static_cast<uint16_t>(m_ram[src_offset]) << 8) |
-                                   m_ram[src_offset + 1];
-                uint32_t dst = (y * fb_width + x) * 4;
-                decode_rgb565_to_fb(rgb565, dst);
-                if (rgb565 != 0) any_pixel = true;
-            }
-        }
-        return any_pixel;
-    }
-
-    bool scan_ram_for_fb(int fb_width, int fb_height) {
-        // KI stores its framebuffer at various addresses. Try common locations.
-        static constexpr uint32_t fb_candidates[] = {
-            0x00000000,   // base of RAM
-            0x00100000,   // 1 MB
-            0x00200000,   // 2 MB
-            0x00300000,   // 3 MB
-            0x00400000,   // 4 MB
-            0x00500000,   // 5 MB
-        };
-
-        for (uint32_t fb_base : fb_candidates) {
-            if (scan_rgb565_at(fb_base, fb_width, fb_height))
-                return true;
-        }
-        return false;
-    }
-
-    bool scan_rgb565_at(uint32_t fb_base, int fb_width, int fb_height) {
-        if (fb_base + fb_width * fb_height * 2 > ram_size) return false;
-        int nonzero = 0;
-        for (int y = 0; y < fb_height; ++y) {
-            for (int x = 0; x < fb_width; ++x) {
-                uint32_t src = fb_base + (y * fb_width + x) * 2;
-                uint16_t rgb565 = (static_cast<uint16_t>(m_ram[src]) << 8) |
-                                   m_ram[src + 1];
-                uint32_t dst = (y * fb_width + x) * 4;
-                decode_rgb565_to_fb(rgb565, dst);
-                if (rgb565 != 0) ++nonzero;
-            }
-        }
-        return nonzero > (fb_width * fb_height / 10);
-    }
-
-    void decode_rgb565_to_fb(uint16_t rgb565, uint32_t dst) {
-        m_framebuffer[dst]     = static_cast<uint8_t>((rgb565 >> 11) << 3);
-        m_framebuffer[dst + 1] = static_cast<uint8_t>(((rgb565 >> 5) & 0x3F) << 2);
-        m_framebuffer[dst + 2] = static_cast<uint8_t>((rgb565 & 0x1F) << 3);
+    // BGR-555 -> RGBA8888 (R at bits 0-4, G 5-9, B 10-14; MAME BGR_555).
+    void put_bgr555(int x, int y, uint16_t v) {
+        const uint32_t dst = static_cast<uint32_t>(y * video_width + x) * 4;
+        if (dst + 3 >= m_framebuffer.size()) return;
+        const uint8_t r = static_cast<uint8_t>((v & 0x1F) << 3 | (v & 0x1F) >> 2);
+        const uint8_t g = static_cast<uint8_t>(((v >> 5) & 0x1F) << 3 |
+                                               ((v >> 5) & 0x1F) >> 2);
+        const uint8_t b = static_cast<uint8_t>(((v >> 10) & 0x1F) << 3 |
+                                               ((v >> 10) & 0x1F) >> 2);
+        m_framebuffer[dst] = r;
+        m_framebuffer[dst + 1] = g;
+        m_framebuffer[dst + 2] = b;
         m_framebuffer[dst + 3] = 0xFF;
     }
 
@@ -1513,9 +1166,15 @@ private:
     midway_rom_set m_game_set{midway_rom_set::unknown};
 
     // Memory.
-    std::vector<uint8_t> m_ram;
+    std::vector<uint8_t> m_ram;         // 512 KiB low bank (framebuffer here)
+    std::vector<uint8_t> m_ram1;        // 8 MiB main work RAM at 0x08000000
     std::vector<uint8_t> m_boot_rom;
-    std::vector<uint8_t> m_game_roms;   // u10-u36 game ROMs (4MB)
+    std::vector<uint8_t> m_dcs_rom;     // u10-u36 DCS sound data (not CPU bus)
+    uint32_t m_vram_control{};          // bit 2 selects the framebuffer page
+    uint32_t m_sound_control{};
+    uint32_t m_sound_data{};
+    uint32_t m_sound_reset{};
+    int m_ide_access_count{};           // any IDE register touch (first_ide)
 
     // CHD / IDE.
     std::string m_disc_path;
@@ -1529,6 +1188,7 @@ private:
     uint8_t m_ide_cylinder_low_val{};
     uint8_t m_ide_cylinder_high_val{};
     uint8_t m_ide_drive_head_val{};
+    uint8_t m_ide_features{};
     bool m_ide_busy{};
     bool m_ide_drq{};
     bool m_ide_writing{};
@@ -1560,6 +1220,7 @@ private:
     uint32_t m_p1_inputs{0xFFFFFFFFu};
     uint32_t m_p2_inputs{0xFFFFFFFFu};
     uint32_t m_ki_dip_switches{0xFFFFFFFFu};  // All off by default
+    uint32_t m_ki_volume{0xFFFFFFFFu};        // volume/analog port, unused
     bool m_service_pressed{};
     bool m_test_mode{};
     uint32_t m_coin_counter{};
