@@ -166,7 +166,7 @@ public:
                 fprintf(stderr, "%02X ", m_boot_rom[reset_offset + i]);
             fprintf(stderr, "\n");
             if (reset_offset + 3 < m_boot_rom.size()) {
-                uint32_t op = read32_be(&m_boot_rom[reset_offset]);
+                uint32_t op = read32_le(&m_boot_rom[reset_offset]);
                 fprintf(stderr, "[KI]   First instruction: 0x%08X\n", op);
             }
         }
@@ -199,15 +199,29 @@ public:
                     }
                     return false;
                 };
-                if (!try_raw(m_disc_path)) {
-                    // Replace .chd -> .raw
-                    std::string raw_path = m_disc_path;
-                    if (raw_path.size() > 4 &&
-                        raw_path.compare(raw_path.size() - 4, 4, ".chd") == 0) {
-                        raw_path.replace(raw_path.size() - 4, 4, ".raw");
-                        try_raw(raw_path);
-                    }
+                // The extracted sibling FIRST, and only then the path itself.
+                // A .chd that chd_open refused is a compressed container, and
+                // every byte of it is wrong as a disk image - but it is a file
+                // over 512 bytes, so treating the path as raw always "works"
+                // and silently feeds the boot ROM garbage. That failure is
+                // invisible: the drive answers every read, the CPU runs, and
+                // the game simply never blits. Prefer the file chdman was told
+                // to produce; fall back to the path itself only when it is not
+                // a .chd at all (someone pointing straight at a .raw or .img).
+                bool opened = false;
+                std::string raw_path = m_disc_path;
+                if (raw_path.size() > 4 &&
+                    raw_path.compare(raw_path.size() - 4, 4, ".chd") == 0) {
+                    raw_path.replace(raw_path.size() - 4, 4, ".raw");
+                    opened = try_raw(raw_path);
+                    if (!opened)
+                        fprintf(stderr,
+                                "[KI]   No extracted image at %s - run: "
+                                "chdman extracthd -i %s -o %s\n",
+                                raw_path.c_str(), m_disc_path.c_str(),
+                                raw_path.c_str());
                 }
+                if (!opened) try_raw(m_disc_path);
             }
             if (!m_chd_info) {
                 fprintf(stderr, "[KI]   No usable disc image\n");
@@ -468,9 +482,9 @@ private:
                     m_pci_entry_phys = phys;
                     // Inject GPU-done flags into RAM.
                     if (0x5AD4 < ram_size)
-                        write32_be(&m_ram[0x5AD4], 0x00000001u);
+                        write32_le(&m_ram[0x5AD4], 0x00000001u);
                     if (0x6268 < ram_size)
-                        write32_be(&m_ram[0x6268], 0x00000001u);
+                        write32_le(&m_ram[0x6268], 0x00000001u);
                     return 0x03E00008;  // JR $ra on entry
                 }
                 // Still in PCI: NOP for the delay slot and any subsequent
@@ -491,11 +505,11 @@ private:
         }
 
         if (addr < ram_size)
-            return read32_be(&m_ram[addr]);
+            return read32_le(&m_ram[addr]);
         if (addr >= boot_rom_base && addr < boot_rom_base + boot_rom_size)
-            return read32_be(&m_boot_rom[addr - boot_rom_base]);
+            return read32_le(&m_boot_rom[addr - boot_rom_base]);
         if (addr >= game_rom_base && addr < game_rom_base + game_rom_size)
-            return read32_be(&m_game_roms[addr - game_rom_base]);
+            return read32_le(&m_game_roms[addr - game_rom_base]);
         if (addr >= io_base && addr < io_base + io_size)
             return io_read32(addr);
         return 0;
@@ -503,7 +517,7 @@ private:
 
     void bus_write32(uint32_t addr, uint32_t val) {
         if (addr < ram_size) {
-            write32_be(&m_ram[addr], val);
+            write32_le(&m_ram[addr], val);
             return;
         }
         if (addr >= io_base && addr < io_base + io_size) {
@@ -517,11 +531,11 @@ private:
         if (phys >= 0x10000000 && phys < 0x1F000000)
             return 0xFFFF;  // open bus, as MAME's unmap_value_high
         if (addr < ram_size)
-            return read16_be(&m_ram[addr & ~1u]);
+            return read16_le(&m_ram[addr & ~1u]);
         if (addr >= boot_rom_base && addr < boot_rom_base + boot_rom_size)
-            return read16_be(&m_boot_rom[(addr & ~1u) - boot_rom_base]);
+            return read16_le(&m_boot_rom[(addr & ~1u) - boot_rom_base]);
         if (addr >= game_rom_base && addr < game_rom_base + game_rom_size)
-            return read16_be(&m_game_roms[(addr & ~1u) - game_rom_base]);
+            return read16_le(&m_game_roms[(addr & ~1u) - game_rom_base]);
         if (addr >= io_base && addr < io_base + io_size)
             return io_read16(addr);
         return 0;
@@ -529,7 +543,7 @@ private:
 
     void bus_write16(uint32_t addr, uint16_t val) {
         if (addr < ram_size) {
-            write16_be(&m_ram[addr & ~1u], val);
+            write16_le(&m_ram[addr & ~1u], val);
             return;
         }
         if (addr >= io_base && addr < io_base + io_size) {
@@ -759,32 +773,31 @@ private:
 
     uint16_t io_read16(uint32_t addr) {
         uint32_t word = io_read32(addr & ~3u);
-        // Big-endian: byte 0 at bits 31:24, byte 1 at 23:16, etc.
-        return static_cast<uint16_t>((addr & 2) ? (word & 0xFFFF)
-                                                : (word >> 16));
+        // Little-endian: the low half-word lives at the lower address.
+        return static_cast<uint16_t>((addr & 2) ? (word >> 16)
+                                                : (word & 0xFFFF));
     }
 
     void io_write16(uint32_t addr, uint16_t val) {
         uint32_t aligned = addr & ~3u;
-        if (addr & 2) {
-            // Write to lower 16 bits, preserve upper 16.
-            uint32_t current = io_read32(aligned);
+        uint32_t current = io_read32(aligned);
+        if (addr & 2)
+            io_write32(aligned, (current & 0x0000FFFFu) |
+                                (static_cast<uint32_t>(val) << 16));
+        else
             io_write32(aligned, (current & 0xFFFF0000u) | val);
-        } else {
-            io_write32(aligned, static_cast<uint32_t>(val) << 16);
-        }
     }
 
     uint8_t io_read8(uint32_t addr) {
         uint32_t word = io_read32(addr & ~3u);
-        // Big-endian: shift by byte position within the 32-bit word.
-        uint8_t shift = static_cast<uint8_t>((3 - (addr & 3)) * 8);
+        // Little-endian: byte 0 is bits 7:0.
+        uint8_t shift = static_cast<uint8_t>((addr & 3) * 8);
         return static_cast<uint8_t>(word >> shift);
     }
 
     void io_write8(uint32_t addr, uint8_t val) {
         uint32_t aligned = addr & ~3u;
-        uint8_t shift = static_cast<uint8_t>((3 - (addr & 3)) * 8);
+        uint8_t shift = static_cast<uint8_t>((addr & 3) * 8);
         uint32_t mask = ~(0xFFu << shift);
         uint32_t current = io_read32(aligned);
         io_write32(aligned, (current & mask) | (static_cast<uint32_t>(val) << shift));
@@ -1120,13 +1133,13 @@ private:
         std::vector<uint8_t> identify(512, 0);
 
         // Word 0: General configuration (0x0040 = ATA device)
-        write16_be(&identify[0], 0x0040);
+        write16_le(&identify[0], 0x0040);
 
         const uint32_t total_sectors =
             static_cast<uint32_t>(m_chd_info.logical_bytes / 512);
-        write16_be(&identify[2], 16);           // heads
-        write16_be(&identify[12], 63);          // sectors per track
-        write16_be(&identify[6], total_sectors / (16 * 63));
+        write16_le(&identify[2], 16);           // heads
+        write16_le(&identify[12], 63);          // sectors per track
+        write16_le(&identify[6], total_sectors / (16 * 63));
 
         // Words 60-61: LBA28 total sectors
         uint8_t* lba = &identify[120];
@@ -1136,7 +1149,7 @@ private:
         lba[3] = static_cast<uint8_t>(total_sectors >> 24);
 
         // Word 49: Capabilities (LBA supported)
-        write16_be(&identify[98], 0x0200);
+        write16_le(&identify[98], 0x0200);
 
         const char* model = "KI HARD DISK     ";
         for (int i = 0; i < 20; ++i)
@@ -1424,31 +1437,41 @@ private:
 
     // ---- Endian helpers ---------------------------------------------------
 
-    static uint32_t read32_be(const void* p) {
+    // Killer Instinct runs an R4600 in LITTLE-endian mode - MAME configures
+    // the CPU as R4600LE and loads the boot ROM as ROM_REGION32_LE. Read the
+    // other way round, the very first instruction at the reset vector
+    // (bytes E2 00 F0 0B = 0x0BF000E2, "j 0xBFC00388") decodes as a nonsense
+    // store, so the CPU falls through the exception vectors one word at a
+    // time and never reaches the code that talks to the drive.
+    //
+    // The ATA IDENTIFY block below shares these helpers for its own reason:
+    // its 16-bit fields are little-endian on the wire, and the guest pulls
+    // them a byte at a time through the data port.
+    static uint32_t read32_le(const void* p) {
         const uint8_t* b = static_cast<const uint8_t*>(p);
-        return (static_cast<uint32_t>(b[0]) << 24) |
-               (static_cast<uint32_t>(b[1]) << 16) |
-               (static_cast<uint32_t>(b[2]) << 8) |
-               static_cast<uint32_t>(b[3]);
+        return static_cast<uint32_t>(b[0]) |
+               (static_cast<uint32_t>(b[1]) << 8) |
+               (static_cast<uint32_t>(b[2]) << 16) |
+               (static_cast<uint32_t>(b[3]) << 24);
     }
 
-    static void write32_be(void* p, uint32_t v) {
+    static void write32_le(void* p, uint32_t v) {
         uint8_t* b = static_cast<uint8_t*>(p);
-        b[0] = static_cast<uint8_t>(v >> 24);
-        b[1] = static_cast<uint8_t>(v >> 16);
-        b[2] = static_cast<uint8_t>(v >> 8);
-        b[3] = static_cast<uint8_t>(v);
+        b[0] = static_cast<uint8_t>(v);
+        b[1] = static_cast<uint8_t>(v >> 8);
+        b[2] = static_cast<uint8_t>(v >> 16);
+        b[3] = static_cast<uint8_t>(v >> 24);
     }
 
-    static uint16_t read16_be(const void* p) {
+    static uint16_t read16_le(const void* p) {
         const uint8_t* b = static_cast<const uint8_t*>(p);
-        return static_cast<uint16_t>((b[0] << 8) | b[1]);
+        return static_cast<uint16_t>(b[0] | (b[1] << 8));
     }
 
-    static void write16_be(void* p, uint16_t v) {
+    static void write16_le(void* p, uint16_t v) {
         uint8_t* b = static_cast<uint8_t*>(p);
-        b[0] = static_cast<uint8_t>(v >> 8);
-        b[1] = static_cast<uint8_t>(v);
+        b[0] = static_cast<uint8_t>(v);
+        b[1] = static_cast<uint8_t>(v >> 8);
     }
 
     static uint64_t read64_be(const void* p) {

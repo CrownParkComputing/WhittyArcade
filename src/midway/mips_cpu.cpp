@@ -1,7 +1,7 @@
 // MIPS R4600 CPU interpreter (MIPS III ISA subset).
 //
 // Clean-room implementation targeting Killer Instinct on the Midway
-// Wolf Unit. KI runs in 32-bit kernel mode with big-endian byte order.
+// Wolf Unit. KI runs in 32-bit kernel mode, LITTLE-endian (MAME: R4600LE).
 //
 // The CPU uses unmapped kseg0 (0x80000000) and kseg1 (0xA0000000)
 // regions, which are identity-mapped to physical addresses. This means
@@ -12,7 +12,7 @@
 //   - HI/LO multiply-divide registers
 //   - Coprocessor 0: Status, Cause, EPC, Count, Compare, etc.
 //   - Branch delay slots: the instruction after a branch always executes
-//   - Big-endian byte order
+//   - Little-endian byte order
 
 #include "midway/mips_cpu.h"
 
@@ -72,7 +72,7 @@ static uint32_t to_physical(uint32_t addr) {
     return addr;
 }
 
-// ---- Memory access (big-endian) --------------------------------------------
+// ---- Memory access (little-endian; the bus layer does the byte order) ----
 
 static uint32_t mem_read32(mips_cpu* cpu, uint32_t addr) {
     addr = to_physical(addr) & ~3u;
