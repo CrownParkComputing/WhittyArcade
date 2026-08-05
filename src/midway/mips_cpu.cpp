@@ -233,6 +233,19 @@ uint32_t mips_step(mips_cpu* cpu) {
 
     const uint32_t op = mem_read32(cpu, addr);
 
+    if (getenv("KI_WATCH")) {
+        static unsigned long tw = strtoul(getenv("KI_WATCH"), nullptr, 16);
+        if (addr == tw) {
+            fprintf(stderr, "[WATCH] pc=0x%08X code: ", addr);
+            for (int i = 0; i < 8; ++i)
+                fprintf(stderr, "%08X ", mem_read32(cpu, addr + i * 4));
+            fprintf(stderr, "| v0=0x%llX a0=0x%llX a1=0x%llX\n",
+                    (unsigned long long)cpu->r[2],
+                    (unsigned long long)cpu->r[4],
+                    (unsigned long long)cpu->r[5]);
+        }
+    }
+
     // R-type fields
     const uint8_t  rs    = (op >> 21) & 0x1F;
     const uint8_t  rt    = (op >> 16) & 0x1F;
@@ -249,9 +262,13 @@ uint32_t mips_step(mips_cpu* cpu) {
     // For trap instructions, the code is in bits [15:6] of rs.
     // For branch likely, rt is the condition code.
 
-    // GPR values (r0 is always 0)
+    // GPR values (r0 is always 0). GPR/GPRU are the 32-bit views used by the
+    // word instructions; GPRD/GPRDU are the full 64-bit register for the
+    // MIPS III doubleword instructions.
     #define GPR(n) ((n) == 0 ? 0 : static_cast<int32_t>(cpu->r[n]))
     #define GPRU(n) ((n) == 0 ? 0 : cpu->r[n])
+    #define GPRD(n) ((n) == 0 ? int64_t(0) : static_cast<int64_t>(cpu->r[n]))
+    #define GPRDU(n) ((n) == 0 ? uint64_t(0) : cpu->r[n])
 
     uint32_t cycles = 1;
 
@@ -417,6 +434,46 @@ uint32_t mips_step(mips_cpu* cpu) {
             if (GPRU(rs) != GPRU(rt)) exception(cpu, 13, 0);
             break;
 
+        // ---- MIPS III doubleword (64-bit) ---------------------------------
+        // Variable shifts use the low 6 bits of rs; DADD/DSUB keep the full
+        // 64-bit result (overflow traps are omitted - KI never relies on them
+        // and the plain forms differ from DADDU/DSUBU only in that trap).
+        case 0x14: // DSLLV
+            cpu->r[rd] = GPRDU(rt) << (GPRU(rs) & 0x3F);
+            break;
+        case 0x16: // DSRLV
+            cpu->r[rd] = GPRDU(rt) >> (GPRU(rs) & 0x3F);
+            break;
+        case 0x17: // DSRAV
+            cpu->r[rd] = static_cast<uint64_t>(GPRD(rt) >> (GPRU(rs) & 0x3F));
+            break;
+        case 0x2C: // DADD
+        case 0x2D: // DADDU
+            cpu->r[rd] = GPRDU(rs) + GPRDU(rt);
+            break;
+        case 0x2E: // DSUB
+        case 0x2F: // DSUBU
+            cpu->r[rd] = GPRDU(rs) - GPRDU(rt);
+            break;
+        case 0x38: // DSLL
+            cpu->r[rd] = GPRDU(rt) << sa;
+            break;
+        case 0x3A: // DSRL
+            cpu->r[rd] = GPRDU(rt) >> sa;
+            break;
+        case 0x3B: // DSRA
+            cpu->r[rd] = static_cast<uint64_t>(GPRD(rt) >> sa);
+            break;
+        case 0x3C: // DSLL32
+            cpu->r[rd] = GPRDU(rt) << (sa + 32);
+            break;
+        case 0x3E: // DSRL32
+            cpu->r[rd] = GPRDU(rt) >> (sa + 32);
+            break;
+        case 0x3F: // DSRA32
+            cpu->r[rd] = static_cast<uint64_t>(GPRD(rt) >> (sa + 32));
+            break;
+
         default:
             break;  // Unimplemented: NOP
         }
@@ -477,7 +534,12 @@ uint32_t mips_step(mips_cpu* cpu) {
         cpu->next_pc = (cpu->pc & 0xF0000000) | (target << 2);
     }
     else if (opcode == 0x03) { // JAL
-        cpu->r[31] = static_cast<int64_t>(cpu->pc + 8);
+        // Return address is the instruction after the delay slot. cpu->pc is
+        // ALREADY the delay-slot address (last_pc+4) at execute time, so the
+        // link is last_pc+8 - the old cpu->pc+8 was last_pc+12, one instruction
+        // too far, so every jal returned PAST the instruction after it. JALR
+        // (cpu->pc+4) and BLTZAL/BGEZAL (last_pc+8) already had it right.
+        cpu->r[31] = static_cast<int64_t>(cpu->last_pc + 8);
         cpu->next_pc = (cpu->pc & 0xF0000000) | (target << 2);
     }
     // ---- BEQ / BNE (opcodes 0x04, 0x05) --------------------------------
@@ -543,6 +605,10 @@ uint32_t mips_step(mips_cpu* cpu) {
     }
     else if (opcode == 0x09) { // ADDIU
         cpu->r[rt] = sign_ext32(GPRU(rs) + static_cast<uint32_t>(simm));
+    }
+    // ---- DADDI / DADDIU (opcodes 0x18, 0x19), MIPS III 64-bit add-imm ----
+    else if (opcode == 0x18 || opcode == 0x19) { // DADDI / DADDIU
+        cpu->r[rt] = GPRDU(rs) + static_cast<uint64_t>(static_cast<int64_t>(simm));
     }
     // ---- SLTI / SLTIU (opcodes 0x0A, 0x0B) -----------------------------
     else if (opcode == 0x0A) { // SLTI
@@ -650,9 +716,51 @@ uint32_t mips_step(mips_cpu* cpu) {
         const uint32_t mask = 0xFFFFFFFFu >> shift;
         mem_write32(cpu, aligned, (word & ~mask) | ((GPRU(rt) << ((addr & 3) * 8)) & mask));
     }
+    // ---- Doubleword load/store (MIPS III, little-endian) ----------------
+    else if (opcode == 0x37) { // LD
+        const uint32_t addr = GPRU(rs) + static_cast<uint32_t>(simm);
+        const uint64_t lo = mem_read32(cpu, addr);
+        const uint64_t hi = mem_read32(cpu, addr + 4);
+        cpu->r[rt] = lo | (hi << 32);
+    }
+    else if (opcode == 0x3F) { // SD
+        const uint32_t addr = GPRU(rs) + static_cast<uint32_t>(simm);
+        mem_write32(cpu, addr, static_cast<uint32_t>(GPRDU(rt)));
+        mem_write32(cpu, addr + 4, static_cast<uint32_t>(GPRDU(rt) >> 32));
+    }
+    // Unaligned doubleword loads. Done byte-wise, which is unambiguous for
+    // little-endian: LDL fills from the addressed byte down into the high end
+    // of the register, LDR fills from the addressed byte up into the low end.
+    // The pair `ldl $x,7(b); ldr $x,0(b)` therefore loads a full unaligned
+    // doubleword - which is exactly what KI's boot self-check does.
+    else if (opcode == 0x1A) { // LDL
+        const uint32_t addr = GPRU(rs) + static_cast<uint32_t>(simm);
+        const int b = addr & 7;
+        uint64_t r = GPRDU(rt);
+        for (int i = 0; i <= b; ++i) {
+            const uint8_t byte = mem_read8(cpu, addr - i);
+            const int pos = 7 - i;
+            r = (r & ~(0xFFull << (pos * 8))) |
+                (static_cast<uint64_t>(byte) << (pos * 8));
+        }
+        cpu->r[rt] = r;
+    }
+    else if (opcode == 0x1B) { // LDR
+        const uint32_t addr = GPRU(rs) + static_cast<uint32_t>(simm);
+        const int b = addr & 7;
+        uint64_t r = GPRDU(rt);
+        for (int i = 0; i < 8 - b; ++i) {
+            const uint8_t byte = mem_read8(cpu, addr + i);
+            r = (r & ~(0xFFull << (i * 8))) |
+                (static_cast<uint64_t>(byte) << (i * 8));
+        }
+        cpu->r[rt] = r;
+    }
 
     #undef GPR
     #undef GPRU
+    #undef GPRD
+    #undef GPRDU
 
     // Timer: Count increments every cycle.
     cpu->count += cycles;

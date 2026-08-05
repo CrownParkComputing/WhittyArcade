@@ -30,6 +30,7 @@
 #include "midway/midway_chd.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -45,6 +46,10 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+// Boot-time tracing to /tmp/ki_boot.log, off unless KI_BOOT_LOG is set - the
+// per-frame file opens otherwise dominate the frame and crater the FPS.
+const bool s_ki_log = std::getenv("KI_BOOT_LOG") != nullptr;
 
 // ---- Midway Wolf Unit constants -------------------------------------------
 
@@ -130,7 +135,7 @@ public:
         m_rom_path = rom_path;
 
         fprintf(stderr, "[KI] initialize: rom_path=%s\n", rom_path.c_str());
-        { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] initialize called: rom_path=%s\n", rom_path.c_str()); fclose(f); } }
+        if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] initialize called: rom_path=%s\n", rom_path.c_str()); fclose(f); } }
 
         // Load ROMs.
         const std::string chd_dir = settings.chd_directory.empty() ?
@@ -141,7 +146,7 @@ public:
         if (!loaded) {
             m_error = loaded.error;
             fprintf(stderr, "[KI]   ROM LOAD FAILED: %s\n", loaded.error.c_str());
-            { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] ROM LOAD FAILED: %s\n", loaded.error.c_str()); fclose(f); } }
+            if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] ROM LOAD FAILED: %s\n", loaded.error.c_str()); fclose(f); } }
             return false;
         }
 
@@ -270,7 +275,7 @@ public:
         fprintf(stderr, "[KI]   Reset PC=0x%08X phys=0x%08X\n", first_pc, phys);
 
         m_initialized = true;            fprintf(stderr, "[KI] initialize OK\n");
-        { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] initialize OK\n"); fclose(f); } }
+        if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] initialize OK\n"); fclose(f); } }
         return true;
     }
 
@@ -278,19 +283,24 @@ public:
 
     void run_frame() override {
         if (!m_initialized) return;
-        { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame entry (frame=%d)\n", m_frame_count); fclose(f); } }
+        if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame entry (frame=%d)\n", m_frame_count); fclose(f); } }
 
         // Poll input once per frame.
         poll_inputs();
 
-        // Clear last frame's VBLANK pulse before running this one.
+        // Start of the active-display period: VBLANK deasserted. It is
+        // asserted partway through the frame below, so a poll loop running
+        // inside this frame actually observes the low->high edge rather than
+        // the bit only ever being set between frames (invisible to polling).
         if (m_vblank_asserted) {
             m_vblank_asserted = false;
-            mips_clear_interrupt(m_cpu, 0x04);
+            mips_clear_interrupt(m_cpu, 0x08);
         }
 
         // KI's R4600 runs at ~100 MHz; at 60 Hz that's ~1,666,667 cycles/frame.
         constexpr uint32_t cycles_per_frame = 2000000;
+        // Enter VBLANK at ~85% through the frame.
+        const uint32_t vblank_at = cycles_per_frame - cycles_per_frame / 6;
         uint32_t ran = 0;
         m_blit_count = 0;
         m_pc_trace_count = 0;
@@ -301,7 +311,7 @@ public:
         bool first_frame = (s_frame_count == 0);
         int pc_log_count = 0;
 
-        { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: starting CPU loop, cycles_per_frame=%u\n", cycles_per_frame); fclose(f); } }
+        if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: starting CPU loop, cycles_per_frame=%u\n", cycles_per_frame); fclose(f); } }
         while (ran < cycles_per_frame) {
             constexpr uint32_t trace_interval = 8000;
             if ((ran % trace_interval) == 0 && m_pc_trace_count < pc_trace_size) {
@@ -313,11 +323,18 @@ public:
             uint32_t cycles = mips_step(m_cpu);
             if (cycles == 0) {
                 // CPU halted or error
-                { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: mips_step returned 0 (halt/error) at PC=0x%08X\n", pc_before); fclose(f); } }
+                if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: mips_step returned 0 (halt/error) at PC=0x%08X\n", pc_before); fclose(f); } }
                 break;
             }
             ran += cycles;
             if (ran > 5000000) break;
+
+            // Cross into the VBLANK period mid-frame so an in-frame poll of
+            // Cause sees the edge and proceeds.
+            if (!m_vblank_asserted && ran >= vblank_at) {
+                m_vblank_asserted = true;
+                mips_set_interrupt(m_cpu, 0x08);  // IP3
+            }
 
             // Log first 10 PCs of the first frame.
             if (first_frame && pc_log_count < 10) {
@@ -335,18 +352,14 @@ public:
                     mips_last_pc(m_cpu));
         }
 
-        { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: CPU loop done, ran=%u cycles, blits=%u, PC=0x%08X\n", ran, m_blit_count, mips_last_pc(m_cpu)); fclose(f); } }
+        if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: CPU loop done, ran=%u cycles, blits=%u, PC=0x%08X\n", ran, m_blit_count, mips_last_pc(m_cpu)); fclose(f); } }
 
-        // VBLANK interrupt. MAME wires the screen's vblank to maincpu input
-        // line 0, which is hardware interrupt IP2 (cause bit 10). Pulse it
-        // once per frame: assert here, cleared at the top of the next frame.
-        m_vblank_asserted = true;
-        mips_set_interrupt(m_cpu, 0x04);  // IP2
+        // (VBLANK is asserted inside the CPU loop above, at vblank_at.)
 
         // Copy framebuffer to output.
-        { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: calling render_frame\n"); fclose(f); } }
+        if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: calling render_frame\n"); fclose(f); } }
         render_frame();
-        { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: render_frame done\n"); fclose(f); } }
+        if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI] run_frame: render_frame done\n"); fclose(f); } }
 
         // Flush NVRAM periodically (every 300 frames = ~5 seconds).
         ++m_nvram_dirty_frames;
@@ -1262,7 +1275,7 @@ private:
 std::unique_ptr<emulator_session> make_midway_session(
     std::shared_ptr<arcade_video_worker> video,
     std::shared_ptr<arcade_cabinet_state> cabinet) {
-    { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI FACTORY] make_midway_session called\n"); fclose(f); } }
+    if (s_ki_log) { FILE* f = fopen("/tmp/ki_boot.log", "a"); if (f) { fprintf(f, "[KI FACTORY] make_midway_session called\n"); fclose(f); } }
     return std::make_unique<wolfunit_session>(
         std::move(video), std::move(cabinet));
 }
