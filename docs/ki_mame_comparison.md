@@ -47,3 +47,25 @@ we run kseg0/1 unmapped, so harmless unless the game reads them back.
   don't assert per-read; (c) DCS/other handshake for attract start.
 - Next: trace whether the main loop ever calls the IDE read routine again, and
   whether it polls a state we don't satisfy.
+
+## FBNeo cross-check (finalburnneo/FBNeo: d_kinst.cpp, ide.cpp, mips3 interp)
+FBNeo has a clean non-DRC MIPS3 interpreter and a readable KI driver - a better
+structural reference than MAME's DRC core. Confirmed:
+- VBLANK = IRQ line 0 = IP2 (0x400); IDE = IRQ line 1 = IP3 (0x800). SEPARATE.
+  Our per-frame IP2+IP3 assertion was wrong; VBLANK is IP2 only, held during
+  the vblank slice; frame is DRAWN at vblank.
+- IDE raises INTRQ (IP3) via the controller on completion, and ONCE PER SECTOR
+  (ide.cpp update_transfer): after the guest reads all 512 bytes of a sector
+  the next sector loads and INTRQ re-raises. Reading the STATUS register
+  (ATA reg 7) clears INTRQ. Our model read the whole transfer at once with a
+  single IRQ - an interrupt-driven loader stalls after sector 1.
+- DCS is a full second CPU (ADSP-2100, Dcs2kRun), 2 IRQs/frame; sound status
+  bit1 at port 0x90 = Dcs2kControlRead() & 0x800. Our always-set stub passes
+  the handshake but plays no sound.
+Applied: VBLANK->IP2 only; IDE raises IP3 on read/identify completion and
+per-sector during the data transfer; STATUS read clears IP3.
+OPEN: with the correct model the game now waits at its IP3 (IDE) poll
+(0x8802DBC8) - the BSY/DRQ/IRQ *timing* of the read handshake still needs to
+match FBNeo's (BSY during the command, DRQ+IRQ on completion). The previous
+per-frame IP3 hack masked this. Next: model the ATA BSY phase and the exact
+raise/clear ordering from ide.cpp.

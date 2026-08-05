@@ -294,7 +294,7 @@ public:
         // the bit only ever being set between frames (invisible to polling).
         if (m_vblank_asserted) {
             m_vblank_asserted = false;
-            mips_clear_interrupt(m_cpu, 0x0C);  // IP2(vblank)+IP3
+            mips_clear_interrupt(m_cpu, 0x04);  // VBLANK = IP2 (FBNeo: VBLANK_IRQ line 0)
         }
 
         // KI's R4600 runs at ~100 MHz; at 60 Hz that's ~1,666,667 cycles/frame.
@@ -333,7 +333,7 @@ public:
             // Cause sees the edge and proceeds.
             if (!m_vblank_asserted && ran >= vblank_at) {
                 m_vblank_asserted = true;
-                mips_set_interrupt(m_cpu, 0x0C);  // IP2 (vblank, what the game polls) + IP3
+                mips_set_interrupt(m_cpu, 0x04);   // VBLANK = IP2 (IDE IP3 is raised on read completion instead)
             }
 
             // Log first 10 PCs of the first frame.
@@ -626,7 +626,9 @@ private:
         case 4: return m_ide_cylinder_low_val;
         case 5: return m_ide_cylinder_high_val;
         case 6: return m_ide_drive_head_val;
-        case 7: return ide_status();
+        case 7:  // reading the ATA status register deasserts INTRQ (clears IP3)
+            clear_ide_irq();
+            return ide_status();
         default: return 0xFFFFFFFFu;
         }
     }
@@ -659,6 +661,10 @@ private:
     // Real implementation would need full ADSP-2105 emulation.
 
     // ---- IDE Controller register state ----------------------------------
+    // The IDE controller drives interrupt line 1 = IP3 (Cause bit 11).
+    void raise_ide_irq() { if (m_cpu) mips_set_interrupt(m_cpu, 0x08); }
+    void clear_ide_irq() { if (m_cpu) mips_clear_interrupt(m_cpu, 0x08); }
+
     uint8_t ide_status() const {
         uint8_t status = ide_status_rdy;
         if (m_ide_busy) status |= ide_status_bsy;
@@ -795,6 +801,10 @@ private:
         m_ide_drq  = true;
         m_ide_busy = false;
         m_ide_error = 0;
+        // The drive raises its interrupt (IP3, IDE_IRQ line 1) when a read
+        // completes and data is ready; the game's disk loader is interrupt
+        // driven, so without this it never advances past the first sectors.
+        raise_ide_irq();
 
         if (m_ide_read_count < 4) {
             ++m_ide_read_count;
@@ -859,6 +869,15 @@ private:
         uint8_t val = m_ide_sector_buf[pos + byte_offset];
         if (byte_offset == 1) {
             m_ide_sector_pos += 2;
+            // The drive interrupts once PER SECTOR (FBNeo ide.cpp
+            // update_transfer): after the guest reads all 512 bytes of a
+            // sector, the next sector becomes ready and INTRQ is raised again.
+            // Reading a whole multi-sector transfer in one shot without the
+            // per-sector interrupt leaves an interrupt-driven loader waiting
+            // forever after the first sector.
+            if (m_ide_sector_pos < m_ide_sector_buf.size() &&
+                (m_ide_sector_pos % 512) == 0)
+                raise_ide_irq();
             if (m_ide_sector_pos >= m_ide_sector_buf.size())
                 m_ide_drq = false;
         }
@@ -891,6 +910,7 @@ private:
         for (int i = 0; i < 20; ++i)
             identify[54 + i * 2] = static_cast<uint8_t>(model[i]);
 
+        raise_ide_irq();
         m_ide_sector_buf = std::move(identify);
         m_ide_sector_pos = 0;
         m_ide_drq  = true;
