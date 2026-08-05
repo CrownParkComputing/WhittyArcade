@@ -1,6 +1,7 @@
 #include "launcher_menu.h"
 #include "menu_stick.h"
 #include "platform_paths.h"
+#include "manx_fmv.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -160,6 +161,29 @@ struct launcher_menu::implementation {
     // Rows the current list draws greyed out and refuses to open.
     std::vector<int> unavailable_rows;
 
+#ifdef MANX_HAVE_FFMPEG
+    // Video state for the cover-flow background video snap.
+    struct coverflow_video_state {
+        manx_fmv* fmv{};
+        SDL_Texture* texture{};
+        std::string path;
+        void close() {
+            if (fmv) manx_fmv_close(fmv);
+            if (texture) SDL_DestroyTexture(texture);
+            fmv = nullptr;
+            texture = nullptr;
+            path.clear();
+        }
+    };
+    coverflow_video_state cf_video;
+#endif
+    // Cover-flow animation: target index, current float position (lerped),
+    // and timestamp of the last selection change.
+    int cf_target{};
+    float cf_position{};
+    int cf_video_index{-1};
+    Uint64 cf_anim_start{};
+
     bool row_unavailable(int index) const {
         return std::find(unavailable_rows.begin(), unavailable_rows.end(),
                          index) != unavailable_rows.end();
@@ -193,8 +217,8 @@ struct launcher_menu::implementation {
         // focus every launch is a nuisance.
         const bool windowed_menu =
             compact_utility_window ||
-            (std::getenv("WHITTY_MENU_WINDOWED") &&
-             *std::getenv("WHITTY_MENU_WINDOWED") == '1');
+            (std::getenv("MANX_MENU_WINDOWED") &&
+             *std::getenv("MANX_MENU_WINDOWED") == '1');
         if (!compact_utility_window) {
             const SDL_DisplayMode* desktop =
                 SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
@@ -241,7 +265,7 @@ struct launcher_menu::implementation {
             SDL_RaiseWindow(window);
         }
 
-        for (const std::filesystem::path& path : whitty_platform::font_paths()) {
+        for (const std::filesystem::path& path : manx_platform::font_paths()) {
             font = TTF_OpenFont(path.string().c_str(), 21);
             if (font) {
                 // The banner pages draw their board or publisher name large.
@@ -265,6 +289,9 @@ struct launcher_menu::implementation {
     }
 
     ~implementation() {
+#ifdef MANX_HAVE_FFMPEG
+        cf_video.close();
+#endif
         for (SDL_Gamepad* controller : controllers)
             SDL_CloseGamepad(controller);
         if (hint_font) TTF_CloseFont(hint_font);
@@ -566,7 +593,12 @@ struct launcher_menu::implementation {
             bool paging = false,
             const launcher_menu::cover* banner = nullptr,
             bool info = false,
-            bool list = false) {
+            bool list = false,
+            bool marquee = false,
+            bool coverflow = false,
+            std::function<std::string(int)> video_for = {},
+            std::function<launcher_menu::game_media(int)> media_for = {},
+            const std::vector<std::string>* item_descriptions = nullptr) {
         const int total = static_cast<int>(items.size());
         std::vector<int> chosen;
         if (total == 0) return chosen;
@@ -588,8 +620,20 @@ struct launcher_menu::implementation {
         // something relative to where it was.
         menu_stick sticks;
         bool redraw = true;
+        // Cover-flow initialisation
+        Uint64 description_started = 0;
+        if (coverflow) {
+            cf_target = initial_selection;
+            cf_position = static_cast<float>(initial_selection);
+            cf_anim_start = 0;
+            cf_video_index = -1;
+#ifdef MANX_HAVE_FFMPEG
+            cf_video.close();
+#endif
+        }
         for (;;) {
             const grid_metrics metrics = measure_grid(grid_top, list);
+            if (!coverflow) {
             const int row = selected / metrics.columns;
             if (row < first_row) first_row = row;
             if (row >= first_row + metrics.rows_visible)
@@ -598,11 +642,48 @@ struct launcher_menu::implementation {
                 (total + metrics.columns - 1) / metrics.columns;
             first_row = std::clamp(
                 first_row, 0, std::max(0, total_rows - metrics.rows_visible));
+            }
 
             if (redraw) {
+                if (coverflow) {
+                    // Smooth lerp toward current selection
+                    constexpr float lerp_speed = 0.18f;
+                    cf_position += (static_cast<float>(selected) -
+                                    cf_position) * lerp_speed;
+                    if (std::abs(cf_position -
+                                 static_cast<float>(selected)) < 0.005f)
+                        cf_position = static_cast<float>(selected);
+                    // Reset scroll when selection changes
+                    if (selected != cf_video_index) {
+                        description_started = SDL_GetTicks();
+                    }
+                    // Load video when selection changes
+#ifdef MANX_HAVE_FFMPEG
+                    if (selected != cf_video_index) {
+                        cf_video.close();
+                        cf_video_index = selected;
+                        if (video_for) {
+                            std::string path = video_for(selected);
+                            if (!path.empty()) {
+                                cf_video.path = path;
+                                cf_video.fmv = manx_fmv_open(
+                                    path.c_str(), logical_width,
+                                    logical_height,
+                                    manx_fmv_format_rgba);
+                            }
+                        }
+                    }
+#endif
+                    draw_coverflow(title, description, items, selected,
+                                   textures, cover_for, back_label, chosen,
+                                   wanted, item_descriptions,
+                                   SDL_GetTicks() - description_started,
+                                   media_for);
+                } else {
                 draw_grid(title, description, items, selected, first_row,
                           metrics, textures, cover_for, back_label, chosen,
                           wanted, paging, banner, info);
+                }
                 redraw = false;
             }
 
@@ -730,6 +811,9 @@ struct launcher_menu::implementation {
             }
         }
         destroy_grid_textures(textures);
+#ifdef MANX_HAVE_FFMPEG
+        cf_video.close();
+#endif
         return chosen;
     }
 
@@ -1024,6 +1108,375 @@ struct launcher_menu::implementation {
         SDL_RenderPresent(renderer);
     }
 
+    // ---- Cover-flow carousel (Retrobat/EmulationStation style) ----------
+    //
+    // Single-game detail view: all artwork for the selected game composited
+    // on one page with full-screen video background. Left/right slides the
+    // entire view horizontally to the next/previous game with a smooth lerp.
+    void draw_coverflow(
+            const std::string&, const std::string&,
+            const std::vector<std::string>& items, int selected,
+            std::map<int, grid_texture>& textures,
+            const std::function<launcher_menu::cover(int)>& cover_for,
+            const std::string& back_label,
+            const std::vector<int>& chosen, int wanted,
+            const std::vector<std::string>* item_descriptions,
+            Uint64 description_elapsed_ms,
+            const std::function<launcher_menu::game_media(int)>& media_for) {
+
+        const int total = static_cast<int>(items.size());
+
+        // Background fill
+        SDL_SetRenderDrawColor(renderer, 4, 8, 16, 255);
+        SDL_RenderClear(renderer);
+
+        // Decode and render video as full-screen dimmed background
+#ifdef MANX_HAVE_FFMPEG
+        if (cf_video.fmv) {
+            int new_frame = 0;
+            if (manx_fmv_update(cf_video.fmv, &new_frame)) {
+                if (new_frame) {
+                    const uint8_t* pixels = manx_fmv_frame(cf_video.fmv);
+                    if (pixels) {
+                        if (!cf_video.texture) {
+                            cf_video.texture = SDL_CreateTexture(
+                                renderer, SDL_PIXELFORMAT_RGBA32,
+                                SDL_TEXTUREACCESS_STREAMING,
+                                logical_width, logical_height);
+                            if (cf_video.texture)
+                                SDL_SetTextureBlendMode(cf_video.texture,
+                                                        SDL_BLENDMODE_BLEND);
+                        }
+                        if (cf_video.texture) {
+                            SDL_UpdateTexture(cf_video.texture, nullptr,
+                                              pixels, logical_width * 4);
+                        }
+                    }
+                }
+            } else {
+                // End of video: loop by reopening
+                const std::string path = cf_video.path;
+                cf_video.close();
+                cf_video.path = path;
+                cf_video.fmv = manx_fmv_open(
+                    path.c_str(), logical_width, logical_height,
+                    manx_fmv_format_rgba);
+            }
+            // Video at reduced opacity behind everything
+            if (cf_video.texture) {
+                SDL_SetTextureAlphaMod(cf_video.texture, 90);
+                const SDL_FRect full{0, 0,
+                    static_cast<float>(logical_width),
+                    static_cast<float>(logical_height)};
+                SDL_RenderTexture(renderer, cf_video.texture,
+                                  nullptr, &full);
+            }
+        }
+#endif
+
+        // Dark wash over video for legibility
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 120);
+        const SDL_FRect wash{0, 0,
+            static_cast<float>(logical_width),
+            static_cast<float>(logical_height)};
+        SDL_RenderFillRect(renderer, &wash);
+
+        // ---- Gather media for the selected game ------------------------
+        launcher_menu::game_media media;
+        if (media_for) media = media_for(selected);
+
+        // Box art texture
+        SDL_Texture* box_tex = nullptr;
+        float box_aspect = 3.0f / 4.0f;
+        if (media.box_pixels && media.box_w > 0 && media.box_h > 0) {
+            box_tex = grid_texture_for(
+                textures, selected,
+                launcher_menu::cover{media.box_pixels, media.box_w,
+                                     media.box_h});
+            box_aspect = static_cast<float>(media.box_w) /
+                         static_cast<float>(media.box_h);
+        } else if (cover_for) {
+            launcher_menu::cover art = cover_for(selected);
+            if (art.pixels && art.width > 0 && art.height > 0) {
+                box_tex = grid_texture_for(textures, selected, art);
+                box_aspect = static_cast<float>(art.width) /
+                             static_cast<float>(art.height);
+            }
+        }
+
+        // Marquee/logo texture
+        SDL_Texture* marquee_tex = nullptr;
+        if (media.marquee_pixels && media.marquee_w > 0 &&
+            media.marquee_h > 0) {
+            const int marquee_id = selected + 10000;
+            marquee_tex = grid_texture_for(
+                textures, marquee_id,
+                launcher_menu::cover{media.marquee_pixels, media.marquee_w,
+                                     media.marquee_h});
+        }
+
+        // Screenshot/fan art texture
+        SDL_Texture* snap_tex = nullptr;
+        if (media.snap_pixels && media.snap_w > 0 && media.snap_h > 0) {
+            const int snap_id = selected + 20000;
+            snap_tex = grid_texture_for(
+                textures, snap_id,
+                launcher_menu::cover{media.snap_pixels, media.snap_w,
+                                     media.snap_h});
+        }
+
+        // ---- Slide animation offset ------------------------------------
+        const float slide_offset =
+            (cf_position - static_cast<float>(selected)) *
+            static_cast<float>(logical_width);
+
+        // ---- Layout constants (percentage-based) -----------------------
+        constexpr float box_left_pct = 0.08f;
+        constexpr float snap_right_pct = 0.92f;
+        constexpr float centre_x_pct = 0.50f;
+        const int box_max_h = logical_height - 220;
+        const int snap_max_h = logical_height - 280;
+        const int marquee_max_w = static_cast<int>(logical_width * 0.38f);
+        const int marquee_max_h = 80;
+
+        // ---- Box art on the left ---------------------------------------
+        if (box_tex) {
+            int box_w = box_max_h > 0 ?
+                std::min(static_cast<int>(box_max_h * box_aspect),
+                         static_cast<int>(logical_width * 0.32f)) :
+                static_cast<int>(logical_width * 0.28f);
+            int box_h = box_w > 0 ?
+                static_cast<int>(box_w / box_aspect) : box_max_h;
+            int box_x = static_cast<int>(
+                logical_width * box_left_pct - box_w / 2 +
+                slide_offset);
+            int box_y = (logical_height - box_h) / 2 - 20;
+
+            // Drop shadow
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
+            const SDL_FRect box_shadow{
+                static_cast<float>(box_x + 4),
+                static_cast<float>(box_y + 4),
+                static_cast<float>(box_w),
+                static_cast<float>(box_h)};
+            SDL_RenderFillRect(renderer, &box_shadow);
+
+            // Box art
+            SDL_SetTextureAlphaMod(box_tex, 255);
+            const SDL_FRect box_dest{
+                static_cast<float>(box_x), static_cast<float>(box_y),
+                static_cast<float>(box_w), static_cast<float>(box_h)};
+            SDL_RenderTexture(renderer, box_tex, nullptr, &box_dest);
+
+            // Subtle border
+            SDL_SetRenderDrawColor(renderer, 40, 50, 65, 180);
+            SDL_RenderRect(renderer, &box_dest);
+        }
+
+        // ---- Screenshot/fan art on the right ----------------------------
+        if (snap_tex && media.snap_w > 0) {
+            const float snap_aspect = static_cast<float>(media.snap_w) /
+                                      static_cast<float>(media.snap_h);
+            int snap_w = snap_max_h > 0 ?
+                static_cast<int>(snap_max_h * snap_aspect) :
+                static_cast<int>(logical_width * 0.30f);
+            snap_w = std::min(snap_w,
+                              static_cast<int>(logical_width * 0.35f));
+            int snap_h = snap_w > 0 ?
+                static_cast<int>(snap_w / snap_aspect) : snap_max_h;
+            int snap_x = static_cast<int>(
+                logical_width * snap_right_pct - snap_w +
+                slide_offset);
+            int snap_y = (logical_height - snap_h) / 2 - 40;
+
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
+            const SDL_FRect snap_shadow{
+                static_cast<float>(snap_x + 4),
+                static_cast<float>(snap_y + 4),
+                static_cast<float>(snap_w),
+                static_cast<float>(snap_h)};
+            SDL_RenderFillRect(renderer, &snap_shadow);
+
+            SDL_SetTextureAlphaMod(snap_tex, 230);
+            const SDL_FRect snap_dest{
+                static_cast<float>(snap_x), static_cast<float>(snap_y),
+                static_cast<float>(snap_w), static_cast<float>(snap_h)};
+            SDL_RenderTexture(renderer, snap_tex, nullptr, &snap_dest);
+
+            SDL_SetRenderDrawColor(renderer, 40, 50, 65, 180);
+            SDL_RenderRect(renderer, &snap_dest);
+        }
+
+        // ---- Marquee/logo centred above title --------------------------
+        if (marquee_tex && media.marquee_w > 0) {
+            const float mq_aspect = static_cast<float>(media.marquee_w) /
+                                    static_cast<float>(media.marquee_h);
+            int mq_w = marquee_max_w;
+            int mq_h = static_cast<int>(mq_w / mq_aspect);
+            if (mq_h > marquee_max_h) {
+                mq_h = marquee_max_h;
+                mq_w = static_cast<int>(mq_h * mq_aspect);
+            }
+            int mq_x = static_cast<int>(
+                logical_width * centre_x_pct - mq_w / 2 + slide_offset);
+            int mq_y = logical_height - 180;
+
+            SDL_SetTextureAlphaMod(marquee_tex, 240);
+            const SDL_FRect mq_dest{
+                static_cast<float>(mq_x), static_cast<float>(mq_y),
+                static_cast<float>(mq_w), static_cast<float>(mq_h)};
+            SDL_RenderTexture(renderer, marquee_tex, nullptr, &mq_dest);
+        }
+
+        // ---- Title (large, centred) ------------------------------------
+        const std::string& game_name =
+            items[static_cast<std::size_t>(selected)];
+        rendered_text heading = make_text(
+            renderer, title_font ? title_font : font,
+            game_name, accent,
+            logical_width - horizontal_margin * 2);
+        int title_y = logical_height - 125 +
+            (marquee_tex && media.marquee_w > 0 ? 25 : -20);
+        draw_text(renderer, heading,
+                  static_cast<int>(logical_width * centre_x_pct -
+                                   heading.width / 2 + slide_offset),
+                  title_y);
+        int heading_h = heading.height;
+        destroy_text(heading);
+
+        // ---- Metadata row ----------------------------------------------
+        std::string meta;
+        if (!media.publisher.empty()) meta += media.publisher;
+        if (!media.year.empty()) {
+            if (!meta.empty()) meta += "  ·  ";
+            meta += media.year;
+        }
+        if (!media.players.empty()) {
+            if (!meta.empty()) meta += "  ·  ";
+            meta += media.players;
+        }
+        if (!media.board_name.empty()) {
+            if (!meta.empty()) meta += "  ·  ";
+            meta += media.board_name;
+        }
+        if (!meta.empty()) {
+            rendered_text meta_text = make_text(
+                renderer, font, meta, muted,
+                logical_width - horizontal_margin * 4);
+            draw_text(renderer, meta_text,
+                      static_cast<int>(logical_width * centre_x_pct -
+                                       meta_text.width / 2 + slide_offset),
+                      title_y + heading_h + 6);
+            heading_h = heading_h + meta_text.height + 6;
+            destroy_text(meta_text);
+        }
+
+        // ---- Description text ------------------------------------------
+        std::string selected_description;
+        if (item_descriptions && selected >= 0 &&
+            selected < static_cast<int>(item_descriptions->size())) {
+            bool spacing = false;
+            for (unsigned char character :
+                 (*item_descriptions)[static_cast<std::size_t>(selected)]) {
+                if (std::isspace(character)) {
+                    spacing = !selected_description.empty();
+                    continue;
+                }
+                if (spacing) selected_description.push_back(' ');
+                spacing = false;
+                selected_description.push_back(static_cast<char>(character));
+            }
+        }
+        const int desc_y = title_y + heading_h + 8;
+        if (!selected_description.empty()) {
+            const int desc_width = static_cast<int>(logical_width * 0.45f);
+            rendered_text line = make_text(
+                renderer, font, selected_description, muted, desc_width);
+            int offset = 0;
+            const int travel = std::max(0, line.width - desc_width);
+            if (travel > 0 && description_elapsed_ms > 0) {
+                constexpr Uint64 hold_ms = 2200;
+                constexpr Uint64 end_hold_ms = 1100;
+                constexpr Uint64 pixels_per_second = 36;
+                const Uint64 travel_ms =
+                    static_cast<Uint64>(travel) * 1000 / pixels_per_second;
+                const Uint64 cycle = hold_ms + travel_ms + end_hold_ms;
+                const Uint64 phase = description_elapsed_ms % cycle;
+                if (phase > hold_ms)
+                    offset = static_cast<int>(std::min<Uint64>(
+                        travel,
+                        (phase - hold_ms) * pixels_per_second / 1000));
+            }
+            const SDL_Rect clip{
+                static_cast<int>(logical_width * centre_x_pct -
+                                 desc_width / 2 + slide_offset),
+                desc_y, desc_width,
+                std::max(line.height + 2, 24)};
+            SDL_SetRenderClipRect(renderer, &clip);
+            draw_text(renderer, line,
+                      static_cast<int>(logical_width * centre_x_pct -
+                                       desc_width / 2 + slide_offset - offset),
+                      desc_y);
+            SDL_SetRenderClipRect(renderer, nullptr);
+            destroy_text(line);
+        }
+
+        // ---- Navigation arrows (subtle, at sides) -----------------------
+        SDL_SetRenderDrawColor(renderer, 70, 208, 255, 80);
+        const int arrow_y = logical_height / 2;
+        const int left_x = horizontal_margin;
+        for (int i = 0; i < 10; ++i) {
+            const int offset = 5 - i;
+            SDL_RenderLine(renderer,
+                static_cast<float>(left_x + i * 2),
+                static_cast<float>(arrow_y + offset),
+                static_cast<float>(left_x + i * 2),
+                static_cast<float>(arrow_y - offset));
+        }
+        const int right_x = logical_width - horizontal_margin;
+        for (int i = 0; i < 10; ++i) {
+            const int offset = 5 - i;
+            SDL_RenderLine(renderer,
+                static_cast<float>(right_x - i * 2),
+                static_cast<float>(arrow_y + offset),
+                static_cast<float>(right_x - i * 2),
+                static_cast<float>(arrow_y - offset));
+        }
+
+        // ---- Position indicator dots -----------------------------------
+        {
+            const int dot_count = std::min(total, 20);
+            const int dot_spacing = 14;
+            const int dot_y = logical_height - 42;
+            const int dot_start = (logical_width -
+                dot_count * dot_spacing) / 2;
+            for (int dot = 0; dot < dot_count; ++dot) {
+                const int game_index = dot * total / dot_count;
+                const bool lit = game_index == selected;
+                const int dot_x = dot_start + dot * dot_spacing;
+                SDL_SetRenderDrawColor(renderer,
+                    lit ? accent.r : 40,
+                    lit ? accent.g : 46,
+                    lit ? accent.b : 56,
+                    255);
+                fill_disc(dot_x, dot_y, lit ? 4 : 2,
+                    lit ? accent :
+                    SDL_Color{40, 46, 56, 255});
+            }
+        }
+
+        // ---- Hints -----------------------------------------------------
+        std::vector<hint> hints{{"", "Browse"}};
+        hints.push_back({"A", wanted > 0 ?
+            "Hold (" + std::to_string(chosen.size()) + " of " +
+                std::to_string(wanted) + ")" : std::string("Play")});
+        if (wanted <= 0) hints.push_back({"Y", "View"});
+        hints.push_back({"B", back_label});
+        draw_hints(hints, list_bottom + 18);
+        draw_status_chip();
+        SDL_RenderPresent(renderer);
+    }
+
     void draw_frame(const std::string& title,
                     const std::string& description,
                     const std::vector<std::string>& rows, int selected,
@@ -1117,7 +1570,7 @@ struct launcher_menu::implementation {
         SDL_RenderFillRect(renderer, &rule);
 
         rendered_text name = make_text(
-            renderer, title_font ? title_font : font, "WHITTY ARCADE", accent);
+            renderer, title_font ? title_font : font, "MANX", accent);
         draw_text(renderer, name, (logical_width - name.width) / 2,
                   logical_height / 2 - 118);
         destroy_text(name);
@@ -2212,7 +2665,11 @@ int launcher_menu::select_grid(
         const std::string& back_label, int initial_selection,
         std::function<cover(int)> cover_for, std::function<bool()> tick,
         std::function<bool()> interrupt, bool paging, const cover* banner,
-        bool info, bool list_view) {
+        bool info, bool list_view, bool marquee_view,
+        bool coverflow_view,
+        std::function<std::string(int)> video_for,
+        std::function<game_media(int)> media_for,
+        const std::vector<std::string>* item_descriptions) {
     // No window means no artwork; the text selector is the honest fallback.
     if (!m_impl->ready())
         return fallback_select(title, description, items, back_label,
@@ -2221,7 +2678,9 @@ int launcher_menu::select_grid(
     const std::vector<int> chosen =
         m_impl->run_grid(title, description, items, back_label,
                          initial_selection, cover_for, tick, 0, interrupt,
-                         paging, banner, info, list_view);
+                         paging, banner, info, list_view, marquee_view,
+                         coverflow_view, video_for, media_for,
+                         item_descriptions);
     return chosen.empty() ? -1 : chosen.front();
 }
 
@@ -2304,6 +2763,32 @@ std::optional<input_binding> launcher_menu::capture_binding(
                                    controller_instance, allow_inherit);
 }
 
+
+int launcher_menu::select_modes(const std::string& title,
+                              const std::string& description,
+                              const std::vector<mode_card>& cards,
+                              const std::string& back_label,
+                              int initial_selection,
+                              std::function<bool()> interrupt,
+                              std::function<bool()> tick) {
+    if (cards.empty()) return -1;
+
+    std::vector<std::string> items;
+    std::vector<int> unavailable;
+    for (int i = 0; i < static_cast<int>(cards.size()); ++i) {
+        items.push_back(cards[i].title);
+        if (cards[i].unavailable) unavailable.push_back(i);
+    }
+
+    if (!m_impl->ready()) {
+        return fallback_select(title, description, items, back_label,
+                               initial_selection);
+    }
+    SDL_SetWindowTitle(m_impl->window, title.c_str());
+    SDL_RaiseWindow(m_impl->window);
+    return m_impl->select(title, description, items, back_label,
+                          initial_selection, interrupt, unavailable);
+}
 
 int launcher_menu::show_scoreboard(
     const std::string& back_label, const std::string& description, int count,

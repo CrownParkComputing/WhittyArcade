@@ -1,5 +1,6 @@
 #include "rom_library.h"
 #include "game_plugin_host.h"
+#include "native_title_library.h"
 
 #include "arcade_catalog.h"
 #include "arcade_settings.h"
@@ -10,6 +11,8 @@
 #include "namco/namco_rom.h"
 #include "platform_paths.h"
 #include "sega/system16b/system16b_rom.h"
+#include "taito/taitoz/taitoz_rom.h"
+#include "midway/midway_rom.h"
 #include "namco/system22/system22_rom.h"
 #include "system246_rom.h"
 #include "xbox360_rom.h"
@@ -47,7 +50,7 @@ std::string normalized_path(const fs::path& path) {
 }
 
 fs::path data_root() {
-    const fs::path root = whitty_platform::data_root();
+    const fs::path root = manx_platform::data_root();
     return root.empty() ? fs::current_path() : root;
 }
 
@@ -88,7 +91,7 @@ constexpr std::array collection_aliases{
     "ridgera28", "virtua_formula", "virtua_fighter",
     "star_wars_arcade", "wing_war",
     // Merged collections name the archive after the PARENT set; the games
-    // WhittyArcade ships from inside them can be a specific revision with a
+    // MANX ships from inside them can be a specific revision with a
     // different short name (manxtt.zip holds the Twin-mode manxttc).
     "manxtt",
 };
@@ -222,7 +225,7 @@ bool chd_extension(const fs::path& path) {
 
 bool known_collection_filename(const fs::path& path) {
     if (chd_extension(path))
-        return lower(path.filename().string()) == "rrv1-a.chd";
+        return lower(path.filename().string()) == "rrv1-a.chd" || lower(path.filename().string()) == "kinst.chd" || lower(path.filename().string()) == "kinst2.chd";
     const std::string stem = lower(path.stem().string());
     const auto& games = supported_rom_sets();
     if (std::any_of(games.begin(), games.end(),
@@ -287,14 +290,14 @@ void collect_package_candidates(const fs::path& directory, int depth,
 std::string rom_library_path() {
     const emulator_settings settings = load_settings();
     return settings.rom_directory.empty() ?
-        (data_root() / "WhittyArcade" / "roms").string() :
+        (data_root() / "MANX" / "roms").string() :
         normalized_path(settings.rom_directory);
 }
 
 std::string chd_library_path() {
     const emulator_settings settings = load_settings();
     return settings.chd_directory.empty() ?
-        (data_root() / "WhittyArcade" / "chd").string() :
+        (data_root() / "MANX" / "chd").string() :
         normalized_path(settings.chd_directory);
 }
 
@@ -369,7 +372,7 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
     };
 
     // Extracted sets are valid loader inputs too. Common ROM roots usually
-    // contain games directly, while WhittyArcade's durable library groups
+    // contain games directly, while MANX's durable library groups
     // them below a board directory. Probe only those two shallow layouts so
     // an extracted game's large media tree is never walked as a set of
     // independent candidates.
@@ -423,7 +426,7 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
     {
         // Overridable so tests can point it at an empty path and stay isolated
         // from the machine's real PCSX2 arcade tree.
-        const char* s246_env = std::getenv("WHITTY_SYSTEM246_ACGAME_ROOT");
+        const char* s246_env = std::getenv("MANX_SYSTEM246_ACGAME_ROOT");
         const fs::path s246_roms(s246_env && *s246_env ? s246_env :
                                  "/home/jon/pcsx2x6/build/bin/roms");
         std::error_code s246_ec;
@@ -574,15 +577,10 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
     // already found, exactly as the System 246 pass above does for .acgame
     // manifests. Overridable so a test can point it at an empty path.
     {
-        const char* xbox_env = std::getenv("WHITTY_XBOX360_GAME_ROOT");
+        const char* xbox_env = std::getenv("MANX_XBOX360_GAME_ROOT");
         std::vector<fs::path> roots;
         if (xbox_env != nullptr && *xbox_env != '\0') {
             roots.emplace_back(xbox_env);
-        } else {
-            const char* home = std::getenv("HOME");
-            if (home != nullptr && *home != '\0')
-                roots.push_back(fs::path(home) / "Downloads" /
-                                "xbla-recomp-suite" / "games");
         }
         for (const fs::path& root : roots) {
             std::error_code xbox_error;
@@ -610,15 +608,10 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
     // them by their header, and dedupe by set. Overridable so a test can point
     // it at a fixture instead of the machine's downloads.
     {
-        const char* package_env = std::getenv("WHITTY_XBOX360_PACKAGE_ROOT");
+        const char* package_env = std::getenv("MANX_XBOX360_PACKAGE_ROOT");
         std::vector<fs::path> roots;
         if (package_env != nullptr && *package_env != '\0') {
             roots.emplace_back(package_env);
-        } else {
-            const char* home = std::getenv("HOME");
-            if (home != nullptr && *home != '\0')
-                roots.push_back(fs::path(home) / "Downloads");
-            roots.push_back(fs::path(rom_library_path()) / "xbox360");
         }
         std::vector<fs::path> candidates;
         for (const fs::path& root : roots)
@@ -645,6 +638,47 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
                            plugin->publisher});
     }
 
+    // Converted Xbox 360 titles. Like a plugin, there is nothing for the player
+    // to go and find: the workbench already recorded which owned game each was
+    // converted from, and the library refused any whose game had moved. The
+    // path offered is that game, which is what the session hands the runtime.
+    for (const rom_set_manifest& manifest : supported_rom_sets()) {
+        if (manifest.board != arcade_board_type::xbox360) continue;
+        const native_title* title = find_native_title(manifest.short_name);
+        if (title == nullptr) continue;
+        const std::string source =
+            title->packaged() ? title->package_path : title->xex_path;
+        const std::string normalized = normalized_path(source);
+        if (!seen_paths.insert(normalized).second) continue;
+        // "recomp" rather than "converted": what makes these different from
+        // every other entry is that the title's own code was recompiled ahead
+        // of time into a native binary, and that is the word this project uses
+        // for it everywhere else.
+        std::string label = manifest.display_name;
+        label += "  (recomp";
+        // Whether its assets have been imported, because nothing else shows it:
+        // a recompiled title plays from the owned package either way, so an
+        // imported and a never-imported title are indistinguishable at the menu.
+        const imported_assets imported = imported_assets_for(title->short_name);
+        if (imported.any()) {
+            label += ", imported ";
+            label += std::to_string(imported.sounds);
+            label += " sound";
+            if (imported.sounds != 1) label += "s";
+            if (imported.artwork != 0) {
+                label += " + ";
+                label += std::to_string(imported.artwork);
+                label += " art";
+            }
+        } else {
+            label += ", not imported";
+        }
+        label += ")";
+        if (normalized == normalized_current) label += "  [current]";
+        choices.push_back({normalized, std::move(label),
+                           arcade_board_type::xbox360, ""});
+    }
+
     std::sort(choices.begin(), choices.end(),
               [](const rom_choice& left, const rom_choice& right) {
                   if (left.board != right.board) return left.board < right.board;
@@ -661,6 +695,16 @@ rom_audit_result audit_rom_path(const std::string& path) {
     if (const discovered_game* plugin = find_plugin_game(path))
         return {true, plugin->short_name, "Installed game plugin."};
 
+    // Likewise a converted title. The ROM loader describes the shape the
+    // ORIGINAL console game was dumped in, and refuses a copy that does not
+    // match - but a conversion is only offered here because the workbench
+    // recorded a binary that runs against this exact file and it was checked to
+    // still be present. Geometry Wars is the case in point: the loader expects
+    // it extracted, this copy is a package, and the converted binary plays it
+    // perfectly well either way.
+    if (const native_title* converted = find_native_title_for_game(path))
+        return {true, converted->short_name, "Converted native title."};
+
     // System 246/256 collection games are ".acgame" manifests with no catalog
     // entry -- the board boots any of them, so there is nothing per-title to
     // look up. Audit them against the manifest's own file list instead of
@@ -675,7 +719,7 @@ rom_audit_result audit_rom_path(const std::string& path) {
     }
     const identified_archive identified = identify_archive(fs::path(path));
     if (!identified.manifest)
-        return {false, {}, "Archive is not a supported WhittyArcade set."};
+        return {false, {}, "Archive is not a supported MANX set."};
     const rom_set_manifest& manifest = *identified.manifest;
     if (!manifest.working)
         return {false, manifest.short_name,
@@ -749,9 +793,14 @@ rom_audit_result audit_rom_path(const std::string& path) {
                                    return value != 0 && value != 0xff;
                                });
         };
+        // Dynamite Dux and Wonder Boy III have no uPD7759 sample chip at
+        // all, so demanding sample data of them reported a complete set as
+        // broken. Ask the loader which sets actually carry samples.
+        const bool wants_samples =
+            system16b::system16b_rom_loader::set_has_sample_rom(loaded.set);
         valid = static_cast<bool>(loaded) && populated(loaded.roms.sprite_gfx) &&
                 populated(loaded.roms.sound_prog) &&
-                populated(loaded.roms.sound_data);
+                (!wants_samples || populated(loaded.roms.sound_data));
         loader_error = loaded.error;
         if (!valid && loader_error.empty())
             loader_error = "Gameplay ROMs were found, but sprite or "
@@ -771,6 +820,20 @@ rom_audit_result audit_rom_path(const std::string& path) {
         loader_error = loaded.error;
         break;
     }
+    case arcade_board_type::taito_z: {
+        const taitoz::taitoz_rom_load_result loaded =
+            taitoz::taitoz_rom_loader::load(path);
+        valid = static_cast<bool>(loaded);
+        loader_error = loaded.error;
+        break;
+    }
+    case arcade_board_type::midway: {
+        const midway_rom_load_result loaded =
+            midway_rom_loader::load(path, chd_library_path());
+        valid = static_cast<bool>(loaded);
+        loader_error = loaded.error;
+        break;
+    }
     }
     if (!valid) {
         if (loader_error.empty()) loader_error = "ROM audit failed.";
@@ -784,7 +847,7 @@ rom_audit_result audit_rom_path(const std::string& path) {
 
 std::string required_rom_sets_text() {
     std::ostringstream text;
-    text << "Use current MAME ZIP/CHD files. WhittyArcade keeps them "
+    text << "Use current MAME ZIP/CHD files. MANX keeps them "
             "unchanged; merged, split and non-merged layouts are accepted.\n";
     for (const arcade_board_descriptor& board : arcade_boards()) {
         text << '\n' << board.display_name << ":\n";
@@ -793,6 +856,29 @@ std::string required_rom_sets_text() {
             text << "  " << manifest.short_name << " - "
                  << manifest.display_name;
             if (!manifest.working) text << " [not working]";
+            // A recompiled title is not a ROM set and nothing else in this
+            // listing says so: without it, an entry that needs no ROM at all
+            // reads exactly like one whose ROM is missing.
+            const native_title* recomp = find_native_title(manifest.short_name);
+            if (recomp != nullptr) {
+                text << "  [recomp]";
+                text << "\n    Native port: " << recomp->binary_path;
+                text << "\n    Plays from: "
+                     << (recomp->packaged() ? recomp->package_path
+                                            : recomp->xex_path);
+                // Stated for every recompiled title, including the ones with
+                // nothing imported. A title plays from the owned game whether
+                // or not its assets have been taken out, so silence here would
+                // leave the two indistinguishable.
+                const imported_assets imported =
+                    imported_assets_for(recomp->short_name);
+                text << "\n    Imported: ";
+                if (imported.any())
+                    text << imported.sounds << " sound(s), "
+                         << imported.artwork << " artwork file(s)";
+                else
+                    text << "nothing yet";
+            }
             if (manifest.split_parent[0] != '\0')
                 text << "\n    Split parent: " << manifest.split_parent;
             if (manifest.extra_archives[0] != '\0')
