@@ -294,7 +294,7 @@ public:
         // the bit only ever being set between frames (invisible to polling).
         if (m_vblank_asserted) {
             m_vblank_asserted = false;
-            mips_clear_interrupt(m_cpu, 0x08);
+            mips_clear_interrupt(m_cpu, 0x0C);  // IP2(vblank)+IP3
         }
 
         // KI's R4600 runs at ~100 MHz; at 60 Hz that's ~1,666,667 cycles/frame.
@@ -333,7 +333,7 @@ public:
             // Cause sees the edge and proceeds.
             if (!m_vblank_asserted && ran >= vblank_at) {
                 m_vblank_asserted = true;
-                mips_set_interrupt(m_cpu, 0x08);  // IP3
+                mips_set_interrupt(m_cpu, 0x0C);  // IP2 (vblank, what the game polls) + IP3
             }
 
             // Log first 10 PCs of the first frame.

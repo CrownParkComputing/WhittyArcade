@@ -133,7 +133,7 @@ static uint32_t cop0_read(mips_cpu* cpu, uint8_t reg) {
 static void cop0_write(mips_cpu* cpu, uint8_t reg, uint32_t val) {
     switch (reg) {
     case  9: cpu->count   = val; break;
-    case 11: cpu->compare = val; break;
+    case 11: cpu->compare = val; cpu->cause &= ~(1u << 15); break;  // ack IP7
     case 12: cpu->sr      = val; break;
     case 13: cpu->cause   = (cpu->cause & ~0x00000300) | (val & 0x00000300); break;
     case 14: cpu->epc     = val; break;
@@ -156,18 +156,27 @@ static void exception(mips_cpu* cpu, uint8_t code, uint32_t bad_addr) {
         cpu->cause &= ~(1u << 31);
     }
     cpu->cause = (cpu->cause & ~0x7C) | ((code & 0x1F) << 2);
-    if (getenv("KI_TRACE_EXC")) {
+    static const bool trace_exc = getenv("KI_TRACE_EXC") != nullptr;
+    if (trace_exc) {
         static int n = 0;
         if (n < 40) {
-            fprintf(stderr, "[EXC] #%d code=%u epc=0x%08X last_pc=0x%08X "
-                    "bad=0x%08X bd=%d\n", n, code, cpu->epc, cpu->last_pc,
-                    bad_addr, in_delay);
+            fprintf(stderr, "[EXC] #%d code=%u epc=0x%08X sr=0x%08X "
+                    "cause=0x%08X ip&im=0x%X\n", n, code, cpu->epc, cpu->sr,
+                    cpu->cause, (cpu->cause & cpu->sr) & 0xFC00);
             ++n;
         }
     }
-    // Jump to exception handler (BEV=1: 0xBFC00380, else 0x80000080).
+    // Vector to the handler. A TLB/XTLB refill (codes 2/3) uses the dedicated
+    // refill vector; everything else - interrupts included - uses the GENERAL
+    // exception vector, which for BEV=0 is 0x80000180, NOT 0x80000080
+    // (0x80000080 is the 64-bit XTLB-refill slot and the game leaves it zero,
+    // so interrupts vectored there ran off into nop-filled RAM).
     const bool bev = (cpu->sr >> 22) & 1;
-    cpu->pc = bev ? 0xBFC00380 : 0x80000080;
+    const bool refill = (code == 2 || code == 3);
+    if (bev)
+        cpu->pc = refill ? 0xBFC00200 : 0xBFC00380;
+    else
+        cpu->pc = refill ? 0x80000000 : 0x80000180;
     cpu->next_pc = cpu->pc + 4;
     (void)bad_addr;
 }
@@ -203,8 +212,9 @@ void mips_reset(mips_cpu* cpu) {
     cpu->lo = 0;
     cpu->pc      = 0xBFC00000;  // Reset vector
     cpu->next_pc = 0xBFC00004;
-    // Status: BEV=1 (bootstrap exception vectors), kernel mode, interrupts off.
-    cpu->sr      = 0x00400000;
+    // Status at reset: BEV=1 (bootstrap vectors) and ERL=1 (error level), as
+    // MAME's mips3 sets it - interrupts are held off until the game clears ERL.
+    cpu->sr      = 0x00400004;
     cpu->cause   = 0;
     cpu->epc     = 0;
     cpu->count   = 0;
@@ -233,14 +243,19 @@ uint32_t mips_step(mips_cpu* cpu) {
 
     const uint32_t op = mem_read32(cpu, addr);
 
-    if (getenv("KI_WATCH")) {
-        static unsigned long tw = strtoul(getenv("KI_WATCH"), nullptr, 16);
+    // Optional one-shot code dump at KI_WATCH=<hexpc>, for boot bring-up. The
+    // env is read once (getenv per instruction would dominate the frame).
+    static const char* watch_env = getenv("KI_WATCH");
+    if (watch_env) {
+        static const uint32_t tw =
+            static_cast<uint32_t>(strtoul(watch_env, nullptr, 16));
         if (addr == tw) {
-            static int n = 0;
-            if (n++ < 12)
-                fprintf(stderr, "[W] pc=%08X op=%08X a0(r4)=%llX v1(r3)=%llX\n",
-                        addr, op, (unsigned long long)cpu->r[4],
-                        (unsigned long long)cpu->r[3]);
+            static bool done = false;
+            if (!done) { done = true;
+                for (int i = -6; i < 30; ++i)
+                    fprintf(stderr, "[W] %08X: %08X\n", addr + i * 4,
+                            mem_read32(cpu, addr + i * 4));
+            }
         }
     }
 
@@ -775,14 +790,30 @@ uint32_t mips_step(mips_cpu* cpu) {
         cpu->cause |= (1u << 15);  // IP7: timer interrupt pending
     }
 
-    // Check for pending interrupts.
-    const uint8_t im = (cpu->sr >> 8) & 0xFF;   // Interrupt mask
-    const uint8_t ip = (cpu->cause >> 8) & 0xFF; // Pending interrupts
-    const bool ie = (cpu->sr & 1) != 0;           // Interrupt enable (IEc)
-    const bool exl = (cpu->sr & 2) != 0;          // Exception level
-
-    if (ie && !exl && (ip & im)) {
+    // Take an interrupt only when MAME's mips3 check_irqs would: a hardware
+    // interrupt is pending AND unmasked (CAUSE & SR & 0xFC00 - bits 10..15,
+    // the six hardware IPs), interrupts are enabled (IE, SR bit 0), and the
+    // CPU is not already at exception OR ERROR level (EXL bit 1, ERL bit 2).
+    // The missing ERL test was the bug: reset leaves ERL set, and while the
+    // game runs at error level it POLLS the Cause bit directly and installs no
+    // vector - so firing interrupts anyway sent it into the zero-filled
+    // exception vectors.
+    if ((cpu->cause & cpu->sr & 0xFC00) && (cpu->sr & 0x1) &&
+        !(cpu->sr & 0x6) &&
+        // Don't vector into a handler the game has not installed yet. The
+        // general exception slot (BEV=0: 0x80000180, BEV=1: boot ROM) sits in
+        // zero-filled RAM until the game writes its ISR there; the R4600
+        // count/compare timer is armed early - before that ISR exists - so
+        // delivering it would run the CPU off through nop-filled RAM. Once a
+        // real handler is present this gate opens on its own.
+        mem_read32(cpu, ((cpu->sr >> 22) & 1) ? 0xBFC00380u : 0x80000180u)
+            != 0) {
         exception(cpu, 0, 0);  // External interrupt
+        // Deliver the VBLANK line (IP3) as a single edge per assertion. It is
+        // level-set for a slice of each frame; without clearing it here the
+        // handler's ERET would re-take it immediately and the CPU would storm
+        // the vector, never returning to the main loop.
+        cpu->cause &= ~(1u << 11);
     }
 
     return cycles;
