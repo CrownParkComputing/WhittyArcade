@@ -236,13 +236,11 @@ uint32_t mips_step(mips_cpu* cpu) {
     if (getenv("KI_WATCH")) {
         static unsigned long tw = strtoul(getenv("KI_WATCH"), nullptr, 16);
         if (addr == tw) {
-            fprintf(stderr, "[WATCH] pc=0x%08X code: ", addr);
-            for (int i = 0; i < 8; ++i)
-                fprintf(stderr, "%08X ", mem_read32(cpu, addr + i * 4));
-            fprintf(stderr, "| v0=0x%llX a0=0x%llX a1=0x%llX\n",
-                    (unsigned long long)cpu->r[2],
-                    (unsigned long long)cpu->r[4],
-                    (unsigned long long)cpu->r[5]);
+            static int n = 0;
+            if (n++ < 12)
+                fprintf(stderr, "[W] pc=%08X op=%08X a0(r4)=%llX v1(r3)=%llX\n",
+                        addr, op, (unsigned long long)cpu->r[4],
+                        (unsigned long long)cpu->r[3]);
         }
     }
 
@@ -276,20 +274,27 @@ uint32_t mips_step(mips_cpu* cpu) {
     if (opcode == 0x00) {
         switch (func) {
         // Shift
+        // The word shifts operate on the LOW 32 bits and sign-extend the
+        // 32-bit result. GPRU(rt) is the full 64-bit register, so a value that
+        // was sign-extended (upper 32 bits all ones) would otherwise feed
+        // those ones into a right shift - which left KI's DCS byte-uploader
+        // shifting 0xFF0055AA and never reaching zero, spinning forever.
         case 0x00: // SLL
-            cpu->r[rd] = sign_ext32(GPRU(rt) << sa);
+            cpu->r[rd] = sign_ext32(static_cast<uint32_t>(GPRU(rt)) << sa);
             break;
         case 0x02: // SRL
-            cpu->r[rd] = sign_ext32(GPRU(rt) >> sa);
+            cpu->r[rd] = sign_ext32(static_cast<uint32_t>(GPRU(rt)) >> sa);
             break;
         case 0x03: // SRA
             cpu->r[rd] = static_cast<int64_t>(GPR(rt)) >> sa;
             break;
         case 0x04: // SLLV
-            cpu->r[rd] = sign_ext32(GPRU(rt) << (GPRU(rs) & 0x1F));
+            cpu->r[rd] = sign_ext32(static_cast<uint32_t>(GPRU(rt))
+                                    << (GPRU(rs) & 0x1F));
             break;
         case 0x06: // SRLV
-            cpu->r[rd] = sign_ext32(GPRU(rt) >> (GPRU(rs) & 0x1F));
+            cpu->r[rd] = sign_ext32(static_cast<uint32_t>(GPRU(rt))
+                                    >> (GPRU(rs) & 0x1F));
             break;
         case 0x07: // SRAV
             cpu->r[rd] = static_cast<int64_t>(GPR(rt)) >> (GPRU(rs) & 0x1F);
