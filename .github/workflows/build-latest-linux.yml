@@ -1,0 +1,106 @@
+name: Build latest Linux
+
+# A one-click "give me the newest Linux build" trigger. Run it from the Actions
+# tab (workflow_dispatch), and it also runs on every push to main. Unlike the
+# CachyOS CI artifact - which needs a login to download and expires - this
+# publishes the executable to a rolling "latest" pre-release, so the newest
+# Linux binary is always a single public download.
+#
+# Tagged versioned releases are still the release.yml workflow's job; this only
+# ever moves the one "latest" tag.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Never let two "latest" publishes race; the newer run wins.
+concurrency:
+  group: build-latest-linux
+  cancel-in-progress: true
+
+jobs:
+  build-latest:
+    runs-on: ubuntu-24.04
+    container:
+      # Build in Arch so the binary matches the rolling glibc/ABI the project
+      # targets, same base as the CachyOS CI job.
+      image: archlinux:latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel \
+            ca-certificates \
+            cmake \
+            git \
+            ninja \
+            pkgconf \
+            github-cli \
+            libglvnd \
+            mesa \
+            sdl3 \
+            sdl3_ttf \
+            openal \
+            glew \
+            zlib \
+            minizip \
+            vulkan-headers \
+            vulkan-icd-loader \
+            glslang \
+            mpg123 \
+            glm \
+            ffmpeg
+
+      - name: Check out source and submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Configure release build
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      # Only the launcher binary is needed for the download; the Moira tables
+      # are memory-heavy under parallel GCC, so keep the width modest.
+      - name: Build MANX
+        run: cmake --build build --target MANX --parallel 2
+
+      - name: Stage the Linux executable
+        run: |
+          set -euo pipefail
+          package=MANX-linux-x86_64
+          cmake -E make_directory "$package"
+          cmake -E copy build/MANX "$package/MANX"
+          cmake -E copy RELEASE_README.md "$package/README.md"
+          cmake -E copy LICENSE "$package/LICENSE.txt"
+          cmake -E copy THIRD_PARTY_NOTICES.md "$package/THIRD_PARTY_NOTICES.md"
+          strip --strip-unneeded "$package/MANX"
+          chmod +x "$package/MANX"
+          # Smoke-test that the binary actually runs.
+          "$package/MANX" --list-roms > /dev/null
+          tar -czf "$package.tar.gz" "$package"
+          sha256sum "$package.tar.gz" > "$package.tar.gz.sha256"
+
+      - name: Publish rolling "latest" pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # git inside the container distrusts the checkout owner otherwise.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # Move the single rolling tag to this commit: drop the old release and
+          # its tag, then recreate both pointing here with the fresh binary.
+          gh release delete latest --cleanup-tag --yes 2>/dev/null || true
+          gh release create latest \
+            --target "$GITHUB_SHA" \
+            --title "Latest Linux build" \
+            --notes "Automated Linux build of \`${GITHUB_SHA:0:7}\` on $(date -u +%Y-%m-%d). Pre-release: always the newest main." \
+            --prerelease \
+            MANX-linux-x86_64.tar.gz \
+            MANX-linux-x86_64.tar.gz.sha256
