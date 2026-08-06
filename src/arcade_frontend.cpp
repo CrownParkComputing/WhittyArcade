@@ -1531,6 +1531,19 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         online->set_foreground(true);
         for (;;) {
             const online_state state = online->state();
+            // The corner is set when the shelf is drawn, so on any screen
+            // that is not the shelf it kept whatever it last said - which
+            // meant signing in and then watching OFFLINE sit there, because
+            // nothing on this screen had ever updated it.
+            menu.set_status(
+                state == online_state::error
+                    ? online->status_text()
+                    : (online->signed_in()
+                           ? (online->account_email().empty()
+                                  ? std::string("ONLINE")
+                                  : "ONLINE  " + online->account_email())
+                           : std::string("OFFLINE")),
+                online->signed_in());
             std::string description = online->status_text();
             if (state == online_state::online ||
                 state == online_state::in_lobby) {
