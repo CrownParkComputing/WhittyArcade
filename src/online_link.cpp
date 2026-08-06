@@ -203,6 +203,18 @@ json parse_or_empty(const std::string& text) {
     return parsed.is_discarded() ? json::object() : parsed;
 }
 
+// A field path naming a Firebase uid.
+//
+// Firestore requires an unquoted path segment to match [a-zA-Z_][a-zA-Z_0-9]*
+// and a uid may start with a digit, so the segment has to be backtick-quoted
+// or the write is refused outright - which is what happened to every member
+// entry: HTTP 400, and a lobby that listed nobody in it including its own
+// host. The backticks are percent-encoded because this travels in a query
+// string.
+std::string member_field_path(const std::string& uid) {
+    return "members.%60" + uid + "%60";
+}
+
 std::string field_text(const json& document, const char* name) {
     const auto found = document.find(name);
     if (found == document.end() || !found->is_string()) return {};
@@ -652,8 +664,8 @@ void online_link::run() {
                     update["fields"]["members"]["mapValue"]["fields"] = json::object();
                     call(manx_http::method::patch,
                          document_url("lobbies/" + current_lobby) +
-                             "?updateMask.fieldPaths=members." +
-                             credential.machine_id,
+                             "?updateMask.fieldPaths=" +
+                             member_field_path(credential.uid),
                          update.dump(), true);
                 }
                 current_lobby.clear();
@@ -1154,8 +1166,8 @@ void online_link::run() {
             // anybody else, but anybody may add themselves to a lobby they
             // can see - so this reads the roster, appends itself if it is
             // not already there, and writes both together.
-            std::string mask = "?updateMask.fieldPaths=members." +
-                               credential.uid +
+            std::string mask = "?updateMask.fieldPaths=" +
+                               member_field_path(credential.uid) +
                                "&updateMask.fieldPaths=updatedAt";
             if (!joined_roster) {
                 const manx_http::response before =
