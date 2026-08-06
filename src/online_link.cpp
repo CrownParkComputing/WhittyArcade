@@ -481,6 +481,52 @@ void online_link::run() {
         return manx_cloud::documents_root() + "/" + path;
     };
 
+    // Firestore's queries are a different endpoint and a different shape
+    // from fetching one document: a POST to :runQuery, answered with an
+    // array of {document: ...} whose rows sometimes carry no document at all
+    // - keep-alives, to be skipped rather than parsed.
+    const auto run_query = [&](const json& structured) {
+        std::vector<json> found;
+        const manx_http::response answer = call(
+            manx_http::method::post,
+            manx_cloud::documents_root() + ":runQuery",
+            json{{"structuredQuery", structured}}.dump(), true);
+        if (!answer.ok()) return found;
+        const json rows = parse_or_empty(answer.body);
+        if (!rows.is_array()) return found;
+        for (const json& row : rows) {
+            const auto document = row.find("document");
+            if (document != row.end() && document->is_object())
+                found.push_back(*document);
+        }
+        return found;
+    };
+
+    // Everyone this account has agreed to be friends with, read from the
+    // cabinet - the website is an admin view of what is going on, not how
+    // anybody uses this.
+    const auto fetch_friends = [&](const std::string& me) {
+        std::vector<std::string> uids;
+        json where;
+        where["fieldFilter"]["field"]["fieldPath"] = "members";
+        where["fieldFilter"]["op"] = "ARRAY_CONTAINS";
+        where["fieldFilter"]["value"]["stringValue"] = me;
+        json structured;
+        structured["from"] = json::array({{{"collectionId", "friendships"}}});
+        structured["where"] = where;
+        structured["limit"] = 100;
+        for (const json& document : run_query(structured)) {
+            const auto* state = online_wire::find_field(document, "state");
+            if (!state || online_wire::read_string(*state) != "accepted")
+                continue;
+            const auto* members = online_wire::find_field(document, "members");
+            if (!members) continue;
+            for (const std::string& uid : online_wire::read_strings(*members))
+                if (uid != me && !uid.empty()) uids.push_back(uid);
+        }
+        return uids;
+    };
+
     const auto sign_in_with_password = [&](const std::string& email,
                                            const std::string& password) {
         const json request{{"email", email},
