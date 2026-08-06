@@ -1640,8 +1640,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 // friends-only one is listed for the friends it was made for.
                 using card = launcher_menu::mode_card;
                 using icon = launcher_menu::mode_icon;
-                online->refresh_lobbies();
                 for (;;) {
+                    // Asked again every time round, so a lobby somebody
+                    // opens while this screen is up appears by itself. It
+                    // was fetched once, which meant the list was only ever
+                    // as fresh as the moment you walked in.
+                    online->refresh_lobbies();
                     const std::vector<online_lobby> open = online->lobbies();
                     std::vector<card> rows;
                     for (const online_lobby& entry : open) {
@@ -1912,7 +1916,13 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         // tiles in the shelf.
         {
             const bool signed_in = online && online->signed_in();
-            std::string state = signed_in ? "ONLINE" : "OFFLINE";
+            const bool broken = online &&
+                                online->state() == online_state::error;
+            // "OFFLINE" for a cabinet that signed in perfectly well and then
+            // failed at the next step is the least useful thing this could
+            // say. If something went wrong, say what.
+            std::string state = broken ? online->status_text()
+                                       : (signed_in ? "ONLINE" : "OFFLINE");
             if (signed_in && !online->display_name().empty())
                 state += "  " + online->display_name();
             const std::size_t away = online ? online->members().size() : 0;
@@ -1924,7 +1934,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 else if (away)             state += " online";
                 else                       state += " on this network";
             }
-            menu.set_status(state, signed_in || lobby_connected_at_draw);
+            menu.set_status(state, !broken &&
+                                   (signed_in || lobby_connected_at_draw));
         }
         const uint64_t online_at_draw = online ? online->revision() : 0;
         const std::function<bool()> interrupt = lobby ?
