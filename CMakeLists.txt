@@ -587,6 +587,13 @@ if(TARGET PkgConfig::CURL)
         ${CMAKE_SOURCE_DIR}/third_party/json)
     target_link_libraries(online_live_harness PRIVATE PkgConfig::CURL)
     target_compile_definitions(online_live_harness PRIVATE MANX_HAVE_CURL)
+    # Sockets are a library on Windows rather than part of libc, and this
+    # links the lobby's own networking. MANX itself has always said so; the
+    # harnesses had not, so a build where the program linked perfectly well
+    # still failed.
+    if(WIN32)
+        target_link_libraries(online_live_harness PRIVATE ws2_32)
+    endif()
 endif()
 
 add_executable(vulkan_presenter_harness
@@ -602,6 +609,9 @@ add_executable(vulkan_presenter_harness
     src/sega/model2/model2_video.cpp
 )
 target_link_libraries(vulkan_presenter_harness PRIVATE lan_peers)
+if(WIN32)
+    target_link_libraries(vulkan_presenter_harness PRIVATE ws2_32)
+endif()
 
 add_dependencies(vulkan_presenter_harness manx_shaders)
 target_include_directories(vulkan_presenter_harness PRIVATE
