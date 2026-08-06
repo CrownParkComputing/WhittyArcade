@@ -1816,12 +1816,25 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         // setting it here is enough to keep it honest.
         const int machines_here = lobby ?
             static_cast<int>(lobby->machines().size()) : 0;
-        menu.set_status(
-            lobby_connected_at_draw ?
-                std::to_string(machines_here + 1) +
-                    " machines connected - network play ready" :
-                "Waiting for another machine - no network play yet",
-            lobby_connected_at_draw);
+        // ONLINE or OFFLINE first, because that is the question, then who
+        // is about. One line in the corner of the frame rather than two
+        // tiles in the shelf.
+        {
+            const bool signed_in = online && online->signed_in();
+            std::string state = signed_in ? "ONLINE" : "OFFLINE";
+            if (signed_in && !online->display_name().empty())
+                state += "  " + online->display_name();
+            const std::size_t away = online ? online->members().size() : 0;
+            if (machines_here || away) {
+                state += "  -  " + std::to_string(machines_here + away) +
+                         (machines_here + away == 1 ? " machine"
+                                                    : " machines");
+                if (away && machines_here) state += " here and online";
+                else if (away)             state += " online";
+                else                       state += " on this network";
+            }
+            menu.set_status(state, signed_in || lobby_connected_at_draw);
+        }
         const uint64_t online_at_draw = online ? online->revision() : 0;
         const std::function<bool()> interrupt = lobby ?
             std::function<bool()>([lobby, online, lobby_connected_at_draw,
@@ -1868,97 +1881,14 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         if (!selected_platform) {
             std::vector<launcher_menu::mode_card> platform_cards;
             std::vector<std::string> platform_logo_keys;
-            platform_cards.reserve(platforms.size() + 2);
-            platform_logo_keys.reserve(platforms.size() + 2);
-            // Before anything else: is this machine on its own, on its
-            // network, or on the internet? It is the first question a player
-            // has, so it is the first card - not something to be found
-            // several screens down inside a lobby they have no reason to
-            // open yet.
-            {
-                std::string mode_state = "Not set up on this machine";
-                std::string mode_badge = "OFF";
-                bool mode_dark = true;
-                if (online) {
-                    switch (online->state()) {
-                    case online_state::disabled:
-                        mode_state = online->status_text();
-                        break;
-                    case online_state::registering:
-                        mode_state = "Creating your account";
-                        mode_badge = "WORKING";
-                        mode_dark = false;
-                        break;
-                    case online_state::signing_in:
-                        mode_state = "Signing in";
-                        mode_badge = "PAIRING";
-                        mode_dark = false;
-                        break;
-                    case online_state::online:
-                        mode_state = online->machine_name().empty()
-                            ? "Signed in - waiting for a lobby"
-                            : "Signed in as " + online->machine_name();
-                        mode_badge = "ONLINE";
-                        mode_dark = false;
-                        break;
-                    case online_state::in_lobby:
-                        mode_state = "In lobby " + online->joined_lobby();
-                        mode_badge = "ONLINE";
-                        mode_dark = false;
-                        break;
-                    case online_state::error:
-                        mode_state = online->status_text();
-                        mode_badge = "ERROR";
-                        mode_dark = false;
-                        break;
-                    default:
-                        mode_state = "Offline - sign in to play over the "
-                                     "internet";
-                        mode_badge = "OFFLINE";
-                        mode_dark = false;
-                        break;
-                    }
-                }
-                platform_cards.push_back({
-                    "Online Play", mode_state,
-                    launcher_menu::mode_icon::network, 0, mode_dark,
-                    mode_badge});
-                platform_logo_keys.push_back({});
-
-                // Who is about, before what to play. It is the first thing
-                // anybody checks on a console.
-                const std::size_t here =
-                    lobby ? lobby->machines().size() : 0;
-                const std::size_t away =
-                    online ? online->members().size() : 0;
-                std::string who = "Nobody else right now";
-                if (here || away) {
-                    who = std::to_string(here + away) + " machine" +
-                          (here + away == 1 ? "" : "s");
-                    if (here && away) who += " here and online";
-                    else if (away)    who += " online";
-                    else              who += " on this network";
-                }
-                platform_cards.push_back({
-                    "Friends", who, launcher_menu::mode_icon::local_players,
-                    0, here + away == 0,
-                    (here + away) ? "READY" : ""});
-                platform_logo_keys.push_back({});
-            }
-            // Then the lobby. It is dark until another
-            // machine is on the network and lights up by itself when one
-            // arrives, so it reads as "nobody to play with yet" rather than
-            // as a menu that does nothing.
-            platform_cards.push_back({
-                "Multiplayer",
-                lobby_connected_at_draw ?
-                    std::to_string(machines_here) + " machine" +
-                        (machines_here == 1 ? "" : "s") + " on the network" :
-                    "No other machine yet",
-                launcher_menu::mode_icon::network, 0,
-                !lobby_connected_at_draw,
-                lobby_connected_at_draw ? "READY" : "SEARCHING"});
-            platform_logo_keys.push_back({});
+            platform_cards.reserve(platforms.size());
+            platform_logo_keys.reserve(platforms.size());
+            // The shelf is publishers and nothing else. Where this machine
+            // stands - online, offline, who else is about - is drawn as a
+            // status widget in the corner of the frame instead, because it
+            // is something to glance at rather than something to scroll
+            // past on the way to a game. Online Play and Friends live in
+            // the system pages, where the things you act on live.
             for (const platform_entry& platform : platforms) {
                 platform_cards.push_back({
                     platform.name,
@@ -2014,21 +1944,10 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             }
             if (platform_choice < 0) {
                 system_menu_requested = true;
-            } else if (platform_choice == 0) {
-                show_online_screen();
-                continue;
-            } else if (platform_choice == 1) {
-                show_friends_screen();
-                if (friends_wants_lobby) {
-                    friends_wants_lobby = false;
-                    enter_network_page = true;
-                }
-                continue;
             } else {
-                // Two cards precede the shelf: online, then friends.
                 platform_cursor = platform_choice;
                 selected_platform = platforms[
-                    static_cast<std::size_t>(platform_choice - 2)].publisher;
+                    static_cast<std::size_t>(platform_choice)].publisher;
             }
         }
 

@@ -2547,6 +2547,26 @@ struct launcher_menu::implementation {
                     SDL_Color{56, 198, 255, 255});
                 draw_text(renderer, heading, horizontal_margin, 30);
                 destroy_text(heading);
+
+                // Presence belongs in a corner of the frame, not in the
+                // shelf: it is something to glance at, never something to
+                // scroll past on the way to a game.
+                if (!status_text.empty()) {
+                    rendered_text state = make_text(
+                        renderer, hint_font ? hint_font : font, status_text,
+                        status_good ? SDL_Color{150, 226, 170, 255}
+                                    : SDL_Color{176, 186, 200, 255});
+                    const int right =
+                        logical_width - horizontal_margin - state.width;
+                    SDL_SetRenderDrawColor(renderer,
+                                           status_good ? 104 : 96,
+                                           status_good ? 214 : 104,
+                                           status_good ? 132 : 118, 255);
+                    const SDL_FRect dot = frect(right - 20, 40, 10, 10);
+                    SDL_RenderFillRect(renderer, &dot);
+                    draw_text(renderer, state, right, 34);
+                    destroy_text(state);
+                }
                 if (!description.empty()) {
                     rendered_text prose = make_text(
                         renderer, desc_font ? desc_font : font, description,
