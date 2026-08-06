@@ -58,7 +58,8 @@ public:
     std::string account_email() const;
     std::string display_name() const;
 
-    void sign_out();          // forgets the credential on this machine
+    void sign_out();       // forgets the token, remembers the address
+    void forget_machine(); // wipes the credential file entirely
     bool signed_in() const;
     std::string machine_name() const;
 
@@ -87,7 +88,9 @@ public:
 
 private:
     struct command {
-        enum class kind { register_account, sign_in, sign_out, join, leave };
+        enum class kind {
+            register_account, sign_in, sign_out, forget, join, leave
+        };
         kind what;
         std::string argument;   // email, or the lobby id
         std::string secret;     // password

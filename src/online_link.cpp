@@ -317,6 +317,12 @@ void online_link::sign_out() {
     m_wake.notify_all();
 }
 
+void online_link::forget_machine() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_commands.push_back({command::kind::forget, {}, {}, {}});
+    m_wake.notify_all();
+}
+
 void online_link::join_lobby(std::string lobby_id) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::join, std::move(lobby_id), {}, {}});
@@ -382,6 +388,13 @@ uint64_t online_link::revision() const { return m_revision.load(); }
 void online_link::run() {
     online_wire::token_state token;
     stored_credential credential = load_credential();
+    // Remembered across restarts, and across signing out: the address is not
+    // a secret and retyping it on a cabinet is exactly the friction this
+    // whole screen exists to avoid.
+    if (!credential.email.empty()) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_email = credential.email;
+    }
     bool pending_auth = false;
     bool pending_create = false;
     std::string pending_email;
@@ -495,18 +508,37 @@ void online_link::run() {
                                        : "Signing in...");
                 break;
             case command::kind::sign_out:
-                forget_credential();
-                credential = {};
+                // The address stays so the next sign-in is a password and
+                // nothing else; only the token that grants access is
+                // destroyed. "Forget this machine" is what wipes it all.
+                credential.uid.clear();
+                credential.refresh_token.clear();
+                save_credential(credential);
                 token = {};
+                profile_ready = false;
+                machine_ready = false;
                 current_lobby.clear();
                 m_lobby.set_remote_peers({});
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
                     m_lobby_id.clear();
                     m_members.clear();
-                    m_machine_uid.clear();
                 }
                 publish(online_state::signed_out, "Signed out.");
+                break;
+            case command::kind::forget:
+                forget_credential();
+                credential = {};
+                token = {};
+                profile_ready = false;
+                machine_ready = false;
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_email.clear();
+                    m_display_name.clear();
+                }
+                publish(online_state::signed_out,
+                        "This machine has forgotten everything.");
                 break;
             case command::kind::join:
                 current_lobby = entry.argument;

@@ -1526,7 +1526,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
 
             std::vector<card> cards;
             std::vector<int> what;
-            enum { act_none, act_register, act_signin, act_signout, act_leave };
+            enum { act_none, act_register, act_signin, act_signout,
+                   act_forget, act_leave };
             const auto add = [&](card entry, int action) {
                 cards.push_back(std::move(entry));
                 what.push_back(action);
@@ -1541,6 +1542,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                              icon::controls), act_leave);
                 add(card("Sign Out", online->account_email(), icon::controls),
                     act_signout);
+                add(card("Forget This Machine",
+                         "Wipe the saved account from this cabinet",
+                         icon::controls), act_forget);
             } else {
                 add(card("Create Account", "Name, email and a password",
                          icon::local_players), act_register);
@@ -1584,6 +1588,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 break;
             }
             case act_signout: online->sign_out(); break;
+            case act_forget:  online->forget_machine(); break;
             case act_leave:   online->leave_lobby(); break;
             default: break;
             }
