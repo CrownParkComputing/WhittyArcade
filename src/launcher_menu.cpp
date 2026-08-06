@@ -701,25 +701,58 @@ struct launcher_menu::implementation {
         }
     }
 
-    // The network state, top right, on every browsing screen.
-    void draw_status_chip() {
-        if (status_text.empty()) return;
+    // The account button, top right, on every browsing screen.
+    //
+    // A chip rather than a line of text, because it is not only something to
+    // glance at: it is the way in and out of an account. Pressing it is
+    // signing in when nobody is and signing out when somebody is, which is
+    // why signing in is not a trip through a menu somewhere else. Returns
+    // where it was drawn, so the screen that owns it can be pointed at.
+    SDL_FRect draw_status_chip(bool focused = false) {
+        if (status_text.empty()) return frect(0, 0, 0, 0);
         TTF_Font* small = hint_font ? hint_font : font;
-        if (!small) return;
+        if (!small) return frect(0, 0, 0, 0);
         rendered_text text = make_text(
             renderer, small, status_text,
             status_good ? SDL_Color{150, 226, 170, 255}
                         : SDL_Color{168, 184, 198, 255});
-        const int width = text.width + 34;
+        const int width = text.width + 54;
         const int x = logical_width - horizontal_margin - width;
-        SDL_SetRenderDrawColor(renderer, 18, 28, 38, 235);
-        const SDL_FRect plate = frect(x, 18, width, 28);
+        const SDL_FRect plate = frect(x, 14, width, 36);
+        SDL_SetRenderDrawColor(renderer, focused ? 26 : 18,
+                               focused ? 44 : 28, focused ? 60 : 38, 240);
         SDL_RenderFillRect(renderer, &plate);
-        fill_disc(x + 15, 32, 5,
-                  status_good ? SDL_Color{104, 214, 132, 255}
-                              : SDL_Color{120, 136, 150, 255});
-        draw_text(renderer, text, x + 26, 32 - text.height / 2);
+
+        // Somebody, or the space where somebody would be. The colour carries
+        // signed-in-ness so the state reads across a room, before the words
+        // beside it are close enough to read at all.
+        const SDL_Color tone = status_good ? SDL_Color{104, 214, 132, 255}
+                                           : SDL_Color{120, 136, 150, 255};
+        const int face = x + 24;
+        fill_disc(face, 26, 5, tone);
+        SDL_SetRenderDrawColor(renderer, tone.r, tone.g, tone.b, tone.a);
+        const SDL_FRect shoulders = frect(face - 7, 33, 15, 7);
+        SDL_RenderFillRect(renderer, &shoulders);
+
+        // The ring is the whole point of making this a button: without it
+        // there is nothing on screen to say the corner can be pressed.
+        SDL_SetRenderDrawColor(renderer, focused ? 56 : 46,
+                               focused ? 198 : 62, focused ? 255 : 78, 255);
+        for (int ring = 0; ring < (focused ? 3 : 1); ++ring) {
+            const SDL_FRect edge = frect(
+                static_cast<int>(plate.x) - ring, static_cast<int>(plate.y) - ring,
+                static_cast<int>(plate.w) + ring * 2,
+                static_cast<int>(plate.h) + ring * 2);
+            SDL_RenderRect(renderer, &edge);
+        }
+        draw_text(renderer, text, x + 40, 32 - text.height / 2);
         destroy_text(text);
+        return plate;
+    }
+
+    static bool inside(const SDL_FRect& box, float x, float y) {
+        return box.w > 0 && box.h > 0 && x >= box.x && x < box.x + box.w &&
+               y >= box.y && y < box.y + box.h;
     }
 
     // ---- Cover-art grid ------------------------------------------------
@@ -2512,6 +2545,12 @@ struct launcher_menu::implementation {
         int first_row = 0;
         std::map<int, card_texture> art;
         bool redraw = true;
+        // The account chip is a card in the layout's sense: something the
+        // cursor can be on. Up from the top row reaches it, down leaves it,
+        // and pressing it is the same press as pressing anything else -
+        // which is what stops it being a keyboard shortcut nobody discovers.
+        bool corner_focused = false;
+        SDL_FRect corner{0, 0, 0, 0};
 
         // Wider than a game cover: these are names and logos, not box art.
         const int gap = 16;
@@ -2548,25 +2587,10 @@ struct launcher_menu::implementation {
                 draw_text(renderer, heading, horizontal_margin, 30);
                 destroy_text(heading);
 
-                // Presence belongs in a corner of the frame, not in the
-                // shelf: it is something to glance at, never something to
-                // scroll past on the way to a game.
-                if (!status_text.empty()) {
-                    rendered_text state = make_text(
-                        renderer, hint_font ? hint_font : font, status_text,
-                        status_good ? SDL_Color{150, 226, 170, 255}
-                                    : SDL_Color{176, 186, 200, 255});
-                    const int right =
-                        logical_width - horizontal_margin - state.width;
-                    SDL_SetRenderDrawColor(renderer,
-                                           status_good ? 104 : 96,
-                                           status_good ? 214 : 104,
-                                           status_good ? 132 : 118, 255);
-                    const SDL_FRect dot = frect(right - 20, 40, 10, 10);
-                    SDL_RenderFillRect(renderer, &dot);
-                    draw_text(renderer, state, right, 34);
-                    destroy_text(state);
-                }
+                // The account lives in a corner of the frame, not in the
+                // shelf: it is something to glance at and then act on, never
+                // something to scroll past on the way to a game.
+                corner = draw_status_chip(corner_focused);
                 if (!description.empty()) {
                     rendered_text prose = make_text(
                         renderer, desc_font ? desc_font : font, description,
@@ -2680,7 +2704,7 @@ struct launcher_menu::implementation {
 
                 rendered_text footer = make_text(
                     renderer, hint_font ? hint_font : font,
-                    std::string("ONLINE: TAB / Y    ") +
+                    std::string("ACCOUNT: TAB / Y    ") +
                     "MOVE: ARROWS / STICK    SELECT: ENTER / A    " +
                         (back_label.empty() ? std::string("BACK: ESC / B")
                                             : back_label + ": ESC / B"),
@@ -2711,9 +2735,29 @@ struct launcher_menu::implementation {
                 return result;
             };
             const auto move = [&](int by) {
+                if (corner_focused) {
+                    // Up again stays put; anything else comes back down into
+                    // the shelf, landing where the cursor was left.
+                    if (by == -columns) return;
+                    corner_focused = false;
+                    redraw = true;
+                    if (by == columns) return;
+                } else if (by == -columns && selected < columns &&
+                           !status_text.empty()) {
+                    corner_focused = true;
+                    redraw = true;
+                    return;
+                }
                 const int wanted = std::clamp(selected + by, 0, total - 1);
                 selected = wanted;
                 redraw = true;
+            };
+            // Pressing the corner and pressing a card are the same press.
+            const auto press = [&]() -> std::optional<int> {
+                if (corner_focused) return launcher_menu::shortcut;
+                if (cards[static_cast<std::size_t>(selected)].unavailable)
+                    return std::nullopt;
+                return selected;
             };
 
             if (event.type == SDL_EVENT_QUIT)
@@ -2737,8 +2781,8 @@ struct launcher_menu::implementation {
                 case SDL_SCANCODE_RETURN:
                 case SDL_SCANCODE_KP_ENTER:
                 case SDL_SCANCODE_SPACE:
-                    if (!cards[static_cast<std::size_t>(selected)].unavailable)
-                        return finish(selected);
+                    if (const std::optional<int> chosen = press())
+                        return finish(*chosen);
                     break;
                 case SDL_SCANCODE_LEFT:  move(-1); break;
                 case SDL_SCANCODE_RIGHT: move(1); break;
@@ -2756,8 +2800,8 @@ struct launcher_menu::implementation {
             if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
                 switch (event.gbutton.button) {
                 case SDL_GAMEPAD_BUTTON_SOUTH:
-                    if (!cards[static_cast<std::size_t>(selected)].unavailable)
-                        return finish(selected);
+                    if (const std::optional<int> chosen = press())
+                        return finish(*chosen);
                     break;
                 case SDL_GAMEPAD_BUTTON_EAST: return finish(-1);
                 case SDL_GAMEPAD_BUTTON_NORTH:
@@ -2767,6 +2811,25 @@ struct launcher_menu::implementation {
                 case SDL_GAMEPAD_BUTTON_DPAD_UP:    move(-columns); break;
                 case SDL_GAMEPAD_BUTTON_DPAD_DOWN:  move(columns); break;
                 default: break;
+                }
+                continue;
+            }
+            // A chip in the corner that cannot be clicked is a chip half the
+            // people looking at it will try to click.
+            if (event.type == SDL_EVENT_MOUSE_MOTION ||
+                (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                 event.button.button == SDL_BUTTON_LEFT)) {
+                float x = 0.0f;
+                float y = 0.0f;
+                const bool click = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+                SDL_RenderCoordinatesFromWindow(
+                    renderer, click ? event.button.x : event.motion.x,
+                    click ? event.button.y : event.motion.y, &x, &y);
+                const bool over = inside(corner, x, y);
+                if (click && over) return finish(launcher_menu::shortcut);
+                if (!click && over != corner_focused) {
+                    corner_focused = over;
+                    redraw = true;
                 }
                 continue;
             }

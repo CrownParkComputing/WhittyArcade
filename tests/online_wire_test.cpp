@@ -236,6 +236,54 @@ int main() {
               "genuinely broken JSON is discarded, not thrown");
     }
 
+    {
+        // Handles. The rules refuse anything that is not already lower case,
+        // and a name somebody has to punctuate exactly is a name nobody can
+        // add as a friend.
+        check(handle_for("Jon") == "jon", "a handle is lower case");
+        check(handle_for("Jon Whittingham") == "jonwhittingham",
+              "spaces are not part of a handle");
+        check(handle_for("D.J. O'Neill-2") == "djoneill2",
+              "punctuation is dropped rather than escaped");
+        check(handle_for("").empty(), "an empty name has no handle");
+        check(handle_for("!!!").empty(),
+              "a name with nothing to keep has no handle");
+        check(handle_for(std::string(40, 'a')).size() == 32,
+              "a handle is capped at the length the rules allow");
+    }
+    {
+        // The friendship id has to come out the same on both cabinets, or
+        // each side writes a document the other never reads.
+        check(friendship_id("alice", "bob") == "alice_bob",
+              "sorted already, so joined as it stands");
+        check(friendship_id("bob", "alice") == "alice_bob",
+              "the same pair from the other side is the same document");
+        check(friendship_id("2zz", "10a") == "10a_2zz",
+              "uids sort as strings, digits and all");
+    }
+    {
+        // What has appeared since last time. Asking twice about the same
+        // lobby is worse than not asking at all.
+        std::set<std::string> seen;
+        check(first_unseen({"AAA", "BBB"}, seen, false).empty(),
+              "the first sweep remembers and says nothing");
+        check(seen.size() == 2, "and it really did remember them");
+        check(first_unseen({"AAA", "BBB"}, seen, true).empty(),
+              "nothing new is nothing to say");
+        check(first_unseen({"AAA", "CCC"}, seen, true) == "CCC",
+              "a lobby that was not there before is news");
+        check(first_unseen({"AAA", "CCC"}, seen, true).empty(),
+              "and it is only news once");
+        check(first_unseen({"DDD", "EEE"}, seen, false).empty(),
+              "an unprimed sweep still swallows what it sees");
+        check(first_unseen({"DDD", "EEE"}, seen, true).empty(),
+              "so those two are never announced afterwards");
+        // A lobby with no id at all is a document whose name did not parse,
+        // and offering somebody a lobby that cannot be joined is worse than
+        // offering nothing.
+        check(first_unseen({""}, seen, true).empty(), "an id-less row is skipped");
+    }
+
     if (failures == 0) std::printf("online_wire_test: all checks passed\n");
     return failures == 0 ? 0 : 1;
 }

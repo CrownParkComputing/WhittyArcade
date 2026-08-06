@@ -14,12 +14,15 @@
 
 #include "multiplayer_lobby.h"
 #include "online_wire.h"
+#include "json.hpp"
 
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,9 +38,20 @@ struct online_lobby {
     bool stale{};
 };
 
+// Somebody this account is friends with, or has asked to be, or has been
+// asked by. One shape for all three, because the friends screen draws them
+// in one list and the difference is a badge, not a category.
+struct online_friend {
+    std::string uid;
+    std::string name;      // their display name, empty until their profile arrives
+    bool accepted{};       // false while the request is still unanswered
+    bool incoming{};       // they asked us, so this is the one to answer
+    bool online{};         // their profile says they are about
+};
+
 enum class online_state : uint8_t {
     disabled = 0,   // no libcurl, or no project configured
-    signed_out,     // configured, nobody signed in, no pairing under way
+    signed_out,     // configured, nobody signed in
     registering,    // creating an account from the cabinet
     signing_in,
     online,         // signed in, publishing presence
@@ -91,7 +105,18 @@ public:
     // Hosting one, or joining somebody else's by the code they read out.
     // An open lobby is visible to anyone signed in; a locked one is only
     // reachable by somebody who has been given the code.
-    void create_lobby(bool open_to_anyone);
+    // The game is chosen when the lobby is made, not after everybody has
+    // arrived. Somebody reading a list of lobbies is choosing what to play,
+    // and a lobby with no game in it is not something anyone can choose.
+    // `places` is how many machines it takes; `mode` is the manifest's
+    // multiplayer spelling, which the rules validate.
+    void create_lobby(bool open_to_anyone, std::string game_short_name,
+                      std::string game_display_name, int places,
+                      std::string mode);
+    // Host only: stop waiting and go. A two-place lobby does this by itself
+    // the moment the second machine is in - there is nothing left to decide
+    // and nobody to wait for.
+    void start_lobby();
     void join_lobby(std::string lobby_id);
     void leave_lobby();
     std::string joined_lobby() const;
@@ -100,6 +125,32 @@ public:
     void refresh_lobbies();
     std::vector<online_lobby> lobbies() const;
     std::vector<online_wire::member> members() const;
+
+    // What the joined lobby is for, and where it has got to.
+    std::string lobby_game() const;        // MAME short name, empty until known
+    std::string lobby_game_name() const;   // what to call it on screen
+    int lobby_places() const;
+    bool hosting_lobby() const;            // this account made it
+    bool lobby_starting() const;           // the host has said go
+
+    // A lobby that has appeared since the last time anybody looked, taken
+    // rather than read: the launcher asks somebody whether they want to join
+    // it, and asking twice about the same lobby is worse than not asking at
+    // all. Empty when there is nothing new.
+    std::optional<online_lobby> take_new_lobby();
+
+    // --- friends ----------------------------------------------------------
+    // Everyone this account is friends with, plus the requests either side
+    // has yet to answer. Refreshed on its own timer while the friends screen
+    // is up, and slowly the rest of the time, because an unanswered request
+    // is something to be told about rather than something to go and look for.
+    std::vector<online_friend> friends() const;
+    void refresh_friends();
+    // Exact match on a display name. handles/{name} exists precisely so a
+    // cabinet can find one person without being able to read out the whole
+    // directory - so there is no search-as-you-type here, and cannot be.
+    void add_friend(std::string name);
+    void answer_friend(std::string uid, bool accept);
 
     // --- what the screen draws --------------------------------------------
     online_state state() const;
@@ -112,25 +163,46 @@ private:
     struct command {
         enum class kind {
             register_account, sign_in, sign_out, forget, host, join, leave,
-            browse
+            browse, friends, befriend, answer_friend, start
         };
         kind what;
-        std::string argument;   // email, or the lobby id
-        std::string secret;     // password
-        std::string extra;      // display name
+        std::string argument;   // email, the lobby id, or the game
+        std::string secret;     // password, or the multiplayer mode
+        std::string extra;      // display name, or the game's title
+        int number{};           // places, when hosting
         bool flag{};            // stay signed in, or open to anyone
     };
 
     void run();
+    // The held-open request that carries news from the lobby service.
+    //
+    // Its own thread, because it is meant to block: it asks the service for
+    // the next thing that happens and is answered the moment it happens. On
+    // the worker's thread that wait would sit in front of the heartbeat and
+    // the friends poll, so it does not live there.
+    void watch_events();
+    // Turns the service's description of a lobby into what the launcher
+    // draws and what the lobby thread punches at.
+    void apply_lobby(const nlohmann::json& detail, bool going);
     void publish(online_state state, std::string status);
+    // Says something without claiming the machine's state changed. "No
+    // account is called that" is an answer to a question somebody asked, not
+    // a cabinet that has fallen off the internet - and publishing it as an
+    // error would grey the corner out and make the launcher believe it was
+    // signed out.
+    void announce(std::string status);
     void touch();
 
     multiplayer_lobby& m_lobby;
     std::thread m_thread;
+    std::thread m_events;
     std::atomic_bool m_stop{false};
     std::atomic<online_state> m_state{online_state::disabled};
     std::atomic_uint64_t m_revision{0};
     std::atomic_bool m_foreground{false};
+    // When the last announcement was made, so the routine heartbeat does not
+    // rub out an answer to something somebody has just asked.
+    std::atomic_int64_t m_announced_unix{0};
 
     mutable std::mutex m_mutex;
     std::condition_variable m_wake;
@@ -139,10 +211,28 @@ private:
     std::string m_email;
     std::string m_display_name;
     std::string m_lobby_id;
+    // Handed out by the lobby service when the cabinet presents its Firebase
+    // token. Empty until it has one, which is the whole test for "can this
+    // machine do lobbies yet".
+    std::string m_session;
+    int64_t m_event_seq{0};
     std::string m_machine_uid;
     std::string m_machine_name;
     std::vector<std::string> m_games;
     std::vector<online_wire::member> m_members;
     std::vector<online_lobby> m_lobbies;
+    std::vector<online_friend> m_friends;
+    std::string m_uid;          // this account, as the service knows it
+    std::string m_lobby_game;
+    std::string m_lobby_game_name;
+    int m_lobby_places{};
+    bool m_lobby_host{};
+    bool m_lobby_starting{};
+    // Settled by the service and told to every machine, so two cabinets
+    // cannot work them out separately and disagree.
+    int m_port_base{};
+    int64_t m_seed{};
+    int m_delay_frames{3};
+    std::optional<online_lobby> m_new_lobby;
     bool m_games_dirty{false};
 };

@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -189,6 +190,53 @@ inline std::vector<std::string> read_strings(const nlohmann::json& value) {
     if (values == array->end() || !values->is_array()) return list;
     for (const auto& entry : *values) list.push_back(read_string(entry));
     return list;
+}
+
+// --- names -------------------------------------------------------------
+// A display name as the handles collection spells it. The rules require
+// handle == handle.lower() and cap it at 32, and a name somebody has to
+// punctuate exactly is a name nobody can add as a friend - so this is what
+// both writing a handle and searching for one go through.
+inline std::string handle_for(const std::string& name) {
+    std::string handle;
+    for (const char character : name) {
+        const unsigned char raw = static_cast<unsigned char>(character);
+        if (raw >= 'A' && raw <= 'Z')
+            handle.push_back(static_cast<char>(raw - 'A' + 'a'));
+        else if ((raw >= 'a' && raw <= 'z') || (raw >= '0' && raw <= '9'))
+            handle.push_back(static_cast<char>(raw));
+        if (handle.size() == 32) break;
+    }
+    return handle;
+}
+
+// The document id of a friendship: the two uids, sorted and joined. The
+// rules check exactly this, which is what makes "one friendship per pair"
+// and "you cannot invent a friendship you are not in" structural rather than
+// merely validated.
+inline std::string friendship_id(const std::string& first,
+                                 const std::string& second) {
+    return first < second ? first + "_" + second : second + "_" + first;
+}
+
+// --- what has appeared since last time ---------------------------------
+// The first lobby id in `visible` that `seen` has not got, with everything
+// visible remembered on the way through. `primed` false remembers and says
+// nothing, which is the first sweep after signing in: a lobby that has been
+// open for an hour belongs in the join list, not in a question asked over
+// whatever was on screen the moment the launcher opened.
+//
+// Pure, because "asked twice about the same lobby" is a bug that would
+// otherwise only ever show up in front of two cabinets.
+inline std::string first_unseen(const std::vector<std::string>& visible,
+                                std::set<std::string>& seen, bool primed) {
+    std::string found;
+    for (const std::string& id : visible) {
+        if (id.empty()) continue;
+        if (!seen.insert(id).second) continue;
+        if (primed && found.empty()) found = id;
+    }
+    return found;
 }
 
 // --- lobby members -----------------------------------------------------
