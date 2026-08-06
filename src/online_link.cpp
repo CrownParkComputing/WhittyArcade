@@ -796,6 +796,21 @@ void online_link::run() {
                 published_games_hash.clear();   // force a first heartbeat
                 std::printf("MANX online: this machine is registered as %s\n",
                             credential.machine_id.c_str());
+                // Say so here rather than waiting for the first heartbeat to
+                // be written. A cabinet that signed itself back in on start-
+                // up was signed in, registered and working while the corner
+                // of the screen still read OFFLINE, because nothing on that
+                // path ever published the state.
+                if (m_state.load() != online_state::in_lobby) {
+                    std::string who;
+                    {
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        who = m_email;
+                    }
+                    publish(online_state::online,
+                            who.empty() ? std::string("Signed in.")
+                                        : "Signed in as " + who);
+                }
             } else {
                 publish(online_state::error,
                         explain_failure(written, "registering this machine"));
