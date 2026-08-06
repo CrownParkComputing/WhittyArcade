@@ -27,7 +27,7 @@
 enum class online_state : uint8_t {
     disabled = 0,   // no libcurl, or no project configured
     signed_out,     // configured, nobody signed in, no pairing under way
-    pairing,        // showing a code and waiting for somebody to type it
+    registering,    // creating an account from the cabinet
     signing_in,
     online,         // signed in, publishing presence
     in_lobby,       // members mirrored into the lobby as remote peers
@@ -48,13 +48,15 @@ public:
     static bool available();
 
     // --- getting an account ---------------------------------------------
-    // The cabinet has no keyboard, so it never types a credential. It signs
-    // in anonymously, shows a code, and waits for somebody to type that code
-    // on the website; the website creates a real account for this machine
-    // and hands it over. Safe to call repeatedly.
-    void start_pairing();
-    void cancel_pairing();
-    std::string pairing_code() const;
+    // Done on the cabinet, with no website and no second device. A machine
+    // is not an identity of its own any more: it is one of the machines
+    // belonging to whoever is signed in on it, and it registers itself the
+    // moment that happens.
+    void register_account(std::string display_name, std::string email,
+                          std::string password);
+    void sign_in(std::string email, std::string password);
+    std::string account_email() const;
+    std::string display_name() const;
 
     void sign_out();          // forgets the credential on this machine
     bool signed_in() const;
@@ -85,8 +87,11 @@ public:
 
 private:
     struct command {
-        enum class kind { pair, cancel_pair, sign_out, join, leave } what;
-        std::string argument;
+        enum class kind { register_account, sign_in, sign_out, join, leave };
+        kind what;
+        std::string argument;   // email, or the lobby id
+        std::string secret;     // password
+        std::string extra;      // display name
     };
 
     void run();
@@ -104,7 +109,8 @@ private:
     std::condition_variable m_wake;
     std::deque<command> m_commands;
     std::string m_status;
-    std::string m_pairing_code;
+    std::string m_email;
+    std::string m_display_name;
     std::string m_lobby_id;
     std::string m_machine_uid;
     std::string m_machine_name;

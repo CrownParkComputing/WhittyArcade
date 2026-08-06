@@ -1507,6 +1507,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // link is doing, because there is nothing here to drive: the whole
     // feature is getting two machines to exchange addresses, after which the
     // ordinary lobby screen next door does the rest.
+    // Signing in, and creating an account, on the cabinet itself. No
+    // website, no second device, no code to carry between them.
     const auto show_online_screen = [&]() {
         if (!online) return;
         using card = launcher_menu::mode_card;
@@ -1514,104 +1516,75 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         online->set_foreground(true);
         for (;;) {
             const online_state state = online->state();
-            const std::string status = online->status_text();
-            const std::string code = online->pairing_code();
-            const std::vector<online_wire::member> members = online->members();
-            const std::string joined = online->joined_lobby();
-
-            std::string description = status;
-            if (state == online_state::pairing && !code.empty()) {
-                // Read off a screen and typed on a phone, so it is shown
-                // split in the middle: eight characters in one run is where
-                // people lose their place.
-                description = "Your code is  " + code.substr(0, 4) + " - " +
-                              code.substr(4) + "\n\n" + status;
-            } else if (state == online_state::in_lobby) {
-                description = status + "\nLobby " + joined;
-                for (const online_wire::member& member : members)
-                    description += "\n  " + member.name + " - " +
-                                   (member.link.empty() ? "idle" : member.link);
-            }
-            if (const auto endpoint = lobby ? lobby->public_endpoint()
-                                            : std::nullopt) {
-                (void)endpoint;
-                if (lobby && lobby->nat() == nat_kind::symmetric)
-                    description +=
-                        "\n\nThis router gives every destination its own "
-                        "port, so other machines cannot connect directly to "
-                        "this one.";
+            std::string description = online->status_text();
+            if (state == online_state::online ||
+                state == online_state::in_lobby) {
+                description = "Signed in as " + online->account_email();
+                if (!online->display_name().empty())
+                    description = online->display_name() + " - " + description;
             }
 
             std::vector<card> cards;
             std::vector<int> what;
-            enum { online_nothing, online_pair, online_cancel, online_leave,
-                   online_sign_out };
+            enum { act_none, act_register, act_signin, act_signout, act_leave };
             const auto add = [&](card entry, int action) {
                 cards.push_back(std::move(entry));
                 what.push_back(action);
             };
 
-            switch (state) {
-            case online_state::disabled:
-                add(card("Not Available", status, icon::audit, 0, true),
-                    online_nothing);
-                break;
-            case online_state::signed_out:
-            case online_state::error:
-                add(card("Add This Machine",
-                         "Show a code to type on the MANX website",
-                         icon::cabinet_count), online_pair);
-                break;
-            case online_state::pairing:
-                // The code as the card's title, because that is what is
-                // drawn large enough to read from where a cabinet is
-                // usually standing. Disabled, because it is something to
-                // read rather than something to press.
-                if (!code.empty())
-                    add(card(code.substr(0, 4) + "-" + code.substr(4),
-                             "Type this at Cabinets, Add a cabinet",
-                             icon::network, 0, true, "CODE"), online_nothing);
-                add(card("Cancel", "Stop waiting for the website",
-                         icon::controls), online_cancel);
-                break;
-            case online_state::signing_in:
-                add(card("Signing In", status, icon::audit, 0, true),
-                    online_nothing);
-                break;
-            case online_state::online:
-                add(card("Waiting For A Lobby",
-                         "Create or join one on the MANX website",
-                         icon::audit, 0, true), online_nothing);
-                add(card("Forget This Machine",
-                         "Sign out and unpair from the account",
-                         icon::controls), online_sign_out);
-                break;
-            case online_state::in_lobby:
-                add(card("Leave Lobby", "Stop connecting to these machines",
-                         icon::controls), online_leave);
-                add(card("Forget This Machine",
-                         "Sign out and unpair from the account",
-                         icon::controls), online_sign_out);
-                break;
+            if (state == online_state::disabled) {
+                add(card("Not Available", online->status_text(), icon::audit,
+                         0, true), act_none);
+            } else if (online->signed_in()) {
+                if (!online->joined_lobby().empty())
+                    add(card("Leave Lobby", "Stop connecting to these machines",
+                             icon::controls), act_leave);
+                add(card("Sign Out", online->account_email(), icon::controls),
+                    act_signout);
+            } else {
+                add(card("Create Account", "Name, email and a password",
+                         icon::local_players), act_register);
+                add(card("Sign In", "You already have an account",
+                         icon::network), act_signin);
             }
 
-            // The same redraw-on-change idiom the lobby screen uses, driven
-            // by the link's revision counter, so an arriving machine appears
-            // instead of waiting behind a keypress.
             const uint64_t seen = online->revision();
             const std::function<bool()> changed = [online, seen] {
                 return online->revision() != seen;
             };
-
             const int picked = menu.select_modes(
-                "Internet Play", description, cards, "Back", 0, changed);
+                "Online Play", description, cards, "Back", 0, changed);
             if (picked == launcher_menu::interrupted) continue;
             if (picked < 0 || picked >= static_cast<int>(what.size())) break;
+
             switch (what[static_cast<std::size_t>(picked)]) {
-            case online_pair:     online->start_pairing(); break;
-            case online_cancel:   online->cancel_pairing(); break;
-            case online_leave:    online->leave_lobby(); break;
-            case online_sign_out: online->sign_out(); break;
+            case act_register: {
+                const auto name = menu.prompt_text(
+                    "Your name", "What your friends will see.", {}, false, 32);
+                if (!name || name->empty()) break;
+                const auto email = menu.prompt_text(
+                    "Email address", "Used to sign in on any cabinet.", {},
+                    false, 128);
+                if (!email || email->empty()) break;
+                const auto password = menu.prompt_text(
+                    "Password", "At least six characters.", {}, true, 64);
+                if (!password || password->size() < 6) break;
+                online->register_account(*name, *email, *password);
+                break;
+            }
+            case act_signin: {
+                const auto email = menu.prompt_text(
+                    "Email address", "The address you registered with.",
+                    online->account_email(), false, 128);
+                if (!email || email->empty()) break;
+                const auto password = menu.prompt_text(
+                    "Password", "", {}, true, 64);
+                if (!password || password->empty()) break;
+                online->sign_in(*email, *password);
+                break;
+            }
+            case act_signout: online->sign_out(); break;
+            case act_leave:   online->leave_lobby(); break;
             default: break;
             }
         }
@@ -1899,9 +1872,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     case online_state::disabled:
                         mode_state = online->status_text();
                         break;
-                    case online_state::pairing:
-                        mode_state = "Showing a code - add it on the website";
-                        mode_badge = "PAIRING";
+                    case online_state::registering:
+                        mode_state = "Creating your account";
+                        mode_badge = "WORKING";
                         mode_dark = false;
                         break;
                     case online_state::signing_in:
@@ -1927,8 +1900,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                         mode_dark = false;
                         break;
                     default:
-                        mode_state = "Offline - add this machine to your "
-                                     "account to play over the internet";
+                        mode_state = "Offline - sign in to play over the "
+                                     "internet";
                         mode_badge = "OFFLINE";
                         mode_dark = false;
                         break;

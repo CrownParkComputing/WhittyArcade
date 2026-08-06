@@ -134,50 +134,15 @@ std::string host_name() {
     return "cabinet";
 }
 
-// The code has to leave this machine and be typed somewhere else, and the
-// launcher has no clipboard, no text field and no way to select anything on
-// screen. So it goes everywhere it can usefully go: the terminal, a file, and
-// the desktop clipboard. Reading eight characters off a screen and typing
-// them on a phone is fine; being unable to copy them when the browser is on
-// the same desktop is just annoying.
-void announce_pairing_code(const std::string& code) {
-    std::printf("\n"
-                "  +--------------------------------------------+\n"
-                "  |  MANX online pairing code:  %s  |\n"
-                "  +--------------------------------------------+\n"
-                "  Enter it under Cabinets -> Add a cabinet.\n\n",
-                code.c_str());
-    std::fflush(stdout);
-
-    const fs::path root = manx_platform::config_root();
-    const fs::path where =
-        (root.empty() ? fs::current_path() : root) / "MANX" / "pairing-code.txt";
-    std::error_code error;
-    if (where.has_parent_path())
-        fs::create_directories(where.parent_path(), error);
-    if (std::ofstream out(where, std::ios::trunc); out) out << code << '\n';
-
-#if !defined(_WIN32)
-    // The code is eight characters of [0-9A-Z] by construction, so there is
-    // nothing here a shell could misread.
-    if (!std::getenv("MANX_NO_CLIPBOARD")) {
-        const char* tool = std::getenv("WAYLAND_DISPLAY")
-            ? "wl-copy 2>/dev/null" : "xclip -selection clipboard 2>/dev/null";
-        if (FILE* pipe = popen(tool, "w")) {
-            std::fputs(code.c_str(), pipe);
-            if (pclose(pipe) == 0)
-                std::printf("  (also copied to the clipboard)\n");
-        }
-    }
-#endif
-}
-
 // --- the credential on disk ---------------------------------------------
 // Only the refresh token, never the password. The password exists for the
 // few seconds between the website writing it and this machine using it, and
 // is never written down here.
 struct stored_credential {
-    std::string machine_uid;
+    // Chosen by this cabinet and kept for ever, so signing out and back in -
+    // even as somebody else - does not strand the machine's document.
+    std::string machine_id;
+    std::string uid;          // the signed-in account
     std::string email;
     std::string refresh_token;
 };
@@ -196,7 +161,8 @@ stored_credential load_credential() {
         if (separator == std::string::npos) continue;
         const std::string key = line.substr(0, separator);
         const std::string value = line.substr(separator + 1);
-        if (key == "machine_uid") credential.machine_uid = value;
+        if (key == "machine_id") credential.machine_id = value;
+        else if (key == "uid") credential.uid = value;
         else if (key == "email") credential.email = value;
         else if (key == "refresh_token") credential.refresh_token = value;
     }
@@ -214,7 +180,8 @@ void save_credential(const stored_credential& credential) {
     {
         std::ofstream output(temporary, std::ios::trunc);
         if (!output) return;
-        output << "machine_uid=" << credential.machine_uid << '\n'
+        output << "machine_id=" << credential.machine_id << '\n'
+               << "uid=" << credential.uid << '\n'
                << "email=" << credential.email << '\n'
                << "refresh_token=" << credential.refresh_token << '\n';
         if (!output.good()) return;
@@ -324,33 +291,41 @@ void online_link::publish(online_state state, std::string status) {
 
 void online_link::touch() { m_revision.fetch_add(1); }
 
-void online_link::start_pairing() {
+void online_link::register_account(std::string display_name,
+                                   std::string email, std::string password) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::pair, {}});
+    m_commands.push_back({command::kind::register_account, std::move(email),
+                          std::move(password), std::move(display_name)});
     m_wake.notify_all();
 }
 
-void online_link::cancel_pairing() {
+void online_link::sign_in(std::string email, std::string password) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::cancel_pair, {}});
+    m_commands.push_back({command::kind::sign_in, std::move(email),
+                          std::move(password), {}});
     m_wake.notify_all();
+}
+
+std::string online_link::display_name() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_display_name;
 }
 
 void online_link::sign_out() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::sign_out, {}});
+    m_commands.push_back({command::kind::sign_out, {}, {}, {}});
     m_wake.notify_all();
 }
 
 void online_link::join_lobby(std::string lobby_id) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::join, std::move(lobby_id)});
+    m_commands.push_back({command::kind::join, std::move(lobby_id), {}, {}});
     m_wake.notify_all();
 }
 
 void online_link::leave_lobby() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::leave, {}});
+    m_commands.push_back({command::kind::leave, {}, {}, {}});
     m_wake.notify_all();
 }
 
@@ -367,9 +342,9 @@ void online_link::set_foreground(bool foreground) {
     m_wake.notify_all();
 }
 
-std::string online_link::pairing_code() const {
+std::string online_link::account_email() const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_pairing_code;
+    return m_email;
 }
 
 bool online_link::signed_in() const {
@@ -407,8 +382,13 @@ uint64_t online_link::revision() const { return m_revision.load(); }
 void online_link::run() {
     online_wire::token_state token;
     stored_credential credential = load_credential();
-    std::string pairing_code;
-    std::string anonymous_uid;
+    bool pending_auth = false;
+    bool pending_create = false;
+    std::string pending_email;
+    std::string pending_password;
+    std::string pending_name;
+    bool profile_ready = false;
+    bool machine_ready = false;
     std::string published_games_hash;
     std::string current_lobby;
     int64_t next_machine_poll = 0;
@@ -503,29 +483,16 @@ void online_link::run() {
         }
         for (const command& entry : queued) {
             switch (entry.what) {
-            case command::kind::pair:
-                if (credential.refresh_token.empty() && pairing_code.empty()) {
-                    pairing_code = random_code(pairing_code_length);
-                    anonymous_uid.clear();
-                    token = {};
-                    // Deliberately NOT published yet. A code only means
-                    // something once it is in the database: shown any
-                    // earlier it can still be refused, or regenerated after
-                    // a collision, and somebody will already have typed the
-                    // one that no longer exists.
-                    publish(online_state::pairing,
-                            "Getting a code from MANX online...");
-                }
-                break;
-            case command::kind::cancel_pair:
-                pairing_code.clear();
-                anonymous_uid.clear();
-                token = {};
-                {
-                    std::lock_guard<std::mutex> lock(m_mutex);
-                    m_pairing_code.clear();
-                }
-                publish(online_state::signed_out, "Not signed in.");
+            case command::kind::register_account:
+            case command::kind::sign_in:
+                pending_email = entry.argument;
+                pending_password = entry.secret;
+                pending_name = entry.extra;
+                pending_create = entry.what == command::kind::register_account;
+                pending_auth = true;
+                publish(online_state::registering,
+                        pending_create ? "Creating your account..."
+                                       : "Signing in...");
                 break;
             case command::kind::sign_out:
                 forget_credential();
@@ -550,7 +517,7 @@ void online_link::run() {
                 }
                 break;
             case command::kind::leave:
-                if (!current_lobby.empty() && !credential.machine_uid.empty()) {
+                if (!current_lobby.empty() && !credential.machine_id.empty()) {
                     // Take our entry out rather than leaving a stale address
                     // for everybody else to punch at for a minute.
                     json update;
@@ -558,7 +525,7 @@ void online_link::run() {
                     call(manx_http::method::patch,
                          document_url("lobbies/" + current_lobby) +
                              "?updateMask.fieldPaths=members." +
-                             credential.machine_uid,
+                             credential.machine_id,
                          update.dump(), true);
                 }
                 current_lobby.clear();
@@ -575,143 +542,55 @@ void online_link::run() {
         const int64_t now = unix_now();
         if (now < backoff_until) { sleep_a_moment(500); continue; }
 
-        // --- pairing ----------------------------------------------------
-        if (!pairing_code.empty() && credential.refresh_token.empty()) {
-            if (anonymous_uid.empty()) {
-                std::printf("MANX online: signing in anonymously to claim a "
-                            "pairing code\n");
-                std::fflush(stdout);
-                const manx_http::response answer =
-                    call(manx_http::method::post,
-                         manx_cloud::identity_url("signUp"),
-                         json{{"returnSecureToken", true}}.dump(), false);
-                if (!answer.ok()) {
-                    publish(online_state::error,
-                            explain_failure(answer, "starting the pairing"));
-                    backoff_until = now + backoff_seconds;
-                    backoff_seconds = std::min<int64_t>(backoff_seconds * 2, 60);
-                    continue;
-                }
-                const json body = parse_or_empty(answer.body);
-                anonymous_uid = field_text(body, "localId");
-                token.id_token = field_text(body, "idToken");
-                token.refresh_token = field_text(body, "refreshToken");
-                token.expires_unix = online_wire::expiry_from_expires_in(
-                    now, field_text(body, "expiresIn"));
-
-                json document;
-                document["fields"]["status"] = online_wire::value_string("waiting");
-                document["fields"]["claimedBy"] = online_wire::value_string(anonymous_uid);
-                document["fields"]["hostName"] = online_wire::value_string(host_name());
-                document["fields"]["platform"] = online_wire::value_string(platform_name());
-                document["fields"]["createdAt"] = online_wire::value_time(now);
-                // Fifteen minutes, matching the rules and the TTL policy. A
-                // code that lives longer is a credential that lives longer.
-                document["fields"]["expiresAt"] = online_wire::value_time(now + 14 * 60);
-                std::printf("MANX online: publishing pairing code %s\n",
-                            pairing_code.c_str());
-                std::fflush(stdout);
-                const manx_http::response created = call(
-                    manx_http::method::patch,
-                    document_url("pairings/" + pairing_code), document.dump(),
-                    true);
-                if (!created.ok())
-                    std::printf("MANX online: publishing the code returned "
-                                "HTTP %ld %s\n", created.status,
-                                created.body.substr(0, 300).c_str());
-                if (!created.ok()) {
-                    // A refused write here is not a taken code - the rules
-                    // are what refuse it, and trying a different code for
-                    // ever would hide that. Only a genuine conflict is worth
-                    // a retry.
-                    if (created.status == 409) {
-                        pairing_code = random_code(pairing_code_length);
-                        anonymous_uid.clear();
-                        continue;
-                    }
-                    publish(online_state::error,
-                            explain_failure(created, "publishing the code"));
-                    pairing_code.clear();
-                    anonymous_uid.clear();
-                    {
-                        std::lock_guard<std::mutex> lock(m_mutex);
-                        m_pairing_code.clear();
-                    }
-                    backoff_until = now + backoff_seconds;
-                    backoff_seconds = std::min<int64_t>(backoff_seconds * 2, 60);
-                    continue;
-                }
-                {
-                    std::lock_guard<std::mutex> lock(m_mutex);
-                    m_pairing_code = pairing_code;
-                }
-                announce_pairing_code(pairing_code);
-                publish(online_state::pairing,
-                        "Type this code on the MANX website to add this "
-                        "machine to your account. It is also on the "
-                        "clipboard and in MANX/pairing-code.txt.");
-            } else {
-                const manx_http::response answer =
-                    call(manx_http::method::get,
-                         document_url("pairings/" + pairing_code), {}, true);
-                if (answer.ok()) {
-                    const json document = parse_or_empty(answer.body);
-                    const auto status_field =
-                        online_wire::find_field(document, "status");
-                    if (status_field &&
-                        online_wire::read_string(*status_field) == "claimed") {
-                        const auto* email_field =
-                            online_wire::find_field(document, "email");
-                        const auto* password_field =
-                            online_wire::find_field(document, "password");
-                        const auto* uid_field =
-                            online_wire::find_field(document, "machineUid");
-                        if (email_field && password_field && uid_field) {
-                            publish(online_state::signing_in, "Signing in...");
-                            const std::string email =
-                                online_wire::read_string(*email_field);
-                            const std::string password =
-                                online_wire::read_string(*password_field);
-                            if (sign_in_with_password(email, password)) {
-                                credential.machine_uid =
-                                    online_wire::read_string(*uid_field);
-                                credential.email = email;
-                                credential.refresh_token = token.refresh_token;
-                                save_credential(credential);
-                                // Destroy the credential in the database the
-                                // moment it has been used. Until this
-                                // happens there is a real password sitting
-                                // in a document.
-                                call(manx_http::method::del,
-                                     document_url("pairings/" + pairing_code),
-                                     {}, true);
-                                pairing_code.clear();
-                                anonymous_uid.clear();
-                                {
-                                    std::lock_guard<std::mutex> lock(m_mutex);
-                                    m_pairing_code.clear();
-                                    m_machine_uid = credential.machine_uid;
-                                }
-                                publish(online_state::online, "Signed in.");
-                                next_machine_poll = 0;
-                                next_heartbeat = 0;
-                            } else {
-                                publish(online_state::error,
-                                        "The website paired this machine but "
-                                        "signing in failed.");
-                            }
-                        }
-                    }
-                }
-                sleep_a_moment(2000);
+        // --- signing in, or creating an account -------------------------
+        if (pending_auth) {
+            pending_auth = false;
+            const bool creating = pending_create;
+            const json request{{"email", pending_email},
+                               {"password", pending_password},
+                               {"returnSecureToken", true}};
+            const manx_http::response answer = call(
+                manx_http::method::post,
+                manx_cloud::identity_url(creating ? "signUp"
+                                                  : "signInWithPassword"),
+                request.dump(), false);
+            pending_password.clear();
+            if (!answer.ok()) {
+                publish(online_state::error,
+                        explain_failure(answer, creating
+                                                    ? "creating your account"
+                                                    : "signing in"));
                 continue;
             }
+            const json body = parse_or_empty(answer.body);
+            token.id_token = field_text(body, "idToken");
+            token.refresh_token = field_text(body, "refreshToken");
+            token.expires_unix = online_wire::expiry_from_expires_in(
+                now, field_text(body, "expiresIn"));
+            credential.uid = field_text(body, "localId");
+            credential.email = pending_email;
+            credential.refresh_token = token.refresh_token;
+            // The machine keeps its own id for ever, so signing out and back
+            // in - even as somebody else - does not orphan its document.
+            if (credential.machine_id.empty())
+                credential.machine_id = random_code(20);
+            save_credential(credential);
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_email = credential.email;
+                if (!pending_name.empty()) m_display_name = pending_name;
+            }
+            profile_ready = false;
+            machine_ready = false;
+            publish(online_state::online,
+                    creating ? "Account created." : "Signed in.");
         }
 
         // --- signed in? --------------------------------------------------
         if (credential.refresh_token.empty()) {
-            if (pairing_code.empty() && m_state.load() != online_state::signed_out &&
-                m_state.load() != online_state::error)
+            if (m_state.load() != online_state::signed_out &&
+                m_state.load() != online_state::error &&
+                m_state.load() != online_state::registering)
                 publish(online_state::signed_out, "Not signed in.");
             sleep_a_moment(1000);
             continue;
@@ -723,7 +602,7 @@ void online_link::run() {
             // than a second refresh path that could drift from the first.
             const manx_http::response answer =
                 call(manx_http::method::get,
-                     document_url("machines/" + credential.machine_uid), {},
+                     document_url("machines/" + credential.machine_id), {},
                      true);
             if (token.id_token.empty()) {
                 if (!answer.ok() && answer.status == 0) {
@@ -785,7 +664,7 @@ void online_link::run() {
                                       : "&updateMask.fieldPaths=") + entry.key();
             const manx_http::response answer = call(
                 manx_http::method::patch,
-                document_url("machines/" + credential.machine_uid) + mask,
+                document_url("machines/" + credential.machine_id) + mask,
                 document.dump(), true);
             if (answer.ok()) {
                 published_games_hash = games_hash;
@@ -809,7 +688,7 @@ void online_link::run() {
         if (now >= next_machine_poll) {
             const manx_http::response answer =
                 call(manx_http::method::get,
-                     document_url("machines/" + credential.machine_uid), {},
+                     document_url("machines/" + credential.machine_id), {},
                      true);
             if (answer.ok()) {
                 const json document = parse_or_empty(answer.body);
@@ -858,7 +737,7 @@ void online_link::run() {
                                     online_wire::value_int(seq);
                                 call(manx_http::method::patch,
                                      document_url("machines/" +
-                                                  credential.machine_uid) +
+                                                  credential.machine_id) +
                                          "?updateMask.fieldPaths=commandAck",
                                      ack.dump(), true);
                                 touch();
@@ -878,7 +757,7 @@ void online_link::run() {
             const auto endpoint = m_lobby.public_endpoint();
             json entry;
             auto& member = entry["fields"]["members"]["mapValue"]["fields"]
-                                [credential.machine_uid]["mapValue"]["fields"];
+                                [credential.machine_id]["mapValue"]["fields"];
             member["ownerUid"] = online_wire::value_string(machine_owner_uid);
             member["name"] = online_wire::value_string(host_name());
             member["node"] = online_wire::value_int(m_lobby.node());
@@ -909,7 +788,7 @@ void online_link::run() {
             call(manx_http::method::patch,
                  document_url("lobbies/" + current_lobby) +
                      "?updateMask.fieldPaths=members." +
-                     credential.machine_uid + "&updateMask.fieldPaths=updatedAt",
+                     credential.machine_id + "&updateMask.fieldPaths=updatedAt",
                  entry.dump(), true);
 
             const manx_http::response answer =
@@ -924,7 +803,7 @@ void online_link::run() {
                     online_wire::parse_members(document);
                 const std::vector<lobby_link::remote_peer> peers =
                     online_wire::peers_from_members(
-                        members, credential.machine_uid, now, parse_ipv4);
+                        members, credential.machine_id, now, parse_ipv4);
                 // The handover. From here the lobby thread does the rest,
                 // and a machine on the far side of the world is just another
                 // address it sends hellos to.
