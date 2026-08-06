@@ -318,8 +318,11 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
                 }), choices.end());
         }
         seen_sets.insert(identity);
+        // The game's name, not its filename. Every set appears exactly once
+        // - seen_sets above makes sure of it - so the zip was never telling
+        // anybody which of two entries was which; it was just "galaxian.zip"
+        // written after "Galaxian" on every line of the list.
         std::string label = identified.manifest->display_name;
-        label += "  (" + candidate.filename().string() + ")";
         label += readiness_suffix(candidate, *identified.manifest);
         if (normalized == normalized_current) label += "  [current]";
         choices.push_back({normalized, std::move(label),

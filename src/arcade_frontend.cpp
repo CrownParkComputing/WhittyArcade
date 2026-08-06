@@ -405,7 +405,8 @@ bool choose_library_folders(launcher_menu& menu, bool first_run) {
 // program is for rather than at a shelf somebody has to work out.
 enum class setup_outcome { quit, ready, host_a_game };
 
-setup_outcome run_setup_wizard(launcher_menu& menu) {
+setup_outcome run_setup_wizard(launcher_menu& menu,
+                               online_link* online) {
     using card = launcher_menu::mode_card;
     using icon = launcher_menu::mode_icon;
     emulator_settings settings = load_settings();
@@ -450,7 +451,7 @@ setup_outcome run_setup_wizard(launcher_menu& menu) {
                                "An empty one to fill later", icon::storage));
 
         const int chosen = page(
-            "1 of 4 - Your games",
+            "1 of 5 - Your games",
             "MANX reads the same ROM sets MAME does: one zip per game, named "
             "by its MAME short name - galaxian.zip, srallyc.zip. Point it at "
             "the folder you keep them in.\n\n"
@@ -484,7 +485,7 @@ setup_outcome run_setup_wizard(launcher_menu& menu) {
                                "Keep disc images apart", icon::storage));
 
         const int chosen = page(
-            "2 of 4 - Disc images",
+            "2 of 5 - Disc images",
             "The bigger boards - Killer Instinct, the Model 2 racers - shipped "
             "with a hard disk as well as ROM chips, and that disk is a .chd "
             "file. If you have any, they can sit beside your zips or in a "
@@ -507,7 +508,7 @@ setup_outcome run_setup_wizard(launcher_menu& menu) {
     // --- the link settings ------------------------------------------------
     // Not a folder to choose: a thing to know about, because the failure it
     // causes looks like a broken emulator rather than an unconfigured board.
-    if (page("3 of 4 - Linked cabinets",
+    if (page("3 of 5 - Linked cabinets",
              "A few boards - Sega Rally, Daytona, Manx TT, Motor Raid, Rave "
              "Racer, Ridge Racer 2 - link real cabinets together through their "
              "own hardware, and read their cabinet number and link mode out of "
@@ -523,7 +524,7 @@ setup_outcome run_setup_wizard(launcher_menu& menu) {
         return setup_outcome::quit;
 
     // --- the artwork -------------------------------------------------------
-    if (page("4 of 4 - Artwork",
+    if (page("4 of 5 - Artwork",
              "Optional, and entirely cosmetic: box art, marquees and "
              "screenshots make the game list something to browse rather than "
              "a list of names. Without it every game still plays; it just "
@@ -550,21 +551,98 @@ setup_outcome run_setup_wizard(launcher_menu& menu) {
     settings.library_setup_complete = true;
     save_settings(settings);
 
+    // --- who you are ------------------------------------------------------
+    // Without this the last question is a promise the program cannot keep:
+    // opening a lobby needs an account, and a cabinet that has never signed
+    // in queues the request against nobody. Asked here, once, rather than
+    // found later in the corner of another screen.
+    if (online && online->state() != online_state::disabled &&
+        !online->signed_in()) {
+        for (;;) {
+            const int chosen = page(
+                "5 of 5 - Your account",
+                "Playing across machines needs an account: it is how another "
+                "cabinet knows who you are, how friends find you, and how a "
+                "lobby you open is yours.\n\n"
+                "It is free, it is made here on this machine, and the address "
+                "is only ever used to sign in. Skip it and everything else "
+                "still works - you just play on your own.",
+                {card("Create an account", "Name, email and a password",
+                      icon::local_players),
+                 card("Sign in", "I already have one", icon::network),
+                 card("Skip for now", "Play on my own", icon::exit)},
+                "Back");
+            if (chosen < 0) return setup_outcome::quit;
+            if (chosen == 2) break;
+
+            if (chosen == 0) {
+                const auto name = menu.prompt_text(
+                    "Your name", "What other players will see.", {}, false, 32);
+                if (!name || name->empty()) continue;
+                const auto email = menu.prompt_text(
+                    "Email address", "Used to sign in on any machine.", {},
+                    false, 128);
+                if (!email || email->empty()) continue;
+                const auto password = menu.prompt_text(
+                    "Password", "At least six characters.", {}, true, 64);
+                if (!password || password->size() < 6) continue;
+                online->register_account(*name, *email, *password, true);
+            } else {
+                const auto email = menu.prompt_text(
+                    "Email address", "The address you registered with.",
+                    online->account_email(), false, 128);
+                if (!email || email->empty()) continue;
+                const auto password = menu.prompt_text(
+                    "Password", "", {}, true, 64);
+                if (!password || password->empty()) continue;
+                online->sign_in(*email, *password, true);
+            }
+
+            // Signing in is a round trip on another thread. Waited for here
+            // rather than hoped about, because the next screen offers to open
+            // a lobby and needs to know whether that is going to work.
+            for (int tick = 0; tick < 100 && !online->signed_in(); ++tick) {
+                if (online->state() == online_state::error) break;
+                menu.show_splash(online->status_text(), 0.5f);
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+            if (online->signed_in()) break;
+
+            if (page("That did not work", online->status_text(),
+                     {card("Try again", "Back to the account screen",
+                           icon::refresh),
+                      card("Skip for now", "Play on my own", icon::exit)},
+                     "Back") != 0)
+                break;
+        }
+    }
+
     // --- and now a game ----------------------------------------------------
     // The point of finishing a setup screen is playing something, so the last
     // question is the first game rather than "OK".
+    const bool can_host = online && online->signed_in();
     const int finish = page(
         "Ready",
-        "That is everything. MANX is at its best with somebody else on the "
-        "other end: open a lobby, and whoever joins plays the same board on "
-        "their own machine - not a video of yours.\n\n"
-        "You can also do this at any time from the account button in the "
-        "corner of the shelf.",
-        {card("Play somebody", "Open a lobby and pick a game",
-              icon::network),
-         card("Just look around", "Browse the shelf", icon::solo)},
+        can_host
+            ? "That is everything. MANX is at its best with somebody else on "
+              "the other end: choose a game, open a lobby, and whoever joins "
+              "plays the same board on their own machine - not a video of "
+              "yours.\n\nYou can do this any time from the account button "
+              "in the corner of the shelf."
+            : "That is everything. Playing across machines needs an account, "
+              "which you can make at any time from the account button in the "
+              "corner of the shelf.",
+        can_host
+            ? std::vector<card>{
+                  card("Open my first lobby",
+                       "Choose a game and wait for somebody", icon::network),
+                  card("Just look around", "Browse the shelf", icon::solo)}
+            : std::vector<card>{
+                  card("Browse the shelf", "See what is installed",
+                       icon::solo)},
         "");
-    return finish == 0 ? setup_outcome::host_a_game : setup_outcome::ready;
+    return (can_host && finish == 0) ? setup_outcome::host_a_game
+                                     : setup_outcome::ready;
 }
 
 void show_library_folder_settings(launcher_menu& menu) {
@@ -1594,7 +1672,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     std::map<std::string, banner::banner_image> banner_pixels;
     bool wizard_wants_host = false;
     if (!load_settings().library_setup_complete) {
-        const setup_outcome outcome = run_setup_wizard(menu);
+        const setup_outcome outcome = run_setup_wizard(menu, online);
         if (outcome == setup_outcome::quit) {
             rom_selection_result exit_result;
             exit_result.action = rom_selection_action::exit_requested;
@@ -2456,14 +2534,22 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // the account, both of which are defined above this point.
     if (wizard_wants_host) {
         wizard_wants_host = false;
-        if (online && online->signed_in()) {
-            host_a_lobby();
+        if (!online) {
+            menu.show_text(
+                "Online play unavailable",
+                "This copy of MANX was started without online support, so "
+                "there is nobody to open a lobby with.");
         } else {
-            show_online_screen();
-            if (account_wants_host) {
-                account_wants_host = false;
-                host_a_lobby();
-            }
+            // Not gated on being signed in yet. Signing in happens on its
+            // own thread and takes a few seconds, and the wizard finishes
+            // well inside that - so asking "are you signed in?" here
+            // answered no on a machine that was about to be, and dropped
+            // somebody who had just asked to play into a sign-in screen.
+            //
+            // The lobby command waits for the account by itself: it sits in
+            // the queue until the cabinet is registered and then runs. So
+            // pick the game now and let the two catch up with each other.
+            host_a_lobby();
         }
     }
 
