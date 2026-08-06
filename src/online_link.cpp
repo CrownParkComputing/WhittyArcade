@@ -856,14 +856,27 @@ void online_link::run() {
                 m_lobby_id.clear();
                 m_members.clear();
             }
-            // Fast while the connection is being made, because that is when
-            // the wait is felt; slow afterwards, because nothing changes
-            // until somebody presses a button. Nothing at all during a match.
+            // All this exchanges is an ip and a port. The punch itself takes
+            // milliseconds once both ends know where to aim, so any wait
+            // here is this poll and nothing else - joining a lobby should
+            // feel immediate, not like a page loading.
+            //
+            // So: as fast as the service will sensibly allow while the
+            // addresses are still being swapped, then back off hard once the
+            // machines are talking directly, and stop entirely during a
+            // match, when the cloud has no part to play at all.
             const bool in_game = m_lobby.presence() == machine_presence::in_game;
-            next_lobby_poll = now + (in_game ? 60 : (m_lobby.connected() ? 5 : 2));
+            if (in_game)                      next_lobby_poll = now + 60;
+            else if (m_lobby.connected())     next_lobby_poll = now + 10;
+            else                              next_lobby_poll = now;   // no wait
         }
 
-        sleep_a_moment(500);
+        // 200 ms while the addresses are still being exchanged, half a
+        // second otherwise. This is the real pacing of a cabinet trying to
+        // connect: the poll interval above can say "now" all it likes if the
+        // loop then sleeps half a second before acting on it.
+        sleep_a_moment(!current_lobby.empty() && !m_lobby.connected() ? 200
+                                                                     : 500);
     }
 
     // On the way out, stop other machines punching at an address that is no
