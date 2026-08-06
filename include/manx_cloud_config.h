@@ -45,6 +45,21 @@ inline std::string api_key() {
     return MANX_FIREBASE_API_KEY;
 }
 
+// Where the lobby service lives.
+//
+// Lobbies, addresses and the handshake are no longer Firestore documents
+// that two cabinets poll at each other: they are a conversation with an app
+// we run. Firebase keeps what it is good at - saying who somebody is, and
+// holding what outlives a session.
+//
+// Overridable so a developer can point a cabinet at a service running on
+// their own machine without rebuilding it.
+inline std::string lobby_service() {
+    if (const char* forced = std::getenv("MANX_LOBBY_URL"))
+        if (*forced) return forced;
+    return "https://manx.crownparkcomputing.com";
+}
+
 inline bool configured() {
     return !project_id().empty() && !api_key().empty();
 }

@@ -572,6 +572,23 @@ add_test(NAME vulkan_post_pipeline_test COMMAND vulkan_post_pipeline_test)
 # Drives the real presenter through a System 22 frame under the Vulkan
 # validation layers. Opens a window, so it is not wired into ctest; run it
 # directly with MANX_PRESENTER_HARNESS=1.
+# Two cabinets, without the cabinets. Deliberately NOT an add_test: it signs
+# in to the live Firebase project, so it needs the internet, an account and a
+# slice of the daily quota - none of which ctest may ever depend on.
+if(TARGET PkgConfig::CURL)
+    add_executable(online_live_harness
+        tests/online_live_harness.cpp
+        src/online_link.cpp
+        src/manx_http.cpp
+        src/lan_peers.cpp
+    )
+    target_include_directories(online_live_harness PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/third_party/json)
+    target_link_libraries(online_live_harness PRIVATE PkgConfig::CURL)
+    target_compile_definitions(online_live_harness PRIVATE MANX_HAVE_CURL)
+endif()
+
 add_executable(vulkan_presenter_harness
     tests/vulkan_presenter_harness.cpp
     src/arcade_presenter.cpp

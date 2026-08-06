@@ -93,6 +93,9 @@ response perform(const request& call) {
             headers, ("Authorization: Bearer " + call.bearer).c_str());
     // An unrequested 100-continue on every POST costs a round trip and some
     // proxies never answer it at all.
+    for (const std::string& extra : call.headers)
+        if (!extra.empty())
+            headers = curl_slist_append(headers, extra.c_str());
     headers = curl_slist_append(headers, "Expect:");
     curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
 

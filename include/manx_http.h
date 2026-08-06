@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <string>
+#include <vector>
 
 namespace manx_http {
 
@@ -21,6 +22,9 @@ struct request {
     std::string body;                          // empty for GET and DELETE
     std::string content_type{"application/json"};
     std::string bearer;                        // an ID token, or empty
+    // Anything else the caller needs sent, one per entry, already in
+    // "Name: value" form. The lobby service identifies a session this way.
+    std::vector<std::string> headers;
     int connect_timeout_seconds{5};
     int timeout_seconds{15};
     // Polled while the transfer runs, so shutting down never has to wait out
