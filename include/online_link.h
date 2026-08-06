@@ -32,6 +32,7 @@ struct online_lobby {
     int members{};
     int places{};
     bool open_to_anyone{};
+    bool stale{};
 };
 
 enum class online_state : uint8_t {

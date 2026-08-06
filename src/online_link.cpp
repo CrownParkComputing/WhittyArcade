@@ -425,6 +425,8 @@ void online_link::run() {
     bool pending_host = false;
     bool pending_host_open = false;
     bool pending_browse = false;
+    bool joined_roster = false;
+    bool last_member = true;
     bool pending_remember = true;
     std::string published_games_hash;
     std::string current_lobby;
@@ -620,6 +622,7 @@ void online_link::run() {
                 break;
             case command::kind::join:
                 current_lobby = entry.argument;
+                joined_roster = false;
                 next_lobby_poll = 0;
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
@@ -627,6 +630,21 @@ void online_link::run() {
                 }
                 break;
             case command::kind::leave:
+                // Turn the light off on the way out. A lobby whose last
+                // member has gone would otherwise sit in everybody's browse
+                // list advertising a game nobody is in.
+                if (!current_lobby.empty() && last_member) {
+                    call(manx_http::method::del,
+                         document_url("lobbies/" + current_lobby), {}, true);
+                    current_lobby.clear();
+                    m_lobby.set_remote_peers({});
+                    {
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        m_lobby_id.clear();
+                        m_members.clear();
+                    }
+                    break;
+                }
                 if (!current_lobby.empty() && !credential.machine_id.empty()) {
                     // Take our entry out rather than leaving a stale address
                     // for everybody else to punch at for a minute.
@@ -922,6 +940,12 @@ void online_link::run() {
             pending_browse = false;
             const auto summarise = [&](const json& document, bool open) {
                 online_lobby entry;
+                // Anything nobody has touched for five minutes belongs to a
+                // launcher that was closed rather than left, and offering it
+                // is offering a game that is not there.
+                if (const auto* touched =
+                        online_wire::find_field(document, "updatedAt"))
+                    entry.stale = now - online_wire::read_time(*touched) > 300;
                 // The document's own name ends with its id.
                 const auto name = document.find("name");
                 if (name != document.end() && name->is_string()) {
@@ -959,14 +983,18 @@ void online_link::run() {
             };
 
             std::vector<online_lobby> found;
-            for (const json& document : listing("visibility", "EQUAL", "public"))
-                found.push_back(summarise(document, true));
+            for (const json& document : listing("visibility", "EQUAL", "public")) {
+                const online_lobby entry = summarise(document, true);
+                if (!entry.stale && entry.id != current_lobby)
+                    found.push_back(entry);
+            }
             // Friends-only lobbies are listed for the people their host named,
             // which is what makes them something to find rather than a code
             // to be told.
             for (const json& document :
                      listing("readerUids", "ARRAY_CONTAINS", credential.uid)) {
-                online_lobby entry = summarise(document, false);
+                const online_lobby entry = summarise(document, false);
+                if (entry.stale) continue;
                 const bool already = std::any_of(
                     found.begin(), found.end(),
                     [&entry](const online_lobby& seen) {
@@ -1026,6 +1054,7 @@ void online_link::run() {
                 document.dump(), true);
             if (made.ok()) {
                 current_lobby = code;
+                joined_roster = true;   // the host is already on its own roster
                 next_lobby_poll = 0;
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
@@ -1046,7 +1075,7 @@ void online_link::run() {
             const auto endpoint = m_lobby.public_endpoint();
             json entry;
             auto& member = entry["fields"]["members"]["mapValue"]["fields"]
-                                [credential.machine_id]["mapValue"]["fields"];
+                                [credential.uid]["mapValue"]["fields"];
             member["ownerUid"] = online_wire::value_string(machine_owner_uid);
             member["name"] = online_wire::value_string(host_name());
             member["node"] = online_wire::value_int(m_lobby.node());
@@ -1074,11 +1103,42 @@ void online_link::run() {
             member["updatedAt"] = online_wire::value_time(now);
             entry["fields"]["updatedAt"] = online_wire::value_time(now);
 
-            call(manx_http::method::patch,
-                 document_url("lobbies/" + current_lobby) +
-                     "?updateMask.fieldPaths=members." +
-                     credential.machine_id + "&updateMask.fieldPaths=updatedAt",
-                 entry.dump(), true);
+            // Joining means adding yourself to the roster as well as
+            // writing your entry. Only the host may change memberUids for
+            // anybody else, but anybody may add themselves to a lobby they
+            // can see - so this reads the roster, appends itself if it is
+            // not already there, and writes both together.
+            std::string mask = "?updateMask.fieldPaths=members." +
+                               credential.uid +
+                               "&updateMask.fieldPaths=updatedAt";
+            if (!joined_roster) {
+                const manx_http::response before =
+                    call(manx_http::method::get,
+                         document_url("lobbies/" + current_lobby), {}, true);
+                if (before.ok()) {
+                    const json existing = parse_or_empty(before.body);
+                    std::vector<std::string> roster;
+                    if (const auto* uids =
+                            online_wire::find_field(existing, "memberUids"))
+                        roster = online_wire::read_strings(*uids);
+                    if (std::find(roster.begin(), roster.end(),
+                                  credential.uid) == roster.end())
+                        roster.push_back(credential.uid);
+                    entry["fields"]["memberUids"] =
+                        online_wire::value_strings(roster);
+                    mask += "&updateMask.fieldPaths=memberUids";
+                }
+            }
+            const manx_http::response mine = call(
+                manx_http::method::patch,
+                document_url("lobbies/" + current_lobby) + mask,
+                entry.dump(), true);
+            if (mine.ok()) {
+                joined_roster = true;
+            } else if (!joined_roster) {
+                publish(online_state::error,
+                        explain_failure(mine, "joining the lobby"));
+            }
 
             const manx_http::response answer =
                 call(manx_http::method::get,
@@ -1090,9 +1150,10 @@ void online_link::run() {
                     lobby_game = online_wire::read_string(*game);
                 std::vector<online_wire::member> members =
                     online_wire::parse_members(document);
+                last_member = members.size() <= 1;
                 const std::vector<lobby_link::remote_peer> peers =
                     online_wire::peers_from_members(
-                        members, credential.machine_id, now, parse_ipv4);
+                        members, credential.uid, now, parse_ipv4);
                 // The handover. From here the lobby thread does the rest,
                 // and a machine on the far side of the world is just another
                 // address it sends hellos to.
