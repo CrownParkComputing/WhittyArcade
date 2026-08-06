@@ -829,6 +829,23 @@ void model2_bus::initialize_comm_board() {
     // after the communication board's four-second discovery period.
     m_comm_loopback = !m_comm_peer_mode &&
         (!link || std::strcmp(link, "0") != 0);
+    // Where the other cabinet is, when the launcher already knows.
+    //
+    // Without this the comm board finds its peer the way the real one did:
+    // by broadcasting and sweeping the subnet at a paced rate, which takes
+    // as long as it takes and is why a linked game sat on CHECKING NETWORK
+    // long after both machines were up. The lobby service has told the
+    // launcher every address in the session, so searching for something we
+    // have been handed is time spent for nothing.
+    m_comm_peer_ipv4 = 0;
+    if (const char* host = std::getenv("MODEL2_COMM_PEER_HOST")) {
+        in_addr parsed{};
+        if (*host && inet_pton(AF_INET, host, &parsed) == 1) {
+            m_comm_peer_ipv4 = parsed.s_addr;
+            std::fprintf(stderr, "Model 2 cabinet %u linking straight to %s\n",
+                         m_comm_node_id, host);
+        }
+    }
     m_comm_peer_seen = false;
     m_comm_link_alive = false;
     m_comm_link_reported = false;

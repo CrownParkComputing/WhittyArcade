@@ -645,6 +645,58 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
         return run_c139_link_test();
     if (command == "--rumble-test")
         return run_controller_rumble_test();
+    if (command == "--catalogue-json") {
+        // What this build can actually play, in the form the website draws
+        // its game list from. Generated rather than kept by hand, because a
+        // list of supported games maintained in two places is a list that
+        // disagrees with itself within a month.
+        const auto quote = [](const char* text) {
+            std::string out;
+            for (const char* at = text ? text : ""; *at; ++at) {
+                if (*at == '"' || *at == '\\') out.push_back('\\');
+                out.push_back(*at);
+            }
+            return out;
+        };
+        // Written to a file rather than stdout when one is named. The log
+        // tap mirrors stderr into stdout so a cabinet can relay its console
+        // to another machine, which means neither stream is clean enough to
+        // carry JSON - and a generator whose output has a friendly startup
+        // line in the middle of it is not a generator.
+        std::FILE* out = stdout;
+        if (argc > 2 && argv[2][0] != '\0') {
+            out = std::fopen(argv[2], "w");
+            if (!out) {
+                std::fprintf(stderr, "Cannot write %s\n", argv[2]);
+                return 1;
+            }
+        }
+        std::fprintf(out, "{\n  \"games\": [\n");
+        bool first = true;
+        for (const rom_set_manifest& manifest : supported_rom_sets()) {
+            if (!manifest.working) continue;
+            const char* mode =
+                manifest.multiplayer == arcade_multiplayer_mode::alternating
+                    ? "alternating"
+                : manifest.multiplayer == arcade_multiplayer_mode::simultaneous
+                    ? "simultaneous"
+                : manifest.multiplayer == arcade_multiplayer_mode::native_link
+                    ? "native_link" : "single";
+            if (!first) std::fprintf(out, ",\n");
+            first = false;
+            std::fprintf(out, "    {\"shortName\": \"%s\", \"name\": \"%s\", "
+                        "\"publisher\": \"%s\", \"board\": \"%s\", "
+                        "\"mode\": \"%s\"}",
+                        quote(manifest.short_name).c_str(),
+                        quote(manifest.display_name).c_str(),
+                        quote(manifest.publisher).c_str(),
+                        quote(arcade_board(manifest.board).display_name).c_str(),
+                        mode);
+        }
+        std::fprintf(out, "\n  ]\n}\n");
+        if (out != stdout) std::fclose(out);
+        return 0;
+    }
     if (command == "--list-roms") {
         std::printf("%s\n", required_rom_sets_text().c_str());
         return 0;
@@ -674,7 +726,10 @@ int main(int argc, char* argv[]) {
                          rejected.library_path.c_str(),
                          rejected.reason.c_str());
         if (!plugins.games().empty())
-            std::printf("%zu game plugin(s) installed in %s\n",
+            // On stderr: stdout is a machine-readable channel for the
+            // tools below - --catalogue-json emits JSON there - and a
+            // friendly startup line in the middle of it is not JSON.
+            std::fprintf(stderr, "%zu game plugin(s) installed in %s\n",
                         plugins.games().size(), root.string().c_str());
         register_plugin_games(plugins.games());
     }
@@ -920,10 +975,36 @@ int main(int argc, char* argv[]) {
         // pid-derived base only ever worked for a pair spawned on one
         // machine. A network launch takes its ports from the session
         // instead, which both ends can work out for themselves.
-        const uint16_t link_port_base =
-            (lobby && launch_mode == cabinet_launch_mode::linked_network)
-                ? lobby->session_port_base()
-                : pair_port_base;
+        // The service settled these for the whole session and told every
+        // machine the same numbers, so prefer them. The lobby's own answer
+        // stays as the fallback for a linked game agreed on the LAN, where
+        // there is no service in the conversation.
+        uint16_t link_port_base = pair_port_base;
+        if (lobby && launch_mode == cabinet_launch_mode::linked_network)
+            link_port_base = lobby->session_port_base();
+        if (online && online->lobby_port_base() > 0 &&
+            launch_mode == cabinet_launch_mode::linked_network)
+            link_port_base =
+                static_cast<uint16_t>(online->lobby_port_base());
+
+        // And where the other cabinet is. Handed to the board rather than
+        // left for it to find: the real comm hardware searches by broadcast
+        // at its own pace, which is why a linked game sat on CHECKING
+        // NETWORK long after both machines were up and talking.
+        if (native_hardware_link && online) {
+            const std::string peer = online->peer_link_address();
+            if (!peer.empty()) {
+                set_environment("MODEL2_COMM_PEER_HOST", peer);
+                set_environment("SYSTEM22_C139_PEER_HOST", peer);
+                std::printf("The other cabinet is at %s\n", peer.c_str());
+            } else {
+                unset_environment("MODEL2_COMM_PEER_HOST");
+                unset_environment("SYSTEM22_C139_PEER_HOST");
+            }
+        } else {
+            unset_environment("MODEL2_COMM_PEER_HOST");
+            unset_environment("SYSTEM22_C139_PEER_HOST");
+        }
         if (lobby && launch_mode == cabinet_launch_mode::linked_network)
             std::printf("Linked session comm ports start at %u\n",
                         link_port_base);

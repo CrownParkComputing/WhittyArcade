@@ -483,6 +483,25 @@ bool online_link::lobby_starting() const {
     return m_lobby_starting;
 }
 
+int online_link::lobby_port_base() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_port_base;
+}
+
+std::string online_link::peer_link_address() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const online_wire::member& member : m_members) {
+        if (member.machine_uid == m_uid) continue;
+        // The address on this network first. Two cabinets in one house reach
+        // each other directly on it, and the public one between them is the
+        // router's own outside face - which is the address that does not
+        // work.
+        if (!member.lan_ip.empty()) return member.lan_ip;
+        if (!member.public_ip.empty()) return member.public_ip;
+    }
+    return {};
+}
+
 online_state online_link::state() const { return m_state.load(); }
 
 std::string online_link::status_text() const {

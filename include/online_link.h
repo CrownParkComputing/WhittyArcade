@@ -132,6 +132,11 @@ public:
     int lobby_places() const;
     bool hosting_lobby() const;            // this account made it
     bool lobby_starting() const;           // the host has said go
+    // The ports the service settled on for this session's linked game, and
+    // where the other cabinet is. Both are known before either board exists,
+    // which is exactly when the real comm hardware needs them.
+    int lobby_port_base() const;
+    std::string peer_link_address() const;
 
     // A lobby that has appeared since the last time anybody looked, taken
     // rather than read: the launcher asks somebody whether they want to join
