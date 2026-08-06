@@ -1618,6 +1618,71 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         online->set_foreground(false);
     };
 
+    // Who else is about. On a console this is the first thing anybody looks
+    // at, and until now the only way to see it was the local network lobby -
+    // which cannot show a friend in another house at all.
+    const auto show_friends_screen = [&]() {
+        if (!online) return;
+        using card = launcher_menu::mode_card;
+        using icon = launcher_menu::mode_icon;
+        online->set_foreground(true);
+        for (;;) {
+            std::vector<card> cards;
+            const std::vector<online_wire::member> members = online->members();
+            const std::string joined = online->joined_lobby();
+
+            std::string description;
+            if (!online->signed_in()) {
+                description =
+                    "This cabinet is not signed in yet. Add it to your "
+                    "account from the MANX website and your friends appear "
+                    "here.";
+                cards.push_back(card("Not Signed In", online->status_text(),
+                                     icon::audit, 0, true));
+            } else if (members.empty()) {
+                description = joined.empty()
+                    ? "Signed in. Create a lobby on the MANX website and "
+                      "invite somebody, and they show up here."
+                    : "In lobby " + joined + ". Nobody else has joined yet.";
+                cards.push_back(card("Nobody Here Yet", description,
+                                     icon::network, 0, true));
+            } else {
+                description = "Lobby " + joined;
+                for (const online_wire::member& member : members) {
+                    const bool up = member.link == "connected";
+                    cards.push_back(card(
+                        member.name.empty() ? std::string("Cabinet")
+                                            : member.name,
+                        up ? (member.has_game ? "Connected - has the game"
+                                              : "Connected - does not have "
+                                                "the game")
+                           : (member.link.empty() ? "Waiting" : member.link),
+                        icon::network, 0, !up, up ? "READY" : "CONNECTING"));
+                }
+            }
+
+            // Local machines are friends too, in the sense that matters:
+            // somebody to play with right now.
+            if (lobby) {
+                for (const lobby_machine& machine : lobby->machines())
+                    cards.push_back(card(machine.label(),
+                                         "On this network - " + machine.address,
+                                         icon::network, 0, false, "LOCAL"));
+            }
+
+            const uint64_t seen = online->revision();
+            const std::function<bool()> changed = [online, lobby, seen] {
+                return online->revision() != seen ||
+                       (lobby && lobby->connected());
+            };
+            const int picked = menu.select_modes(
+                "Friends", description, cards, "Back", 0, changed);
+            if (picked == launcher_menu::interrupted) continue;
+            break;
+        }
+        online->set_foreground(false);
+    };
+
     // The board/publisher browser with the cover grid, shared by every menu
     // that ends in "pick a game". filter narrows the library - the same-
     // machine menu offers only games with a second-player path - and a game
@@ -1812,8 +1877,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         if (!selected_platform) {
             std::vector<launcher_menu::mode_card> platform_cards;
             std::vector<std::string> platform_logo_keys;
-            platform_cards.reserve(platforms.size() + 2);
-            platform_logo_keys.reserve(platforms.size() + 2);
+            platform_cards.reserve(platforms.size() + 3);
+            platform_logo_keys.reserve(platforms.size() + 3);
             // Before anything else: is this machine on its own, on its
             // network, or on the internet? It is the first question a player
             // has, so it is the first card - not something to be found
@@ -1867,6 +1932,26 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     "Online Play", mode_state,
                     launcher_menu::mode_icon::network, 0, mode_dark,
                     mode_badge});
+                platform_logo_keys.push_back({});
+
+                // Who is about, before what to play. It is the first thing
+                // anybody checks on a console.
+                const std::size_t here =
+                    lobby ? lobby->machines().size() : 0;
+                const std::size_t away =
+                    online ? online->members().size() : 0;
+                std::string who = "Nobody else right now";
+                if (here || away) {
+                    who = std::to_string(here + away) + " machine" +
+                          (here + away == 1 ? "" : "s");
+                    if (here && away) who += " here and online";
+                    else if (away)    who += " online";
+                    else              who += " on this network";
+                }
+                platform_cards.push_back({
+                    "Friends", who, launcher_menu::mode_icon::local_players,
+                    0, here + away == 0,
+                    (here + away) ? "READY" : ""});
                 platform_logo_keys.push_back({});
             }
             // Then the lobby. It is dark until another
@@ -1942,14 +2027,17 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 show_online_screen();
                 continue;
             } else if (platform_choice == 1) {
+                show_friends_screen();
+                continue;
+            } else if (platform_choice == 2) {
                 enter_network_page = true;
                 continue;
             } else {
-                // Two cards precede the platforms now: online mode, then the
-                // local lobby.
+                // Three cards precede the shelf: online, friends, and the
+                // local network lobby.
                 platform_cursor = platform_choice;
                 selected_platform = platforms[
-                    static_cast<std::size_t>(platform_choice - 2)].publisher;
+                    static_cast<std::size_t>(platform_choice - 3)].publisher;
             }
         }
 
@@ -2085,6 +2173,11 @@ rom_selection_result show_rom_selector(const std::string& current_path,
               !online || online->state() == online_state::disabled,
               !online ? "OFF"
                       : (online->signed_in() ? "ONLINE" : "OFFLINE")},
+             {"Friends",
+              online && online->signed_in()
+                  ? std::string("Who is about, here and online")
+                  : std::string("Sign this cabinet in to see friends"),
+              launcher_menu::mode_icon::local_players, 0, !online},
              {"Network Play",
               lobby_connected_at_draw ?
                   std::to_string(machines_here) + " machine" +
@@ -2109,7 +2202,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
               launcher_menu::mode_icon::exit}},
             "Back to Platforms");
         if (selected_page == launcher_menu::exit_requested ||
-            selected_page == 7) {
+            selected_page == 8) {
             rom_selection_result exit_result;
             exit_result.action = rom_selection_action::exit_requested;
             return exit_result;
@@ -2120,6 +2213,10 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             continue;
         }
         if (selected_page == 1) {
+            show_friends_screen();
+            continue;
+        }
+        if (selected_page == 2) {
             if (!lobby) {
                 menu.show_text(
                     "Multiplayer Lobby",
@@ -2493,7 +2590,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             }
             continue;
         }
-        if (selected_page == 2) {
+        if (selected_page == 3) {
             // Arcade wall: pick how many columns, then a game for each. Every
             // column runs its own independent cabinet in one fullscreen
             // window; the highlighted column is the one you play, and Tab
@@ -2574,20 +2671,20 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             wall.wall_games = std::move(picked);
             return wall;
         }
-        if (selected_page == 3) {
+        if (selected_page == 4) {
             show_rom_library_manager(menu);
             choices = discover_rom_choices(current_path);
             continue;
         }
-        if (selected_page == 4) {
+        if (selected_page == 5) {
             show_input_mapper(menu, choices);
             continue;
         }
-        if (selected_page == 5) {
+        if (selected_page == 6) {
             show_eeprom_manager(menu);
             continue;
         }
-        if (selected_page == 6) {
+        if (selected_page == 7) {
             show_high_score_viewer(menu);
             continue;
         }
