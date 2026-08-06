@@ -65,3 +65,10 @@ A flatpak manifest is on the roadmap; not yet provided.
   with `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`.
 - The runtime prefers Wayland; X11 falls back automatically but loses
   native multiscreen wall support.
+
+## Two-machine netplay
+
+Open MANX on both computers without a ROM on the command line, choose
+**Network Play** on each, and they find each other. No IP address,
+no host/client choice, no firewall rule. See `docs/netplay.md` for how it
+works and what to check if they do not meet.

@@ -43,3 +43,10 @@ executables that share the same launcher shim. They are produced as
   multi-monitor wall falls back to single-screen on Windows 7 / 8.
 - ASan / ubsan builds use the `build-asan` and `build-sanitize` preset
   directories.
+
+## Two-machine netplay
+
+Open MANX on both computers without a ROM on the command line, choose
+**Network Play** on each, and they find each other. No IP address,
+no host/client choice, no firewall rule. See `docs/netplay.md` for how it
+works and what to check if they do not meet.

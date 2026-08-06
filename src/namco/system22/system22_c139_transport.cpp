@@ -217,17 +217,32 @@ void system22_c139_transport::exchange(system22_bus& bus) {
     sockaddr_in peer{};
     peer.sin_family = AF_INET;
     peer.sin_port = htons(m_peer_port);
-    peer.sin_addr.s_addr = htonl(m_network ? INADDR_BROADCAST
-                                            : INADDR_LOOPBACK);
     const int packet_size = static_cast<int>(packet.size());
-    sendto(m_socket, reinterpret_cast<const char*>(packet.data()),
-           packet_size, 0,
-           reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
-    if (m_network) {
-        peer.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    const auto transmit = [&](std::uint32_t address) {
+        peer.sin_addr.s_addr = address;
         sendto(m_socket, reinterpret_cast<const char*>(packet.data()),
                packet_size, 0,
                reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
+    };
+    transmit(htonl(INADDR_LOOPBACK));
+    if (m_network) {
+        if (m_peer_ipv4) {
+            // The linked cabinet has answered, so talk straight to it. That
+            // is also what carries this through a deny-by-default firewall:
+            // the reply to a conversation this machine started is let in
+            // where an unsolicited broadcast is not.
+            transmit(m_peer_ipv4);
+        } else {
+            // Rate limited because this runs at frame rate, and a search
+            // that saturates the link it is opening helps nobody.
+            const auto now = std::chrono::steady_clock::now();
+            if (m_search_due.time_since_epoch().count() == 0 ||
+                now >= m_search_due) {
+                m_search_due = now + std::chrono::milliseconds(200);
+                for (const std::uint32_t address : m_sweep.next())
+                    transmit(address);
+            }
+        }
     }
 
     for (;;) {
@@ -255,6 +270,10 @@ void system22_c139_transport::exchange(system22_bus& bus) {
                                    peer_node, peer_sequence, peer_frame))
             continue;
         if (peer_node == m_node) continue;
+        // Remember where the linked cabinet actually is, so everything after
+        // this is a direct reply rather than another broadcast.
+        if (sender.sin_addr.s_addr != htonl(INADDR_LOOPBACK))
+            m_peer_ipv4 = sender.sin_addr.s_addr;
         if (m_last_peer_sequence != 0 &&
             static_cast<std::int32_t>(peer_sequence - m_last_peer_sequence) <= 0)
             continue;

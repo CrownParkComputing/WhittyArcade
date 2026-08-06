@@ -27,6 +27,7 @@
 #include <fstream>
 #include <map>
 #include <optional>
+#include <tuple>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -471,7 +472,7 @@ void show_rom_library_manager(launcher_menu& menu) {
         const int selected = menu.select_modes(
             "Settings",
             "Choose a settings area.",
-            items, "Back to Main Menu");
+            items, "Back");
         if (selected < 0) return;
         if (selected == 0) {
             show_library_folder_settings(menu);
@@ -571,7 +572,7 @@ void show_eeprom_manager(launcher_menu& menu) {
             menu, "EEPROM / NVRAM Manager",
             "Choose a board, then a game. Back up, restore, export or "
             "factory-reset its operator data.",
-            counts, false, "Back to Main Menu");
+            counts, false, "Back");
         if (slot < 0) return;
 
         for (;;) {
@@ -615,12 +616,12 @@ void show_high_score_viewer(launcher_menu& menu) {
             "Each game's binary memory layout and checksums must be\n"
             "independently verified before MANX will decode its\n"
             "score table.",
-            "Back to Main Menu");
+            "Back");
         return;
     }
     const int total = static_cast<int>(score_games.size());
     menu.show_scoreboard(
-        "Back to Main Menu", "Hall of Fame", total,
+        "Back", "Hall of Fame", total,
         [&](int index) -> launcher_menu::scoreboard_page {
             const rom_set_manifest& game =
                 *score_games[static_cast<std::size_t>(index)];
@@ -1426,17 +1427,77 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         }
         return rom_selection_result{};
     };
+    // Another machine's console output, relayed over the discovery link.
+    // Reachable while still searching as well as while connected, because
+    // the case worth reading is the one where a machine has just died.
+    const auto show_machine_log = [&menu, lobby](const lobby_machine& from) {
+        const std::vector<std::string> lines = lobby->peer_log(from.nonce);
+        std::string body;
+        if (lines.empty()) {
+            body = "Nothing received from this machine yet. Every machine "
+                   "relays its output continuously once they have found "
+                   "each other, so this fills in as they pair - and what a "
+                   "machine printed just before it stopped stays here.";
+        } else {
+            for (const std::string& line : lines) {
+                body += line;
+                body += '\n';
+            }
+        }
+        menu.show_text("Log from " + from.label() + "  (" + from.address + ")",
+                       body, "Back");
+    };
+
+    // With several machines around, which one's log is being asked for has
+    // to be a question rather than an assumption.
+    const auto choose_machine_log = [&menu, lobby, show_machine_log] {
+        for (;;) {
+            const std::vector<lobby_machine> found = lobby->machines();
+            if (found.empty()) {
+                menu.show_text(
+                    "Machine Logs",
+                    "No other machine is answering, so there is nothing "
+                    "being relayed to read.", "Back");
+                return;
+            }
+            if (found.size() == 1) {
+                show_machine_log(found.front());
+                return;
+            }
+            std::vector<launcher_menu::mode_card> cards;
+            for (const lobby_machine& machine : found)
+                cards.emplace_back(
+                    machine.label(),
+                    machine.has_log ? machine.address :
+                                      machine.address + " - nothing yet",
+                    launcher_menu::mode_icon::audit, 0, !machine.has_log);
+            const int picked = menu.select_modes(
+                "Machine Logs", "Every machine relays what it prints to "
+                "every other. Choose one to read.", cards, "Back");
+            if (picked < 0 ||
+                picked >= static_cast<int>(found.size())) return;
+            show_machine_log(found[static_cast<std::size_t>(picked)]);
+        }
+    };
+
     const auto take_remote_launch = [&]() -> rom_selection_result {
         if (!lobby) return {};
         const std::optional<std::string> game = lobby->take_launch();
         if (!game) return {};
-        rom_selection_result result = linked_result(*game, 2);
-        if (result.action == rom_selection_action::selected) return result;
+        // The player number comes from the host's roster, so with more than
+        // two machines each one starts as the cabinet it was actually
+        // assigned rather than everybody assuming they are Player 2.
+        rom_selection_result result =
+            linked_result(*game, std::max(lobby->node(), 2));
+        if (result.action == rom_selection_action::selected) {
+            result.cabinet_count = std::max(lobby->agreed_count(), 2);
+            return result;
+        }
         menu.show_text(
             "Multiplayer game unavailable",
             "Player 1 selected " + *game +
                 ", but that ROM is not installed in this MANX "
-                "library.", "Back to Main Menu");
+                "library.", "Back");
         return {};
     };
 
@@ -1541,28 +1602,81 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     int play_style = 0;
     std::optional<arcade_board_type> selected_platform;
     int platform_cursor = 0;
+    // Set when this machine has just agreed to a game: the network page is
+    // opened for them rather than left to be found.
+    bool enter_network_page = false;
     for (;;) {
         if (lobby) lobby->set_installed_games(choices);
         const bool lobby_connected_at_draw = lobby && lobby->connected();
         // The grid re-enters this loop whenever the connection changes, so
         // setting it here is enough to keep it honest.
+        const int machines_here = lobby ?
+            static_cast<int>(lobby->machines().size()) : 0;
         menu.set_status(
             lobby_connected_at_draw ?
-                "2 machines connected - network play ready" :
+                std::to_string(machines_here + 1) +
+                    " machines connected - network play ready" :
                 "Waiting for another machine - no network play yet",
             lobby_connected_at_draw);
         const std::function<bool()> interrupt = lobby ?
             std::function<bool()>([lobby, lobby_connected_at_draw] {
                 return lobby->launch_pending() ||
-                       lobby->connected() != lobby_connected_at_draw;
+                       lobby->connected() != lobby_connected_at_draw ||
+                       lobby->pending_invitation().has_value();
             }) :
             std::function<bool()>{};
+        // Someone on the other machine has asked for a game. Whatever this
+        // machine was browsing, the question gets asked here rather than
+        // waiting for the player to find the network page by themselves.
+        const std::optional<lobby_machine> incoming_invitation =
+            lobby ? lobby->pending_invitation() : std::nullopt;
+        if (incoming_invitation) {
+            const int answer = menu.select_modes(
+                "Multiplayer - Invitation",
+                incoming_invitation->label() + " (" +
+                    incoming_invitation->address +
+                    ") wants to start a multiplayer game. Allowing it puts "
+                    "this machine in their game; they choose what everyone "
+                    "plays.",
+                {{"Allow", "Join " + incoming_invitation->label() + "'s game",
+                  launcher_menu::mode_icon::local_players},
+                 {"Deny", "Stay on this machine",
+                  launcher_menu::mode_icon::exit}},
+                "Ask me later", 0,
+                [lobby] { return !lobby->pending_invitation().has_value(); });
+            if (answer == 0) {
+                lobby->answer_invite(true);
+                enter_network_page = true;
+            } else if (answer == 1) {
+                lobby->answer_invite(false);
+            }
+            if (answer == launcher_menu::exit_requested) {
+                rom_selection_result exit_result;
+                exit_result.action = rom_selection_action::exit_requested;
+                return exit_result;
+            }
+            continue;
+        }
         bool system_menu_requested = false;
         if (!selected_platform) {
             std::vector<launcher_menu::mode_card> platform_cards;
             std::vector<std::string> platform_logo_keys;
-            platform_cards.reserve(platforms.size());
-            platform_logo_keys.reserve(platforms.size());
+            platform_cards.reserve(platforms.size() + 1);
+            platform_logo_keys.reserve(platforms.size() + 1);
+            // First card, always: the lobby. It is dark until another
+            // machine is on the network and lights up by itself when one
+            // arrives, so it reads as "nobody to play with yet" rather than
+            // as a menu that does nothing.
+            platform_cards.push_back({
+                "Multiplayer",
+                lobby_connected_at_draw ?
+                    std::to_string(machines_here) + " machine" +
+                        (machines_here == 1 ? "" : "s") + " on the network" :
+                    "No other machine yet",
+                launcher_menu::mode_icon::network, 0,
+                !lobby_connected_at_draw,
+                lobby_connected_at_draw ? "READY" : "SEARCHING"});
+            platform_logo_keys.push_back({});
             for (const platform_entry& platform : platforms) {
                 platform_cards.push_back({
                     platform.name,
@@ -1601,8 +1715,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 return arrived;
             };
             const int platform_choice = menu.select_modes(
-                "Choose Platform",
-                "Multiscreen Arcade Nexus",
+                "MANX",
+                "Play on your own, or across the machines on your network.",
                 platform_cards, "System Menu", platform_cursor, interrupt,
                 collect_platform_logos);
             if (platform_choice == launcher_menu::exit_requested) {
@@ -1618,10 +1732,13 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             }
             if (platform_choice < 0) {
                 system_menu_requested = true;
+            } else if (platform_choice == 0) {
+                enter_network_page = true;
+                continue;
             } else {
                 platform_cursor = platform_choice;
                 selected_platform = platforms[
-                    static_cast<std::size_t>(platform_choice)].board;
+                    static_cast<std::size_t>(platform_choice - 1)].board;
             }
         }
 
@@ -1663,19 +1780,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     const auto identity = identify_arcade_game(choice.path);
                     const bool peer_connected = lobby && lobby->connected();
                     const bool peer_ready = peer_connected && identity &&
-                        lobby->peer_has_game(identity->short_name);
+                        lobby->everyone_has_game(identity->short_name, 2);
                     std::vector<launcher_menu::mode_card> how;
                     std::vector<int> how_style;
                     how.push_back({"Single Player", "One player, one cabinet",
                                    launcher_menu::mode_icon::solo});
                     how_style.push_back(0);
-                    how.push_back({
-                        "Another Instance",
-                        caps.system_link || caps.network_two_player ?
-                            "Start Player 2 here and connect immediately" :
-                            "Start a second connected cabinet here",
-                        launcher_menu::mode_icon::linked_cabinets, 2});
-                    how_style.push_back(6);
                     if (caps.multiplayer ==
                             arcade_multiplayer_mode::alternating) {
                         how.push_back({"Local Multiplayer",
@@ -1695,27 +1805,13 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                                        launcher_menu::mode_icon::split_screen});
                         how_style.push_back(3);
                     }
-                    if (caps.system_link) {
-                        const int maximum = identity ?
-                            linked_cabinet_maximum(identity->short_name) : 2;
-                        if (maximum > 2) {
-                            how.push_back({
-                                "Linked Cabinets",
-                                "Launch 2-" + std::to_string(maximum) +
-                                    " connected instances here",
-                                launcher_menu::mode_icon::linked_cabinets,
-                                maximum});
-                            how_style.push_back(4);
-                        }
-                    }
-                    if (lobby) {
+                    if (lobby && peer_connected) {
                         how.push_back({"Network Play",
-                                       "Play across two computers",
+                                       "Play across the network",
                                        launcher_menu::mode_icon::network, 0,
                                        !peer_ready,
-                                       peer_ready ? "PEER READY" :
-                                       peer_connected ? "GAME NOT ON PEER" :
-                                                        "SEARCHING"});
+                                       peer_ready ? "READY" :
+                                                    "NOT ON THE OTHERS"});
                         how_style.push_back(5);
                     }
                     const int how_chosen = menu.select_modes(
@@ -1743,20 +1839,11 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 if (wanted == 5) {
                     // Across two computers: the partner launches itself.
                     const auto identity = identify_arcade_game(choice.path);
-                    if (identity) lobby->launch_game(identity->short_name);
+                    if (identity) lobby->launch_game(identity->short_name, 2);
                     run_loading_screen(menu, choice);
 
                     return {rom_selection_action::selected, choice.path, cabinet_launch_mode::linked_network, 1, false,
                             false, true, {}};
-                }
-                if (wanted == 6) {
-                    // A second process on this computer. Main allocates a
-                    // private loopback port pair before spawning it, so this
-                    // is already connected when both boards finish booting.
-                    run_loading_screen(menu, choice);
-                    return {rom_selection_action::selected, choice.path,
-                            cabinet_launch_mode::linked_pair, 0, false, false,
-                            true, {}};
                 }
                 if (wanted == 0 || wanted == 1 || wanted == 2) {
                     run_loading_screen(menu, choice);
@@ -1764,113 +1851,32 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     return {rom_selection_action::selected, choice.path, cabinet_launch_mode::single, 0, false, false,
                             wanted != 0, {}};
                 }
-                play_style = wanted;   // twin screens or linked cabinets
             }
-            if (play_style == 1 || play_style == 2) {
-                // One cabinet, both players sharing it exactly as the
-                // original game was played.
-                run_loading_screen(menu, choice);
-
-                return {rom_selection_action::selected, choice.path, cabinet_launch_mode::single, 0, false, false, true,
-                        {}};
-            }
-            if (play_style == 3) {
-                // A machine with one display cannot put a player on a
-                // second one, but the option still shows - greyed out, so it
-                // reads as "this machine cannot", not "this cannot be done".
-                const bool second_display_missing =
-                    display_count() < 2;
-                const int mode = menu.select_modes(
-                    "Start " + choice.label + " - Twin Screens",
-                    "Choose where the two player views should appear.",
-                    {{"Split This Screen", "Two views, side by side",
-                      launcher_menu::mode_icon::split_screen},
-                     {"Two Monitors", "One fullscreen view per display",
-                      launcher_menu::mode_icon::display_wall, 2,
-                      second_display_missing,
-                      second_display_missing ? "CONNECT A SECOND DISPLAY" :
-                                               "2 DISPLAYS READY"}},
-                    "Back to Modes");
-                if (mode == launcher_menu::exit_requested) {
-                    rom_selection_result exit_result;
-                    exit_result.action = rom_selection_action::exit_requested;
-                    return exit_result;
-                }
-                if (mode < 0) continue;
-                run_loading_screen(menu, choice);
-
-                return {rom_selection_action::selected, choice.path, cabinet_launch_mode::independent_pair, 0, mode == 1,
-                        false, true, {}};
-            }
-            // Games whose comm ring runs more than a twin offer the count
-            // first; everything else launches the classic pair directly.
-            int cabinet_count = 2;
-            const auto link_identity = identify_arcade_game(choice.path);
-            const int cabinet_maximum = link_identity ?
-                linked_cabinet_maximum(link_identity->short_name) : 2;
-            if (cabinet_maximum > 2) {
-                std::vector<launcher_menu::mode_card> counts;
-                for (int count = 2; count <= cabinet_maximum; ++count) {
-                    counts.push_back({std::to_string(count) + " Cabinets",
-                                      count == 2 ? "Classic linked twin" :
-                                                   "One instance per cabinet",
-                                      launcher_menu::mode_icon::cabinet_count,
-                                      count});
-                }
-                const int picked = menu.select_modes(
-                    "Start " + choice.label + " - Cabinets In The Link",
-                    "Choose how many linked game instances to start on this "
-                    "machine.", counts, "Back to Modes", 0);
-                if (picked == launcher_menu::exit_requested) {
-                    rom_selection_result exit_result;
-                    exit_result.action = rom_selection_action::exit_requested;
-                    return exit_result;
-                }
-                if (picked < 0) continue;
-                cabinet_count = 2 + picked;
-            }
-            const int connected_displays = display_count();
-            const bool second_display_missing =
-                connected_displays < cabinet_count;
-            const int mode = menu.select_modes(
-                "Start " + choice.label + " - Linked Cabinets",
-                "Choose how the linked cabinets should use your displays.",
-                {{"Side By Side", "Tile every cabinet on this display",
-                  launcher_menu::mode_icon::split_screen, cabinet_count},
-                 {"Separate Monitors", "One cabinet per connected display",
-                  launcher_menu::mode_icon::display_wall, cabinet_count,
-                  second_display_missing,
-                  second_display_missing ?
-                      std::to_string(connected_displays) + " OF " +
-                          std::to_string(cabinet_count) + " DISPLAYS" :
-                                           "DISPLAYS READY"}},
-                "Back to Games", 0);
-            if (mode == launcher_menu::exit_requested) {
-                rom_selection_result exit_result;
-                exit_result.action = rom_selection_action::exit_requested;
-                return exit_result;
-            }
-            if (mode < 0) continue;
-            rom_selection_result linked{rom_selection_action::selected,
-                                        choice.path,
-                                        cabinet_launch_mode::linked_pair, 0,
-                                        mode == 1, mode == 0, true, {}};
-            linked.cabinet_count = cabinet_count;
-            return linked;
         }
 
         // Back from platform selection: the system menu. Everything that is
         // not picking a game lives here, including leaving the program.
-        const int selected_page = menu.select_modes(
+        // Page 0 is Network Play, which is where a machine that has just
+        // agreed to a game needs to be.
+        const bool skip_page_menu = enter_network_page;
+        enter_network_page = false;
+        const int selected_page = skip_page_menu ? 0 : menu.select_modes(
             "MANX",
             lobby && lobby->connected() ?
                 "Network player connected - Network Play launches a shared "
                 "game across both computers." :
                 "System pages. Network Play searches for a second "
                 "MANX on the local network automatically.",
-            {{"Network Play", "Play across two computers",
-              launcher_menu::mode_icon::network, 0, false,
-              lobby && lobby->connected() ? "CONNECTED" : "SEARCHING"},
+            {{"Network Play",
+              lobby_connected_at_draw ?
+                  std::to_string(machines_here) + " machine" +
+                      (machines_here == 1 ? "" : "s") + " found" :
+                  "No other machine on the network yet",
+              launcher_menu::mode_icon::network, 0,
+              // Nothing to do in here on your own: the lobby needs somebody
+              // to ask. It lights up by itself the moment one appears.
+              !lobby_connected_at_draw,
+              lobby_connected_at_draw ? "READY" : "SEARCHING"},
              {"Arcade Wall", "Several games side by side",
               launcher_menu::mode_icon::display_wall},
              {"Settings", "Libraries, media and system help",
@@ -1894,91 +1900,289 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         if (selected_page == 0) {
             if (!lobby) {
                 menu.show_text(
-                    "Multiplayer - Network",
+                    "Multiplayer Lobby",
                     "Automatic multiplayer discovery is available when "
                     "MANX is opened without a ROM on the command "
                     "line.");
                 continue;
             }
+            // One lobby screen for every stage of getting a game going:
+            // finding machines, asking them, answering them, and choosing
+            // what to play. It is drawn as cards rather than sentences so it
+            // reads from across a room and drives from a pad, and it redraws
+            // itself whenever anything on the network changes rather than
+            // waiting for a keypress.
+            using card = launcher_menu::mode_card;
+            using icon = launcher_menu::mode_icon;
             for (;;) {
                 if (lobby->launch_pending()) {
                     rom_selection_result remote = take_remote_launch();
                     if (remote.action == rom_selection_action::selected)
                         return remote;
                 }
-                if (!lobby->connected()) {
-                    const int waiting = menu.select_interruptible(
-                        "Multiplayer - Network - Finding Player 2",
-                        "Open MANX on the second screen or computer. "
-                        "The apps detect each other automatically; no cabinet "
-                        "role or IP address is required.",
-                        {"Searching for another MANX..."},
-                        "Back to Main Menu", 0, [lobby] {
-                            return lobby->connected() ||
-                                   lobby->launch_pending();
-                        });
-                    if (waiting == launcher_menu::exit_requested) {
-                        rom_selection_result exit_result;
-                        exit_result.action =
-                            rom_selection_action::exit_requested;
-                        return exit_result;
+
+                const std::vector<lobby_machine> found = lobby->machines();
+                const std::optional<lobby_machine> asking =
+                    lobby->pending_invitation();
+                const bool hosting = lobby->hosting();
+                const int my_node = lobby->node();
+
+                // A snapshot of everything the screen is drawn from. The
+                // interrupt compares against it, so a change on any machine
+                // redraws this screen instead of stranding it.
+                const auto state_now = [lobby] {
+                    std::string shape;
+                    for (const lobby_machine& machine : lobby->machines()) {
+                        shape += machine.label();
+                        shape += static_cast<char>('0' + machine.node);
+                        shape += static_cast<char>(
+                            '0' + static_cast<int>(machine.invite));
+                        shape += machine.has_log ? 'L' : '-';
                     }
-                    if (waiting == -1) break;
-                    continue;
-                }
-                if (lobby->node() == 2) {
-                    const int waiting = menu.select_interruptible(
-                        "Multiplayer - Network - Player 2 Connected",
-                        "Player 1 is choosing the game. This screen will "
-                        "launch automatically.",
-                        {"Waiting for Player 1..."},
-                        "Back to Main Menu", 0,
-                        [lobby] {
-                            return lobby->launch_pending() ||
-                                   !lobby->connected();
-                        });
-                    if (waiting == launcher_menu::exit_requested) {
-                        rom_selection_result exit_result;
-                        exit_result.action =
-                            rom_selection_action::exit_requested;
-                        return exit_result;
+                    return std::make_tuple(
+                        shape, lobby->hosting(), lobby->node(),
+                        lobby->agreed_count(), lobby->launch_pending(),
+                        lobby->search_exhausted());
+                };
+                const auto snapshot = state_now();
+                const std::function<bool()> changed =
+                    [lobby, state_now, snapshot] {
+                        return state_now() != snapshot;
+                    };
+
+                std::vector<card> cards;
+                std::vector<int> actions;
+                std::vector<uint64_t> targets;
+                enum action {
+                    act_nothing, act_invite_one, act_invite_all, act_allow,
+                    act_deny, act_withdraw, act_logs, act_alternating,
+                    act_simultaneous, act_system_link, act_presence,
+                };
+                const auto add = [&](card entry, int what,
+                                     uint64_t target = 0) {
+                    cards.push_back(std::move(entry));
+                    actions.push_back(what);
+                    targets.push_back(target);
+                };
+
+                std::string title = "Multiplayer Lobby";
+                std::string description;
+
+                if (found.empty()) {
+                    const bool blocked = lobby->search_exhausted();
+                    title = "Multiplayer Lobby - Looking For Machines";
+                    description = blocked ?
+                        "No other MANX has answered on this network. Open "
+                        "MANX on the other computers, check they are all on "
+                        "the same network, and if a firewall asks whether to "
+                        "allow MANX, answer yes everywhere." :
+                        "Open MANX on the other computers. They find each "
+                        "other automatically - no address to type, nothing "
+                        "to open. This machine is \"" + lobby->local_name() +
+                        "\".";
+                    add(card(blocked ? "Still Searching" : "Searching",
+                             blocked ? "Nothing has answered yet" :
+                                       "Looking for other machines",
+                             icon::refresh, 0, true), act_nothing);
+                } else if (asking) {
+                    title = "Multiplayer Lobby - Invitation";
+                    description = asking->label() + " (" + asking->address +
+                        ") wants to start a multiplayer game. Allowing it "
+                        "puts this machine in their game; they choose what "
+                        "everyone plays.";
+                    add(card("Allow", "Join " + asking->label() + "'s game",
+                             icon::local_players), act_allow);
+                    add(card("Deny", "Stay on this machine", icon::exit),
+                        act_deny);
+                } else if (lobby->invitation_refused()) {
+                    title = "Multiplayer Lobby - Declined";
+                    description = "Nobody accepted. Nothing has been started "
+                        "on any machine - ask again, or pick a different "
+                        "one.";
+                    for (const lobby_machine& machine : found)
+                        add(card("Ask " + machine.label(),
+                                 machine.invite ==
+                                         multiplayer_invite::declined ?
+                                     "Said no last time" : machine.address,
+                                 icon::network), act_invite_one,
+                            machine.nonce);
+                    add(card("Leave It", "Back to playing on this machine",
+                             icon::exit), act_withdraw);
+                } else if (!hosting && my_node >= 2) {
+                    title = "Multiplayer Lobby - Player " +
+                            std::to_string(my_node);
+                    description = "In the game as Player " +
+                        std::to_string(my_node) + " of " +
+                        std::to_string(lobby->agreed_count()) +
+                        ". The host is choosing what everyone plays; this "
+                        "machine starts it automatically.";
+                    add(card("Waiting", "The host is choosing the game",
+                             icon::refresh, 0, true), act_nothing);
+                    add(card("Leave", "Drop out of the game", icon::exit),
+                        act_withdraw);
+                } else if (hosting) {
+                    title = "Multiplayer Lobby - You Are The Host";
+                    const int agreed = lobby->agreed_count();
+                    description = agreed >= 2 ?
+                        std::to_string(agreed) + " machines are in. Choose "
+                        "how to play and they all start together - or wait "
+                        "for more to accept." :
+                        "Waiting for an answer. The invitation is on their "
+                        "screens now; somebody there has to allow it.";
+                    for (const lobby_machine& machine : found) {
+                        std::string state = "Not asked";
+                        switch (machine.invite) {
+                        case multiplayer_invite::inviting:
+                        case multiplayer_invite::idle:
+                            state = machine.node ? "Asked - no answer yet"
+                                                 : "Not asked";
+                            break;
+                        case multiplayer_invite::accepted:
+                            state = machine.node ?
+                                "In as Player " + std::to_string(machine.node)
+                                : "Accepted - no place left";
+                            break;
+                        case multiplayer_invite::declined:
+                            state = "Declined";
+                            break;
+                        }
+                        add(card(machine.label(), state,
+                                 machine.invite ==
+                                         multiplayer_invite::accepted ?
+                                     icon::local_players : icon::network,
+                                 0, true), act_nothing, machine.nonce);
                     }
-                    if (waiting == -1) break;
-                    continue;
+                    if (agreed >= 2) {
+                        add(card("Take Turns",
+                                 "A full screen on each computer",
+                                 icon::local_players), act_alternating);
+                        add(card("Play Together",
+                                 "Both players at the same time",
+                                 icon::network), act_simultaneous);
+                        add(card("Arcade System Link",
+                                 "The original cabinet network, up to 8",
+                                 icon::linked_cabinets), act_system_link);
+                    }
+                    add(card("Withdraw", "Cancel and start over", icon::exit),
+                        act_withdraw);
+                } else {
+                    description = "These machines are on the network and "
+                        "ready. Asking one to play makes this machine the "
+                        "host: you choose the game and everyone who accepts "
+                        "starts it together.";
+                    for (const lobby_machine& machine : found) {
+                        const bool askable =
+                            machine.presence == machine_presence::available;
+                        add(card("Ask " + machine.label(),
+                                 machine.presence ==
+                                         machine_presence::in_game ?
+                                     "In a game" :
+                                 machine.presence ==
+                                         machine_presence::unavailable ?
+                                     "Not accepting invitations" :
+                                     machine.address,
+                                 icon::network, 0, !askable),
+                            act_invite_one, machine.nonce);
+                    }
+                    // Somewhere to say "not now" without leaving the lobby.
+                    add(card(lobby->presence() ==
+                                 machine_presence::unavailable ?
+                                 "Accept Invitations" :
+                                 "Do Not Disturb",
+                             lobby->presence() ==
+                                 machine_presence::unavailable ?
+                                 "Let other machines ask again" :
+                                 "Refuse invitations automatically",
+                             icon::controls), act_presence);
+                    if (found.size() > 1)
+                        add(card("Ask Everyone",
+                                 std::to_string(found.size()) +
+                                     " machines found",
+                                 icon::cabinet_count), act_invite_all);
                 }
 
-                // Both machines are here, so the styles are offered
-                // directly rather than behind a generic "network play"
-                // entry: each one lists only the games that support it and
-                // launches both cabinets itself.
-                const int multiplayer_kind = menu.select_modes(
-                    "Two Machines Connected - Choose How To Play",
-                    "Choose a network play style. The second machine will "
-                    "launch automatically.",
-                    {{"Take Turns", "A full screen on each computer",
-                      launcher_menu::mode_icon::local_players},
-                     {"Play Together", "Both players at the same time",
-                      launcher_menu::mode_icon::network},
-                     {"Arcade System Link", "The original cabinet network",
-                      launcher_menu::mode_icon::linked_cabinets}},
-                    "Back to Main Menu", 0,
-                    [lobby] { return !lobby->connected(); });
-                if (multiplayer_kind == launcher_menu::exit_requested) {
+                // Always available, wherever the negotiation has got to: the
+                // moment worth reading a machine's output is the moment it
+                // has stopped answering.
+                add(card("Machine Logs",
+                         lobby->has_any_log() ? "Relayed from the network"
+                                              : "Nothing relayed yet",
+                         icon::audit, 0, !lobby->has_any_log()), act_logs);
+
+                const int picked = menu.select_modes(
+                    title, description, cards, "Back", 0,
+                    changed);
+                if (picked == launcher_menu::exit_requested) {
                     rom_selection_result exit_result;
-                    exit_result.action =
-                        rom_selection_action::exit_requested;
+                    exit_result.action = rom_selection_action::exit_requested;
                     return exit_result;
                 }
-                if (multiplayer_kind == launcher_menu::interrupted) continue;
-                if (multiplayer_kind < 0) break;
+                if (picked == launcher_menu::interrupted) continue;
+                if (picked < 0) {
+                    // Leaving the lobby withdraws whatever this machine had
+                    // outstanding, so nobody is left waiting on an answer
+                    // that is not coming.
+                    lobby->cancel_invite();
+                    break;
+                }
+                if (picked >= static_cast<int>(actions.size())) continue;
+                const std::size_t slot = static_cast<std::size_t>(picked);
 
-                const bool system_link = multiplayer_kind == 2;
-                const arcade_multiplayer_mode wanted_mode =
-                    multiplayer_kind == 0 ?
-                        arcade_multiplayer_mode::alternating :
-                        arcade_multiplayer_mode::simultaneous;
+                bool system_link = false;
+                arcade_multiplayer_mode wanted_mode =
+                    arcade_multiplayer_mode::simultaneous;
+                switch (actions[slot]) {
+                case act_nothing:
+                    continue;
+                case act_logs:
+                    choose_machine_log();
+                    continue;
+                case act_presence:
+                    lobby->set_presence(
+                        lobby->presence() == machine_presence::unavailable ?
+                            machine_presence::available :
+                            machine_presence::unavailable);
+                    continue;
+                case act_invite_one:
+                    lobby->clear_refusal();
+                    lobby->invite(targets[slot]);
+                    continue;
+                case act_invite_all:
+                    lobby->invite_everyone();
+                    continue;
+                case act_allow:
+                    lobby->answer_invite(true);
+                    continue;
+                case act_deny:
+                    lobby->answer_invite(false);
+                    continue;
+                case act_withdraw:
+                    lobby->clear_refusal();
+                    lobby->cancel_invite();
+                    continue;
+                case act_alternating:
+                    wanted_mode = arcade_multiplayer_mode::alternating;
+                    break;
+                case act_simultaneous:
+                    wanted_mode = arcade_multiplayer_mode::simultaneous;
+                    break;
+                case act_system_link:
+                    system_link = true;
+                    break;
+                }
+
+                // How many machines this style can actually use. Lockstep
+                // netplay shares one board between two players and cannot be
+                // stretched further; the cabinet comm ring is the thing the
+                // arcade hardware itself built for a row of machines, so
+                // that one takes everybody.
+                const int places = system_link ?
+                    std::min(lobby->agreed_count(), lobby_max_machines) : 2;
+
+                // Player 1 choosing the game. Only games present on every
+                // taking-part machine are offered, so a pick can never leave
+                // one of them with nothing to load.
                 std::vector<std::size_t> linked_indices;
-                std::vector<std::string> linked_labels;
                 for (std::size_t index = 0; index < choices.size(); ++index) {
                     const auto identity =
                         identify_arcade_game(choices[index].path);
@@ -1989,36 +2193,45 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                             !supports_native_system_link(*manifest) :
                             (!supports_network_two_player(*manifest) ||
                              manifest->multiplayer != wanted_mode)) ||
-                        !lobby->peer_has_game(identity->short_name))
+                        !lobby->everyone_has_game(identity->short_name,
+                                                  places))
                         continue;
                     linked_indices.push_back(index);
-                    linked_labels.push_back(
-                        std::string(system_link ? "SYSTEM LINK  |  " :
+                }
+                std::vector<card> game_cards;
+                for (std::size_t entry = 0; entry < linked_indices.size();
+                     ++entry) {
+                    const rom_choice& listed =
+                        choices[linked_indices[entry]];
+                    game_cards.emplace_back(
+                        listed.label,
+                        system_link ? "System Link" :
                             wanted_mode ==
                                     arcade_multiplayer_mode::alternating ?
-                                "ALTERNATING  |  " : "SIMULTANEOUS  |  ") +
-                        choices[index].label);
+                                "Take turns" : "Play together",
+                        system_link ? icon::linked_cabinets :
+                            wanted_mode ==
+                                    arcade_multiplayer_mode::alternating ?
+                                icon::local_players : icon::network);
                 }
-                const int selected = menu.select_interruptible(
+                const int selected = menu.select_modes(
                     system_link ? "Arcade System Link" :
                         wanted_mode == arcade_multiplayer_mode::alternating ?
-                            "Two Machines - Alternating" :
-                            "Two Machines - Simultaneous",
-                    linked_labels.empty() ?
+                            "Take Turns" : "Play Together",
+                    game_cards.empty() ?
                         (system_link ?
-                            "No System Link game is installed on both "
-                            "machines." :
-                            "No game of this style is installed on both "
-                            "machines. Try the other style, or check the "
-                            "same game is present on each.") :
-                        "Choose once here. Player 2 will launch the same game "
-                        "automatically.",
-                    linked_labels, "Back to Network Multiplayer", 0,
-                    [lobby] { return !lobby->connected(); });
+                            "No System Link game is installed on every "
+                            "machine in the session." :
+                            "No game of this style is installed on every "
+                            "machine. Try the other style, or check the same "
+                            "game is present on each.") :
+                        "Choose once here. The other machines start the "
+                        "same game automatically.",
+                    game_cards, "Back to the Lobby", 0,
+                    [lobby] { return lobby->node() != 1; });
                 if (selected == launcher_menu::exit_requested) {
                     rom_selection_result exit_result;
-                    exit_result.action =
-                        rom_selection_action::exit_requested;
+                    exit_result.action = rom_selection_action::exit_requested;
                     return exit_result;
                 }
                 if (selected == launcher_menu::interrupted) continue;
@@ -2029,11 +2242,15 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     linked_indices[static_cast<std::size_t>(selected)]];
                 const auto identity = identify_arcade_game(choice.path);
                 if (!identity) continue;
-                lobby->launch_game(identity->short_name);
+                lobby->launch_game(identity->short_name, places);
                 run_loading_screen(menu, choice);
 
-                return {rom_selection_action::selected, choice.path, cabinet_launch_mode::linked_network, 1, false, false,
-                        true, {}};
+                rom_selection_result host_result{
+                    rom_selection_action::selected, choice.path,
+                    cabinet_launch_mode::linked_network, 1, false, false,
+                    true, {}};
+                host_result.cabinet_count = std::max(places, 2);
+                return host_result;
             }
             continue;
         }
@@ -2077,7 +2294,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 "Arcade Wall",
                 "Choose how many independent games to run side by side. "
                 "This machine can drive " + std::to_string(capacity) +
-                    " at once.", counts, "Back to Main Menu", 0);
+                    " at once.", counts, "Back", 0);
             if (chosen == launcher_menu::exit_requested) {
                 rom_selection_result exit_result;
                 exit_result.action = rom_selection_action::exit_requested;

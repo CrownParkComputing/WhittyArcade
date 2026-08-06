@@ -27,6 +27,10 @@
 
 #pragma once
 
+#include "lan_peers.h"
+
+#include <chrono>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -104,6 +108,12 @@ private:
     std::uint16_t m_local_port{};
     std::uint16_t m_peer_port{};
     bool m_network{};
+    // The linked cabinet, once it has answered. Until then the search is
+    // broadcast plus a paced unicast sweep of the subnet - see lan_peers.h
+    // for why a broadcast alone does not survive a desktop firewall.
+    std::uint32_t m_peer_ipv4{};
+    lan::peer_sweep m_sweep;
+    std::chrono::steady_clock::time_point m_search_due{};
     bool m_linked{};
     bool m_payload_sent{};
     bool m_payload_received{};

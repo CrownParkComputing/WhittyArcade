@@ -4,11 +4,15 @@
 #include "arcade_feedback.h"
 #include "arcade_types.h"
 #include "input_mapping.h"
+#include "lan_peers.h"
 
 #include <SDL3/SDL.h>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <functional>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -16,6 +20,11 @@
 // from the other MANX instance. Native cabinet links (for example
 // Sega Rally's Model 2 board) report their own state instead.
 bool arcade_input_network_peer_seen();
+// True while this cabinet is the one the controls are driving: it holds the
+// keyboard, or the pointer is over it. With several cabinets on one computer
+// they all see the same gamepad, so without this every press goes into all of
+// them at once and no single cabinet can be given a coin.
+bool arcade_input_cabinet_active();
 // Netplay, read by the host loop: true while this machine is waiting for the
 // peer's input for the frame it is about to run. The board must not be
 // stepped while it is true, or the two machines diverge.
@@ -46,6 +55,16 @@ void arcade_input_netplay_request_shutdown();
 // itself when the link opens.
 void arcade_input_netplay_poll();
 uint32_t arcade_input_network_peer_ipv4();
+
+// Multiplayer traffic normally rides the lobby's socket, which is already up,
+// already unicast to every machine in the session and already through
+// whatever firewalls are in the way. Installing a transport switches the
+// in-game link onto it; without one the link opens a socket of its own,
+// which is what a cabinet started straight from the command line does.
+void arcade_input_set_netplay_transport(
+    std::function<void(const void*, std::size_t)> send);
+// Handed each payload the transport delivers. Safe to call from any thread.
+void arcade_input_netplay_deliver(const void* data, std::size_t bytes);
 void arcade_input_set_authoritative_player(uint8_t player);
 uint8_t arcade_input_network_authoritative_player();
 
@@ -76,6 +95,9 @@ public:
     void reload_mappings();
     void shutdown();
     void request_peer_shutdown();
+    // True when this cabinet can reach the others - either through a socket
+    // of its own or through the lobby's channel.
+    bool link_open() const;
     // Whole-pad force feedback. Continuous effects are refreshed often
     // enough to survive SDL's finite timeout without flooding a wireless
     // controller; pulses always restart immediately.
@@ -170,6 +192,9 @@ private:
     bool m_suppressed{false};
     std::intptr_t m_network_socket{-1};
     uint16_t m_network_peer_port{};
+    // Only used until the peer answers: after that the link is unicast.
+    lan::peer_sweep m_network_sweep;
+    std::chrono::steady_clock::time_point m_network_search_due{};
     uint8_t m_network_node{};
     uint32_t m_network_session{};
     uint32_t m_network_peer_session{};

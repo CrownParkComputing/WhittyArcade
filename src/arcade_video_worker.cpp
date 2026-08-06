@@ -6,6 +6,8 @@
 #include "arcade_renderer.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <chrono>
 #include <future>
 
@@ -419,6 +421,13 @@ void arcade_video_worker::present_rgba_frame(const uint8_t* pixels,
                 hash *= 1099511628211ull;
             }
             arcade_input_netplay_publish_state(frame, hash ? hash : 1);
+            if (const char* trace = std::getenv("MANX_NETPLAY_TRACE"))
+                if (*trace == '1')
+                    std::fprintf(stderr,
+                                 "[trace] frame %u raster %dx%d display %dx%d "
+                                 "hash %016llx\n", frame, width, height,
+                                 display_width, display_height,
+                                 static_cast<unsigned long long>(hash));
         }
     }
     const std::size_t size = static_cast<std::size_t>(width) * height * 4;

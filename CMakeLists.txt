@@ -165,6 +165,12 @@ add_library(mb86233 STATIC
 target_include_directories(mb86233 PUBLIC third_party/mb86233)
 target_compile_options(mb86233 PRIVATE -O2 -w)
 
+# Finding other machines on the LAN. Used by the launcher lobby and by both
+# native cabinet-link transports, so it is a library rather than a source
+# repeated in each target.
+add_library(lan_peers STATIC src/lan_peers.cpp)
+target_include_directories(lan_peers PUBLIC include)
+
 add_library(system24_video STATIC src/system24_tile_video.cpp)
 target_include_directories(system24_video PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(system24_video PRIVATE -O2 -Wall -Wextra -Wpedantic)
@@ -296,6 +302,7 @@ set(SOURCES
     src/arcade_input.cpp
     src/network_video_link.cpp
     src/multiplayer_lobby.cpp
+    src/manx_log_tap.cpp
     src/input_mapping.cpp
     src/input_mapper.cpp
     src/media_library.cpp
@@ -420,6 +427,7 @@ if(WIN32)
 else()
     add_executable(MANX ${SOURCES})
 endif()
+target_link_libraries(MANX PRIVATE lan_peers)
 set_target_properties(MANX PROPERTIES OUTPUT_NAME MANX)
 add_dependencies(MANX manx_shaders)
 target_include_directories(MANX PRIVATE ${MANX_SHADER_HEADER_DIR})
@@ -573,6 +581,8 @@ add_executable(vulkan_presenter_harness
     src/sega/model2/model2_draw_list.cpp
     src/sega/model2/model2_video.cpp
 )
+target_link_libraries(vulkan_presenter_harness PRIVATE lan_peers)
+
 add_dependencies(vulkan_presenter_harness manx_shaders)
 target_include_directories(vulkan_presenter_harness PRIVATE
     ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src
@@ -821,6 +831,8 @@ add_executable(c139_transport_test
     src/namco/system22/system22_cpu.cpp
     src/namco/system22/system22_c139_transport.cpp
 )
+target_link_libraries(c139_transport_test PRIVATE lan_peers)
+
 target_include_directories(c139_transport_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(c139_transport_test PRIVATE
     musashi Threads::Threads ${MANX_MATH_LIB})
@@ -961,6 +973,8 @@ add_executable(model2_boot_test
     src/sega/model2/model2_geometry.cpp
     src/sega/model2/model2_video.cpp
 )
+target_link_libraries(model2_boot_test PRIVATE lan_peers)
+
 target_include_directories(model2_boot_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/i960
@@ -1001,6 +1015,8 @@ add_executable(model2_io_test
     tests/model2_io_test.cpp
     src/sega/model2/model2_bus.cpp
 )
+target_link_libraries(model2_io_test PRIVATE lan_peers)
+
 target_include_directories(model2_io_test PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/mb86233)

@@ -17,11 +17,12 @@ enum class rom_selection_action : uint8_t {
     exit_requested,
 };
 
+// A cabinet is either on its own or in a network session. Local pairs of
+// processes linked over loopback are gone: every multiplayer route is the
+// lobby now.
 enum class cabinet_launch_mode : uint8_t {
     single,
-    linked_pair,
     linked_network,
-    independent_pair,
 };
 
 struct rom_selection_result {

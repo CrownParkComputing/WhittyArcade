@@ -886,21 +886,38 @@ void model2_bus::comm_peer_send() {
     sockaddr_in peer{};
     peer.sin_family = AF_INET;
     peer.sin_port = htons(m_comm_peer_port);
-    peer.sin_addr.s_addr = htonl(
-        m_comm_network ? INADDR_BROADCAST : INADDR_LOOPBACK);
     const native_socket socket_handle = to_native_socket(m_comm_socket);
-    sendto(socket_handle, reinterpret_cast<const char*>(packet.data()),
-           static_cast<int>(packet.size()), 0,
-           reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
-    // Also loop the LAN packet onto this host. This supports two-computer
-    // testing on one machine and does not affect remote discovery; packets
-    // still carry a node ID and self-originated frames are ignored.
-    if (m_comm_network) {
-        peer.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    const auto transmit = [&](uint32_t address) {
+        peer.sin_addr.s_addr = address;
         sendto(socket_handle, reinterpret_cast<const char*>(packet.data()),
                static_cast<int>(packet.size()), 0,
                reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
+    };
+    // Always loop the packet onto this host. This supports two-computer
+    // testing on one machine and does not affect remote discovery; packets
+    // still carry a node ID and self-originated frames are ignored.
+    transmit(htonl(INADDR_LOOPBACK));
+    if (!m_comm_network) return;
+
+    if (m_comm_peer_ipv4) {
+        // The ring's next node has answered, so talk straight to it. This is
+        // also what carries the link through a deny-by-default firewall: an
+        // established two-way conversation is let through where an
+        // unsolicited broadcast is not.
+        transmit(m_comm_peer_ipv4);
+        return;
     }
+
+    // Nobody upstream yet. Broadcast plus a paced sweep, rate limited
+    // because this runs at frame rate and a search that saturates the link
+    // it is opening helps nobody.
+    const auto now = std::chrono::steady_clock::now();
+    if (m_comm_search_due.time_since_epoch().count() != 0 &&
+        now < m_comm_search_due)
+        return;
+    m_comm_search_due = now + std::chrono::milliseconds(200);
+    for (const uint32_t address : m_comm_sweep.next())
+        transmit(address);
 }
 
 bool model2_bus::comm_peer_receive() {
@@ -928,6 +945,10 @@ bool model2_bus::comm_peer_receive() {
             incoming[4] != 1 || incoming[5] == m_comm_node_id)
             continue;
         m_comm_peer_seen = true;
+        // Remember where the ring's neighbour actually is, so every packet
+        // after this one is a direct reply rather than another broadcast.
+        if (sender.sin_addr.s_addr != htonl(INADDR_LOOPBACK))
+            m_comm_peer_ipv4 = sender.sin_addr.s_addr;
         const uint32_t payload_size = read_packet_u32(incoming.data() + 12);
         if ((incoming[6] & 1) && payload_size == comm_frame_size &&
             received == static_cast<int>(comm_packet_header +

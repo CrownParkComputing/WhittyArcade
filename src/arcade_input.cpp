@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <thread>
 #include <type_traits>
 
@@ -29,6 +30,20 @@ constexpr float axis_deadzone = 0.15f;
 constexpr float cabinet_press_threshold = 0.5f;
 constexpr std::size_t sdl_guid_text_size = 33;
 constexpr std::array<uint8_t, 4> input_link_magic{{'W', 'A', 'I', '2'}};
+
+// When the lobby owns the link, this is how packets leave; and everything
+// that arrives is queued here for the emulation thread to drain, so the
+// lobby thread is never held up by the board.
+std::mutex g_transport_mutex;
+std::function<void(const void*, std::size_t)> g_transport_send;
+std::mutex g_inbox_mutex;
+std::vector<std::vector<uint8_t>> g_inbox;
+
+// Which cabinet the sticks and buttons are driving. With more than one
+// cabinet on one computer they all see the same gamepad - the operating
+// system only routes the keyboard - so without this every pad press went
+// into every cabinet at once and a coin could not be put into one of them.
+std::atomic_bool g_cabinet_active{true};
 
 std::atomic_bool network_peer_seen{false};
 std::atomic_uint32_t network_peer_ipv4{0};
@@ -143,6 +158,10 @@ void route_player_two_keyboard_to_cabinet(
 }
 } // namespace
 
+bool arcade_input_cabinet_active() {
+    return g_cabinet_active.load(std::memory_order_acquire);
+}
+
 bool arcade_input_network_peer_seen() {
     return network_peer_seen.load(std::memory_order_acquire);
 }
@@ -154,6 +173,14 @@ std::atomic_bool g_netplay_active{false};
 std::atomic_bool g_netplay_stalled{false};
 std::atomic_int g_netplay_lead{0};
 std::atomic_uint32_t g_netplay_desync_frame{0};
+// Consecutive disagreeing samples. One is not a divergence: the picture hash
+// is sampled a frame either side of its partner's during fast animation, and
+// measurement on two cabinets shows exactly that shape - a few seconds of
+// disagreement inside one attract segment, then thousands of frames back in
+// step. Boards that have really diverged never come back, so only a
+// sustained run of disagreements means anything.
+unsigned g_netplay_mismatches = 0;
+constexpr unsigned netplay_desync_confidence = 12;
 // The local board's state hash, kept per frame so a peer's report about an
 // older frame can still be compared against what we ran.
 constexpr int netplay_hash_ring = 256;
@@ -206,6 +233,27 @@ void arcade_input_netplay_poll() {
 
 void arcade_input_netplay_request_shutdown() {
     if (g_netplay_link_owner) g_netplay_link_owner->request_peer_shutdown();
+}
+
+bool netplay_transport_installed() {
+    std::lock_guard<std::mutex> lock(g_transport_mutex);
+    return static_cast<bool>(g_transport_send);
+}
+
+void arcade_input_set_netplay_transport(
+        std::function<void(const void*, std::size_t)> send) {
+    std::lock_guard<std::mutex> lock(g_transport_mutex);
+    g_transport_send = std::move(send);
+}
+
+void arcade_input_netplay_deliver(const void* data, std::size_t bytes) {
+    if (!data || bytes == 0) return;
+    const uint8_t* first = static_cast<const uint8_t*>(data);
+    std::lock_guard<std::mutex> lock(g_inbox_mutex);
+    // A board that has stopped draining must not make the lobby thread grow
+    // this without limit; a stale input frame is worthless anyway.
+    if (g_inbox.size() > 256) g_inbox.erase(g_inbox.begin());
+    g_inbox.emplace_back(first, first + bytes);
 }
 
 uint32_t arcade_input_network_peer_ipv4() {
@@ -264,84 +312,41 @@ bool arcade_input::initialize_network_link() {
         return true;
     const char* node_text = std::getenv("MANX_CABINET_NODE");
     const int node = node_text ? std::atoi(node_text) : 0;
-    const uint16_t local_port = input_link_port("MANX_INPUT_LOCAL_PORT");
-    const uint16_t peer_port = input_link_port("MANX_INPUT_PEER_PORT");
-    if ((node != 1 && node != 2) || !local_port || !peer_port)
-        return false;
+    if (node < 1 || node > 8) return false;
 
-#if defined(_WIN32)
-    static const bool winsock_ready = [] {
-        WSADATA data{};
-        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
-    }();
-    if (!winsock_ready) return false;
-#endif
-    const input_native_socket socket_handle =
-        ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (socket_handle == invalid_input_socket) return false;
-    int enabled_option = 1;
-    setsockopt(socket_handle, SOL_SOCKET, SO_REUSEADDR,
-               reinterpret_cast<const char*>(&enabled_option),
-               sizeof(enabled_option));
-    setsockopt(socket_handle, SOL_SOCKET, SO_BROADCAST,
-               reinterpret_cast<const char*>(&enabled_option),
-               sizeof(enabled_option));
-    // Input is live state, not an event recording. A small receive buffer
-    // prevents a stalled frame from accumulating seconds of old commands.
-    const int receive_buffer = 32768;
-    setsockopt(socket_handle, SOL_SOCKET, SO_RCVBUF,
-               reinterpret_cast<const char*>(&receive_buffer),
-               sizeof(receive_buffer));
-#if defined(_WIN32)
-    u_long nonblocking = 1;
-    if (ioctlsocket(socket_handle, FIONBIO, &nonblocking) != 0) {
-        closesocket(socket_handle);
-        return false;
+    {
+        // The lobby is carrying this session's traffic, so the link has no
+        // socket, no port and nothing to discover - it just hands packets
+        // over. One channel for all multiplayer, as agreed upstairs.
+        std::lock_guard<std::mutex> lock(g_transport_mutex);
+        if (g_transport_send) {
+            m_network_node = static_cast<uint8_t>(node);
+            if (m_netplay) g_netplay_link_owner = this;
+            const uint64_t ticks = static_cast<uint64_t>(
+                std::chrono::steady_clock::now().time_since_epoch().count());
+            m_network_session = static_cast<uint32_t>(
+                ticks ^ (ticks >> 32) ^ reinterpret_cast<std::uintptr_t>(this));
+            if (m_network_session == 0) m_network_session = 1;
+            m_network_peer_session = 0;
+            m_network_sequence = 0;
+            m_network_peer_sequence = 0;
+            m_network_peer_age = 0xffff;
+            m_network_peer_state = {};
+            network_peer_seen.store(false, std::memory_order_release);
+            std::printf("MANX player %d input link over the lobby channel\n",
+                        node);
+            return true;
+        }
     }
-#else
-    const int flags = fcntl(socket_handle, F_GETFL, 0);
-    if (flags < 0 ||
-        fcntl(socket_handle, F_SETFL, flags | O_NONBLOCK) < 0) {
-        ::close(socket_handle);
-        return false;
-    }
-#endif
-    sockaddr_in local{};
-    local.sin_family = AF_INET;
-    local.sin_port = htons(local_port);
-    local.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (::bind(socket_handle, reinterpret_cast<const sockaddr*>(&local),
-               sizeof(local)) != 0) {
-#if defined(_WIN32)
-        closesocket(socket_handle);
-#else
-        ::close(socket_handle);
-#endif
-        return false;
-    }
-
-    m_network_socket = static_cast<std::intptr_t>(socket_handle);
-    // Claimed here, not earlier: initialize_network_link calls
-    // shutdown_network_link on its way in, which clears the owner - so an
-    // assignment made before that point is thrown away, and a waiting
-    // cabinet is then never polled and never announces itself.
-    if (m_netplay) g_netplay_link_owner = this;
-    m_network_peer_port = peer_port;
-    m_network_node = static_cast<uint8_t>(node);
-    const uint64_t ticks = static_cast<uint64_t>(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    m_network_session = static_cast<uint32_t>(
-        ticks ^ (ticks >> 32) ^ reinterpret_cast<std::uintptr_t>(this));
-    if (m_network_session == 0) m_network_session = 1;
-    m_network_peer_session = 0;
-    m_network_sequence = 0;
-    m_network_peer_sequence = 0;
-    m_network_peer_age = 0xffff;
-    m_network_peer_state = {};
-    network_peer_seen.store(false, std::memory_order_release);
-    network_peer_ipv4.store(0, std::memory_order_release);
-    std::printf("MANX player %u input link UDP %u -> %u\n",
-                m_network_node, local_port, peer_port);
+    // No lobby, no link. Every multiplayer route goes through the lobby
+    // process now: it is the one channel that is already up on every
+    // machine, already unicast to the roster and already through whatever
+    // firewalls are between them. A cabinet that opened its own socket would
+    // have to win all of that again from inside a running game.
+    std::fprintf(stderr,
+                 "Netplay needs the lobby: start MANX without a ROM on the "
+                 "command line and choose Multiplayer.\n");
+    return false;
     return true;
 }
 
@@ -372,25 +377,21 @@ void arcade_input::shutdown_network_link() {
 // the program; the frame budget is generous next to a 60 Hz frame because a
 // brief network hiccup should cost a stutter, not a disconnection.
 // Reads every datagram waiting on the link, filing netplay inputs by frame.
-// Returns true when at least one packet from the peer was accepted.
+// Returns true when at least one packet from another cabinet was accepted.
 bool arcade_input::drain_network_input() {
-    if (m_network_socket == -1) return false;
-    const input_native_socket socket_handle =
-        to_input_socket(m_network_socket);
+    // Everything arrives through the lobby, which queued it for us on its
+    // own thread so a slow board can never hold the lobby up.
+    std::vector<std::vector<uint8_t>> queued;
+    {
+        std::lock_guard<std::mutex> lock(g_inbox_mutex);
+        queued.swap(g_inbox);
+    }
+    if (queued.empty()) return false;
     bool received_peer = false;
-    for (;;) {
+    for (const std::vector<uint8_t>& payload : queued) {
         network_input_packet incoming{};
-        sockaddr_in sender{};
-#if defined(_WIN32)
-        int sender_size = sizeof(sender);
-#else
-        socklen_t sender_size = sizeof(sender);
-#endif
-        const int received = static_cast<int>(recvfrom(
-            socket_handle, reinterpret_cast<char*>(&incoming),
-            static_cast<int>(sizeof(incoming)), 0,
-            reinterpret_cast<sockaddr*>(&sender), &sender_size));
-        if (received != static_cast<int>(sizeof(incoming))) break;
+        if (payload.size() != sizeof(incoming)) continue;
+        std::memcpy(&incoming, payload.data(), sizeof(incoming));
         if (incoming.magic != input_link_magic ||
             incoming.version != 1 ||
             incoming.node == m_network_node ||
@@ -431,8 +432,7 @@ bool arcade_input::drain_network_input() {
             // mismatch means the two boards have diverged - the one thing
             // lockstep exists to prevent - so it is reported rather than
             // left to show as two players seeing different games.
-            if (incoming.state_hash != 0 &&
-                g_netplay_desync_frame.load(std::memory_order_acquire) == 0) {
+            if (incoming.state_hash != 0) {
                 const uint64_t ours =
                     g_netplay_local_hashes[incoming.hash_frame %
                                            netplay_hash_ring].load(
@@ -472,16 +472,34 @@ bool arcade_input::drain_network_input() {
                                      "Match them from the EEPROM / NVRAM "
                                      "manager, or the boards will diverge.\n");
                     }
-                    g_netplay_desync_frame.store(
-                        incoming.hash_frame == 0 ? 1 : incoming.hash_frame,
-                        std::memory_order_release);
-                    std::fprintf(stderr,
-                                 "Netplay desync at frame %u: local %016llx "
-                                 "peer %016llx\n",
-                                 incoming.hash_frame,
-                                 static_cast<unsigned long long>(ours),
-                                 static_cast<unsigned long long>(
-                                     incoming.state_hash));
+                    // Operator data is compared once before the first frame
+                    // and means something on its own; a running frame has to
+                    // disagree repeatedly before it counts.
+                    ++g_netplay_mismatches;
+                    if (operator_data ||
+                        g_netplay_mismatches >= netplay_desync_confidence) {
+                        g_netplay_desync_frame.store(
+                            incoming.hash_frame == 0 ? 1
+                                                     : incoming.hash_frame,
+                            std::memory_order_release);
+                        std::fprintf(stderr,
+                                     "Netplay desync at frame %u after %u "
+                                     "disagreements: local %016llx peer "
+                                     "%016llx\n",
+                                     incoming.hash_frame,
+                                     g_netplay_mismatches,
+                                     static_cast<unsigned long long>(ours),
+                                     static_cast<unsigned long long>(
+                                         incoming.state_hash));
+                    }
+                } else if (ours != 0 && !operator_data &&
+                           ours == incoming.state_hash) {
+                    // Back in step. Forget the run of disagreements and take
+                    // any warning down: telling a player to restart a session
+                    // that has already recovered is worse than saying nothing.
+                    g_netplay_mismatches = 0;
+                    g_netplay_desync_frame.store(0,
+                                                 std::memory_order_release);
                 }
             }
         }
@@ -493,15 +511,22 @@ bool arcade_input::drain_network_input() {
                 std::memory_order_release);
         m_network_peer_sequence = incoming.sequence;
         m_network_peer_age = 0;
-        network_peer_ipv4.store(sender.sin_addr.s_addr,
-                                std::memory_order_release);
+        // No address to learn: the lobby knows where every cabinet is.
         received_peer = true;
     }
     return received_peer;
 }
 
+bool arcade_input::link_open() const {
+    return netplay_transport_installed();
+}
+
 void arcade_input::poll_link() {
-    if (!m_netplay || m_network_socket == -1) return;
+    // A link carried by the lobby owns no socket of its own, so "no socket"
+    // must not be read as "no link" - that left both cabinets silent, each
+    // waiting for the other, with no frame ever drawn and no window ever
+    // shown.
+    if (!m_netplay || !link_open()) return;
     // Announce first, then listen: a silent cabinet is invisible to its
     // partner, and two silent cabinets wait for each other for ever.
     send_link_packet(m_state);
@@ -567,9 +592,7 @@ void arcade_input::wait_for_peer_frame(uint32_t frame) {
 // other - so each waited for a packet the other would never send.
 void arcade_input::send_link_packet(const input_state& local_state,
                                     bool shutting_down) {
-    if (m_network_socket == -1 || m_network_node == 0) return;
-    const input_native_socket socket_handle =
-        to_input_socket(m_network_socket);
+    if (!link_open() || m_network_node == 0) return;
     network_input_packet outgoing{};
     outgoing.magic = input_link_magic;
     outgoing.version = 1;
@@ -602,23 +625,19 @@ void arcade_input::send_link_packet(const input_state& local_state,
         }
     }
 
-    sockaddr_in peer{};
-    peer.sin_family = AF_INET;
-    peer.sin_port = htons(m_network_peer_port);
-    peer.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-    sendto(socket_handle, reinterpret_cast<const char*>(&outgoing),
-           static_cast<int>(sizeof(outgoing)), 0,
-           reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
-    // Also loop the LAN packet onto this host so the exact two-computer mode
-    // can be tested with two local MANX instances.
-    peer.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    sendto(socket_handle, reinterpret_cast<const char*>(&outgoing),
-           static_cast<int>(sizeof(outgoing)), 0,
-           reinterpret_cast<const sockaddr*>(&peer), sizeof(peer));
+    // One channel for all multiplayer: the lobby already reaches every
+    // machine in the session, so there is nothing here to search for and
+    // nothing to get through.
+    std::function<void(const void*, std::size_t)> send;
+    {
+        std::lock_guard<std::mutex> lock(g_transport_mutex);
+        send = g_transport_send;
+    }
+    if (send) send(&outgoing, sizeof(outgoing));
 }
 
 void arcade_input::request_peer_shutdown() {
-    if (!m_netplay || m_network_socket == -1) return;
+    if (!m_netplay || !link_open()) return;
     // UDP is intentionally best-effort; three back-to-back notices make a
     // local packet loss harmless without adding a blocking acknowledgement
     // to the shutdown path.
@@ -627,7 +646,7 @@ void arcade_input::request_peer_shutdown() {
 }
 
 void arcade_input::exchange_network_input(const input_state& local_state) {
-    if (m_network_socket == -1 || m_network_node == 0) return;
+    if (!link_open() || m_network_node == 0) return;
     send_link_packet(local_state);
     const bool received_peer = drain_network_input();
     if (!received_peer && m_network_peer_age < 0xfffe)
@@ -1161,6 +1180,17 @@ void arcade_input::update() {
         set_rumble(m_rumble_low, m_rumble_high);
     }
 
+    // A cabinet is the live one when it holds the keyboard or the pointer is
+    // over it, so pointing at a cabinet is what puts you at it - the same
+    // gesture as walking up to one. Everything else on the machine keeps
+    // running and stays linked; it just is not the one the controls reach.
+    // A cabinet on its own always holds one or the other and so is always
+    // live, which leaves the single-player case exactly as it was.
+    const bool holds_focus = SDL_GetKeyboardFocus() != nullptr ||
+                             SDL_GetMouseFocus() != nullptr;
+    g_cabinet_active.store(holds_focus, std::memory_order_release);
+    const bool inert = m_suppressed || !holds_focus;
+
     const bool* keys = SDL_GetKeyboardState(nullptr);
     // Cabinet lines are edge-latched briefly. Real cabinets sample dedicated
     // I/O continuously, whereas the adapter transfers host state once per
@@ -1170,14 +1200,14 @@ void arcade_input::update() {
                              cabinet_press_threshold;
         const bool event = m_cabinet_events[slot].exchange(
             false, std::memory_order_relaxed);
-        if (!m_suppressed &&
+        if (!inert &&
             (event || (pressed && !m_cabinet_pressed[slot]))) {
             m_cabinet_pulse_frames[slot] = slot < 2 ? 2 : 4;
         }
         m_cabinet_pressed[slot] = pressed;
     }
 
-    if (m_suppressed) {
+    if (inert) {
         m_keyboard_steering = 0.0f;
         m_cabinet_pulse_frames.fill(0);
         m_lightgun_mouse_active = false;

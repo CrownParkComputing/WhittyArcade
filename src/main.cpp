@@ -16,6 +16,7 @@
 #include "input_mapper.h"
 #include "launcher_menu.h"
 #include "wall_capacity.h"
+#include "manx_log_tap.h"
 #include "multiplayer_lobby.h"
 #include "namco/system22/system22_c139_transport.h"
 #include "namco/system22/system22_cpu.h"
@@ -25,6 +26,11 @@
 
 #if defined(_WIN32)
 #include <SDL3/SDL_main.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #endif
 
 #include <algorithm>
@@ -84,9 +90,6 @@ struct runtime_options {
     int wall_slot{};
     int wall_count{};
     uint16_t pair_port_base{35112};
-    bool independent_pair{};
-    bool twin_screen{};
-    bool network_pair{};
     bool twin_one_screen{};
     bool two_player{};
     std::vector<std::string> positional;
@@ -135,20 +138,10 @@ runtime_options parse_runtime_options(int argc, char* argv[]) {
             options.cabinet_node = std::atoi(argv[++index]);
         } else if (argument == "--cabinet-count" && index + 1 < argc) {
             options.cabinet_count = std::atoi(argv[++index]);
-        } else if (argument == "--pair-port-base" && index + 1 < argc) {
-            const int value = std::atoi(argv[++index]);
-            if (value > 1024 && value < 65535)
-                options.pair_port_base = static_cast<uint16_t>(value);
         } else if (argument == "--wall-slot" && index + 1 < argc) {
             options.wall_slot = std::atoi(argv[++index]);
         } else if (argument == "--wall-count" && index + 1 < argc) {
             options.wall_count = std::atoi(argv[++index]);
-        } else if (argument == "--independent-cabinet") {
-            options.independent_pair = true;
-        } else if (argument == "--twin-screen") {
-            options.twin_screen = true;
-        } else if (argument == "--network-cabinet") {
-            options.network_pair = true;
         } else if (argument == "--twin-one-screen") {
             options.twin_one_screen = true;
         } else if (argument == "--two-player") {
@@ -353,13 +346,14 @@ void configure_cabinet_environment(int node, int count, uint16_t port_base,
         unset_environment("SYSTEM22_C139_PEER_PORT");
         unset_environment("SYSTEM22_C139_NETWORK");
         unset_environment("MANX_INPUT_LINK");
-        unset_environment("MANX_INPUT_LOCAL_PORT");
-        unset_environment("MANX_INPUT_PEER_PORT");
         unset_environment("MANX_VIDEO_ROLE");
         unset_environment("MANX_VIDEO_PORT");
         unset_environment("RRACER_CONTROLLER");
         return;
     }
+    // Still needed by the two native cabinet transports, which speak the
+    // real boards' own protocols on their own ports. The generic input link
+    // has none: it goes through the lobby.
     const uint16_t local_port =
         static_cast<uint16_t>(port_base + (node == 2 ? 1 : 0));
     const uint16_t peer_port =
@@ -405,10 +399,6 @@ void configure_cabinet_environment(int node, int count, uint16_t port_base,
     }
     if (generic_input_link) {
         set_environment("MANX_INPUT_LINK", "1");
-        set_environment("MANX_INPUT_LOCAL_PORT",
-                        std::to_string(local_port));
-        set_environment("MANX_INPUT_PEER_PORT",
-                        std::to_string(peer_port));
         // Netplay: both machines simulate the whole board from the same
         // inputs, so no picture is sent. The video link stays in the tree
         // for the streaming path but is not started here.
@@ -417,8 +407,6 @@ void configure_cabinet_environment(int node, int count, uint16_t port_base,
         unset_environment("MANX_VIDEO_PORT");
     } else {
         unset_environment("MANX_INPUT_LINK");
-        unset_environment("MANX_INPUT_LOCAL_PORT");
-        unset_environment("MANX_INPUT_PEER_PORT");
         unset_environment("MANX_NETPLAY");
         unset_environment("MANX_VIDEO_ROLE");
         unset_environment("MANX_VIDEO_PORT");
@@ -436,74 +424,6 @@ uint16_t choose_pair_port_base() {
     // with bases spaced so two concurrent launches can never overlap.
     return static_cast<uint16_t>(36000 + (process_id % 3000) * 8);
 }
-
-class cabinet_companion {
-public:
-    ~cabinet_companion() { stop(); }
-
-    // Spawns cabinets 2..count; each is a full machine of its own on the
-    // comm ring. A classic twin is count == 2.
-    bool start(const std::string& executable, const std::string& rom_path,
-               const std::string& bios_path, bool explicit_bios_path,
-               uint16_t port_base, bool independent_pair,
-               bool one_screen = false, bool two_player = false,
-               int count = 2) {
-        stop();
-        bool all_started = true;
-        for (int node = 2; node <= std::clamp(count, 2, 8); ++node) {
-            std::vector<std::string> arguments{
-                executable,
-                "--cabinet-node", std::to_string(node),
-                "--cabinet-count", std::to_string(std::clamp(count, 2, 8)),
-                "--pair-port-base", std::to_string(port_base),
-            };
-            if (independent_pair)
-                arguments.emplace_back("--independent-cabinet");
-            // The other cabinets load settings.ini for themselves, so the
-            // shared-display choice has to travel on the command line.
-            if (one_screen) arguments.emplace_back("--twin-one-screen");
-            if (two_player) arguments.emplace_back("--two-player");
-            arguments.push_back(rom_path);
-            if (explicit_bios_path) arguments.push_back(bios_path);
-            const child_handle process = spawn_child(executable, arguments);
-            if (process != no_child && process >= 0)
-                m_processes.push_back(process);
-            else
-                all_started = false;
-        }
-        return all_started && !m_processes.empty();
-    }
-
-    void stop(bool cooperative_grace = false) {
-        for (child_handle& process : m_processes)
-            terminate_child(process, cooperative_grace);
-        m_processes.clear();
-    }
-
-    bool running() const { return !m_processes.empty(); }
-
-    // True once any spawned cabinet has exited. A ring with a missing
-    // member is already broken - its comm loop is cut - so the owner
-    // tears the whole session down rather than racing ghosts.
-    bool any_exited() {
-#if defined(_WIN32)
-        return false;
-#else
-        for (child_handle& process : m_processes) {
-            int status = 0;
-            if (process != no_child &&
-                waitpid(process, &status, WNOHANG) == process) {
-                process = no_child;
-                return true;
-            }
-        }
-        return false;
-#endif
-    }
-
-private:
-    std::vector<child_handle> m_processes;
-};
 
 int run_video_lifecycle_test() {
     emulator_settings settings;
@@ -733,6 +653,10 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // First thing of all, so that everything printed from here on is both on
+    // the console and available to send to the other machine. Debugging two
+    // computers otherwise means walking between them.
+    manx_log_tap::start();
     // Games that ship as plugins are found on disk before anything reads the
     // catalogue, so they appear in the launcher beside the built-in boards.
     // Rejections are printed rather than swallowed: a game that silently fails
@@ -774,15 +698,12 @@ int main(int argc, char* argv[]) {
     // creates fresh CPUs, RAM, input and sound devices for every selection.
     auto shared_video = std::make_shared<arcade_video_worker>();
     auto cabinet_state = std::make_shared<arcade_cabinet_state>();
-    cabinet_companion companion;
+    // Every multiplayer route is the lobby now; a local pair of processes
+    // linked over loopback is no longer one of them, so a cabinet is either
+    // on its own or in a network session.
     cabinet_launch_mode launch_mode =
-        runtime.twin_screen ? cabinet_launch_mode::independent_pair :
-        (runtime.cabinet_node ?
-            (runtime.network_pair ? cabinet_launch_mode::linked_network :
-                (runtime.independent_pair ?
-                    cabinet_launch_mode::independent_pair :
-                    cabinet_launch_mode::linked_pair)) :
-            cabinet_launch_mode::single);
+        runtime.cabinet_node ? cabinet_launch_mode::linked_network
+                             : cabinet_launch_mode::single;
     int cabinet_node = runtime.cabinet_node;
     int cabinet_count = runtime.cabinet_count;
     bool one_screen_pair = runtime.twin_one_screen;
@@ -849,6 +770,36 @@ int main(int argc, char* argv[]) {
                 rom_path = std::move(selection.path);
                 launch_mode = selection.launch_mode;
                 cabinet_node = selection.cabinet_node;
+                // Hand the cabinet the address the launcher is already
+                // talking to. The machines have a live conversation at this
+                // point; naming the partner means the in-game link continues
+                // it rather than starting a fresh search that a firewall may
+                // not let through. The host looks up Player 2 in its own
+                // roster; everyone else already knows the host.
+                uint32_t partner = 0;
+                if (launch_mode == cabinet_launch_mode::linked_network &&
+                    lobby) {
+                    partner = lobby->host_ipv4();
+                    if (!partner && cabinet_node == 1) {
+                        for (const lobby_machine& machine :
+                                 lobby->machines()) {
+                            if (machine.node == 2) {
+                                partner = machine.ipv4;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (partner) {
+                    in_addr peer_address{};
+                    peer_address.s_addr = partner;
+                    char text[INET_ADDRSTRLEN]{};
+                    if (inet_ntop(AF_INET, &peer_address, text,
+                                  sizeof(text)))
+                        set_environment("MANX_INPUT_PEER_HOST", text);
+                } else {
+                    unset_environment("MANX_INPUT_PEER_HOST");
+                }
                 cabinet_count = std::clamp(selection.cabinet_count, 2, 8);
                 settings.twin_separate_monitors =
                     selection.twin_separate_monitors;
@@ -931,8 +882,7 @@ int main(int argc, char* argv[]) {
             launch_mode = cabinet_launch_mode::single;
             cabinet_node = 0;
         }
-        const bool local_pair =
-            launch_mode == cabinet_launch_mode::linked_pair;
+        constexpr bool local_pair = false;   // no local-pair mode any more
         // Check the machine before promising each cabinet a display: a
         // two-screen linked launch on a one-monitor host would stack two
         // fullscreen windows on top of each other. With fewer displays
@@ -952,40 +902,10 @@ int main(int argc, char* argv[]) {
                 one_screen_pair = true;
             }
         }
-        if (cabinet_node == 0 && local_pair) {
-            pair_port_base = choose_pair_port_base();
-            // Opened before the spawn, not after it: a pair that fails to
-            // start is exactly the case worth having a file for, and if this
-            // file is missing afterwards then this process never took the
-            // linked-pair path at all - which is an answer in itself.
-            manx_wall_log::begin_cabinet(1);
-            manx_wall_log::note("linked launch: spawning cabinets 2-%d, "
-                                  "port base %u, one screen %d",
-                                  cabinet_count, pair_port_base,
-                                  one_screen_pair ? 1 : 0);
-            if (!companion.start(argv[0], rom_path, bios_path,
-                                 explicit_bios_path, pair_port_base,
-                                 false, one_screen_pair, true,
-                                 cabinet_count)) {
-                std::fprintf(stderr,
-                             "Could not start the second cabinet process (execv"
-                             "p failed). MANX was launched as \"%s\". "
-                             "Make sure the executable is found via PATH, or "
-                             "use an absolute path (e.g. ./MANX).\n",
-                             argv[0] ? argv[0] : "(null)");
-                launch_mode = cabinet_launch_mode::single;
-                one_screen_pair = false;
-            } else {
-                cabinet_node = 1;
-                manx_wall_log::note("cabinet 2 started");
-            }
-        }
         // Every launch that began as two-player says so, whether the two
         // players share this cabinet, a split screen, two monitors or two
         // machines. The board's start button then starts a two-player game.
         if (two_player_session ||
-            launch_mode == cabinet_launch_mode::independent_pair ||
-            launch_mode == cabinet_launch_mode::linked_pair ||
             launch_mode == cabinet_launch_mode::linked_network)
             set_environment("MANX_TWO_PLAYER", "1");
         else
@@ -993,18 +913,13 @@ int main(int argc, char* argv[]) {
         configure_cabinet_environment(
             cabinet_node, cabinet_count, pair_port_base,
             native_model2_link &&
-                (launch_mode == cabinet_launch_mode::linked_pair ||
-                 launch_mode == cabinet_launch_mode::linked_network),
+                launch_mode == cabinet_launch_mode::linked_network,
             native_system22_link &&
-                (launch_mode == cabinet_launch_mode::linked_pair ||
-                 launch_mode == cabinet_launch_mode::linked_network),
+                launch_mode == cabinet_launch_mode::linked_network,
             launch_mode == cabinet_launch_mode::linked_network,
             !native_hardware_link &&
-                (launch_mode == cabinet_launch_mode::linked_pair ||
-                 launch_mode == cabinet_launch_mode::linked_network));
-        settings.output =
-            launch_mode == cabinet_launch_mode::independent_pair ?
-                output_mode::dual : output_mode::single;
+                launch_mode == cabinet_launch_mode::linked_network);
+        settings.output = output_mode::single;
         // Fullscreen is decided by the launch, not by settings.ini: a game
         // always takes the whole screen. The two exceptions are launches
         // where several windows must share one display - a wall column
@@ -1022,8 +937,7 @@ int main(int argc, char* argv[]) {
         // display of its own goes ordinarily fullscreen on it.
         const bool cabinets_share_display =
             cabinet_node != 0 &&
-            (launch_mode == cabinet_launch_mode::linked_pair ||
-             launch_mode == cabinet_launch_mode::linked_network) &&
+            launch_mode == cabinet_launch_mode::linked_network &&
             (one_screen_pair || cabinet_count > 2);
         settings.fullscreen =
             settings.wall_count <= 1 && !cabinets_share_display;
@@ -1094,7 +1008,7 @@ int main(int argc, char* argv[]) {
         }
         manx_wall_log::note("board running");
         if ((launch_mode == cabinet_launch_mode::linked_network ||
-             launch_mode == cabinet_launch_mode::linked_pair) &&
+             launch_mode == cabinet_launch_mode::linked_network) &&
             !native_hardware_link) {
             // Netplay starts from identical memory or not at all. The 2D
             // boards keep nothing between sessions and hash to zero, so
@@ -1121,21 +1035,12 @@ int main(int argc, char* argv[]) {
                                 "INSERT COIN TO JOIN") :
                     std::string("PLAYER 1 CABINET  |  STARTING UP - "
                                 "INSERT COIN TO PLAY"));
-        } else if (launch_mode == cabinet_launch_mode::independent_pair) {
-            shared_video->set_cabinet_status(
-                "TWIN SCREEN  |  PLAYER 1 + PLAYER 2");
         } else if (cabinet_node &&
                    launch_mode == cabinet_launch_mode::linked_network &&
                    !native_hardware_link) {
             shared_video->set_cabinet_status(
                 "PLAYER " + std::to_string(cabinet_node) +
                 "  |  WAITING FOR NETWORK PLAYER...");
-        } else if (cabinet_node &&
-                   launch_mode == cabinet_launch_mode::linked_pair &&
-                   !native_hardware_link) {
-            shared_video->set_cabinet_status(
-                "LOCAL PLAYER " + std::to_string(cabinet_node) +
-                "  |  CONNECTED TO THIS MACHINE");
         }
         const std::vector<rom_choice> installed_games =
             cabinet_node == 2 ? std::vector<rom_choice>{} :
@@ -1228,18 +1133,28 @@ int main(int argc, char* argv[]) {
                     shared_video->set_cabinet_status(std::move(status));
                 }
             }
-            // The two cabinets are one session: when the partner app closes,
-            // this one has nothing to play against and follows it out rather
-            // than sitting on a frozen board waiting for input.
-            if (arcade_input_netplay_active() &&
-                arcade_input_netplay_peer_lost()) {
-                std::printf("Netplay partner closed - closing this cabinet "
-                            "too\n");
+            // Every cabinet in a session shares its fate. When one of them
+            // closes the game, the rest have nothing to play against, so
+            // they close it too - and all of them land back in the lobby
+            // together, ready to choose something else. Two things can say
+            // so: the netplay link's own goodbye packet, which is immediate
+            // but only exists for a two-player game, and the lobby, which
+            // keeps running through the game and covers a whole ring of
+            // System Link cabinets as well.
+            const bool partner_closed =
+                (arcade_input_netplay_active() &&
+                 arcade_input_netplay_peer_lost()) ||
+                (lobby && launch_mode == cabinet_launch_mode::linked_network &&
+                 lobby->session_ended());
+            if (partner_closed) {
+                std::printf("Another cabinet left the game - returning to "
+                            "the lobby\n");
                 arcade_audio_output::set_output_muted(true);
-                // The whole app closes, not just the game: the two cabinets
-                // are one session, and a launcher left open on the second
-                // machine is not "closed" in any sense the player means.
-                host_action = arcade_host_action::exit_application;
+                if (lobby) lobby->leave_session();
+                // Back to the launcher rather than out of the application:
+                // the players are still sitting at their machines and the
+                // next thing they want is to pick another game.
+                host_action = arcade_host_action::return_to_menu;
                 break;
             }
             if (arcade_input_netplay_active()) {
@@ -1249,6 +1164,11 @@ int main(int argc, char* argv[]) {
                 const uint32_t desync = arcade_input_netplay_desync_frame();
                 std::string netplay_status =
                     "NETPLAY  |  PLAYER " + std::to_string(cabinet_node);
+                // Which cabinet the controls are driving. Only worth saying
+                // when they are not: a cabinet you are standing at does not
+                // need telling that you are standing at it.
+                if (!arcade_input_cabinet_active())
+                    netplay_status += "  |  POINT AT THIS SCREEN TO PLAY IT";
                 if (desync) {
                     netplay_status += "  |  DESYNC AT FRAME " +
                                       std::to_string(desync) +
@@ -1322,10 +1242,7 @@ int main(int argc, char* argv[]) {
                         bios_path =
                             fs::path(rom_path).parent_path().string();
                     restart = true;
-                    if (companion.running()) {
-                        companion.stop();
-                        cabinet_node = 0;
-                    }
+                    cabinet_node = 0;
                     break;
                 }
                 emu->set_paused(was_paused);
@@ -1341,26 +1258,12 @@ int main(int argc, char* argv[]) {
                 if (!explicit_bios_path)
                     bios_path = fs::path(rom_path).parent_path().string();
                 restart = true;
-                if (companion.running()) {
-                    companion.stop();
-                    cabinet_node = 0;
-                }
+                cabinet_node = 0;
                 break;
             }
 
             if (++wall_frames <= 3 || wall_frames % 600 == 0)
                 manx_wall_log::note("frame %lld", wall_frames);
-            // Closing any cabinet of a linked session closes the session:
-            // the ring is cut the moment one member dies, so the rest are
-            // ghosts. Checked at a walking pace - it is a waitpid per
-            // child.
-            if (companion.running() && wall_frames % 30 == 0 &&
-                companion.any_exited()) {
-                manx_wall_log::note(
-                    "a linked cabinet exited: closing the session");
-                host_action = arcade_host_action::return_to_menu;
-                break;
-            }
             // Lockstep netplay: the board may only advance when the peer's
             // input for the next frame has arrived. Running ahead on a guess
             // is exactly the divergence the whole scheme exists to prevent,
@@ -1479,14 +1382,10 @@ int main(int argc, char* argv[]) {
         const bool cooperative_pair = arcade_input_netplay_active();
         if (cooperative_pair)
             arcade_input_netplay_request_shutdown();
-        if (companion.running()) {
-            // Let the peer receive the close packet and unwind normally
-            // before escalating to TERM/KILL. Do this while `emu` still owns
-            // the sender socket; destroying the board first loses the only
-            // cooperative shutdown channel.
-            companion.stop(cooperative_pair);
-            cabinet_node = 0;
-        }
+        // Withdraw from the session on the way out, whichever way out this
+        // is. The other cabinets are watching for exactly this and follow.
+        if (lobby && launch_mode == cabinet_launch_mode::linked_network)
+            lobby->leave_session();
         if (host_action == arcade_host_action::return_to_menu) {
             // A spawned cabinet has no launcher to go back to: leaving the
             // game means leaving the process. Only cabinet 1 owns the menu.

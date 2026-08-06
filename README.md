@@ -61,6 +61,28 @@ covers, flyers, cabinets, marquees and icons for the launcher. The NAS path
 stays in local settings and no private media ships with MANX. For a temporary
 source, set `MANX_MEDIA_ROOT` to the mounted media directory.
 
+## Network play
+
+Open MANX on two or more computers on the same network and they find each
+other automatically - no IP address to type, no host and client to decide in
+advance, no port to forward, and no firewall rule to add. Choose **Network
+Play** on each, ask a machine (or **Ask Everyone**), and the machines that
+accept start the same game together. Only games installed on every machine
+taking part are offered.
+
+- **Arcade System Link** wires up to eight cabinets through the link
+  hardware their boards actually used.
+- **Take Turns** and **Play Together** are MANX's own lockstep netplay for
+  two machines sharing one emulated board.
+
+The lobby also relays each machine's console output to the others, so you
+can read a remote cabinet's log from here, and offers **Do Not Disturb** to
+refuse invitations. See [docs/netplay.md](docs/netplay.md) for the full
+flow, how discovery works through desktop firewalls, and what to check when
+two machines do not meet. `tools/setup-machine.sh` (Linux) and
+`tools/setup-machine.ps1` (Windows) set up a machine for pushing builds and
+reading logs over SSH.
+
 ## Current status
 
 Implemented and tested (most relevant items; full list in `docs/`):

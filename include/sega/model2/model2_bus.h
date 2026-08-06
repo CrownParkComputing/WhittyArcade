@@ -1,6 +1,10 @@
 // Sega Model 2A-CRX byte-addressed i960 bus and early device storage.
 #pragma once
 
+#include "lan_peers.h"
+
+#include <chrono>
+
 #include "sega/model2/model2_rom.h"
 #include "arcade_types.h"
 
@@ -211,6 +215,14 @@ private:
     uint16_t m_comm_local_port{};
     uint16_t m_comm_peer_port{};
     std::intptr_t m_comm_socket{-1};
+    // The ring's next node, once it has answered. Until then the search is
+    // broadcast plus a paced unicast sweep of the subnet - the same thing
+    // the launcher lobby does, and for the same reason: a deny-by-default
+    // firewall drops an arriving broadcast, but lets through the reply to a
+    // conversation this machine started. See lan_peers.h.
+    uint32_t m_comm_peer_ipv4{};
+    lan::peer_sweep m_comm_sweep;
+    std::chrono::steady_clock::time_point m_comm_search_due{};
     uint32_t m_comm_sequence{};
     std::array<uint8_t, 0x0e00> m_comm_loopback_frame{};
     bool m_comm_loopback_frame_valid{};
