@@ -1507,6 +1507,21 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // link is doing, because there is nothing here to drive: the whole
     // feature is getting two machines to exchange addresses, after which the
     // ordinary lobby screen next door does the rest.
+    // A plain question, asked with the same tiles as everything else so a
+    // cabinet never has to render a dialog it has no widget for.
+    const auto ask_yes_no = [&](const std::string& question,
+                                const std::string& detail,
+                                const std::string& yes,
+                                const std::string& no) {
+        using card = launcher_menu::mode_card;
+        using icon = launcher_menu::mode_icon;
+        const int picked = menu.select_modes(
+            question, detail,
+            {card(yes, {}, icon::local_players), card(no, {}, icon::exit)},
+            "Cancel", 0, {});
+        return picked == 0;
+    };
+
     // Signing in, and creating an account, on the cabinet itself. No
     // website, no second device, no code to carry between them.
     const auto show_online_screen = [&]() {
@@ -1584,7 +1599,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 const auto password = menu.prompt_text(
                     "Password", "At least six characters.", {}, true, 64);
                 if (!password || password->size() < 6) break;
-                online->register_account(*name, *email, *password);
+                const bool remember = ask_yes_no(
+                    "Stay signed in?",
+                    "This cabinet will sign you in by itself next time. Say "
+                    "no on a machine other people use.",
+                    "Stay signed in", "Just this once");
+                online->register_account(*name, *email, *password, remember);
                 break;
             }
             case act_signin: {
@@ -1595,12 +1615,25 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 const auto password = menu.prompt_text(
                     "Password", "", {}, true, 64);
                 if (!password || password->empty()) break;
-                online->sign_in(*email, *password);
+                const bool remember = ask_yes_no(
+                    "Stay signed in?",
+                    "This cabinet will sign you in by itself next time. Say "
+                    "no on a machine other people use.",
+                    "Stay signed in", "Just this once");
+                online->sign_in(*email, *password, remember);
                 break;
             }
             case act_signout: online->sign_out(); break;
             case act_forget:  online->forget_machine(); break;
-            case act_host:    online->create_lobby(); break;
+            case act_host: {
+                const bool open_to_anyone = ask_yes_no(
+                    "Who can join?",
+                    "An open lobby is listed for anyone signed in. A locked "
+                    "one can only be joined by somebody you give the code to.",
+                    "Open to anyone", "Locked - code only");
+                online->create_lobby(open_to_anyone);
+                break;
+            }
             case act_join: {
                 const auto code = menu.prompt_text(
                     "Lobby code", "The six characters the host read out.",

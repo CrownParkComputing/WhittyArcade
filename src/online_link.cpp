@@ -292,17 +292,20 @@ void online_link::publish(online_state state, std::string status) {
 void online_link::touch() { m_revision.fetch_add(1); }
 
 void online_link::register_account(std::string display_name,
-                                   std::string email, std::string password) {
+                                   std::string email, std::string password,
+                                   bool remember) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::register_account, std::move(email),
-                          std::move(password), std::move(display_name)});
+                          std::move(password), std::move(display_name),
+                          remember});
     m_wake.notify_all();
 }
 
-void online_link::sign_in(std::string email, std::string password) {
+void online_link::sign_in(std::string email, std::string password,
+                          bool remember) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::sign_in, std::move(email),
-                          std::move(password), {}});
+                          std::move(password), {}, remember});
     m_wake.notify_all();
 }
 
@@ -313,31 +316,31 @@ std::string online_link::display_name() const {
 
 void online_link::sign_out() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::sign_out, {}, {}, {}});
+    m_commands.push_back({command::kind::sign_out, {}, {}, {}, false});
     m_wake.notify_all();
 }
 
 void online_link::forget_machine() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::forget, {}, {}, {}});
+    m_commands.push_back({command::kind::forget, {}, {}, {}, false});
     m_wake.notify_all();
 }
 
-void online_link::create_lobby() {
+void online_link::create_lobby(bool open_to_anyone) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::host, {}, {}, {}});
+    m_commands.push_back({command::kind::host, {}, {}, {}, open_to_anyone});
     m_wake.notify_all();
 }
 
 void online_link::join_lobby(std::string lobby_id) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::join, std::move(lobby_id), {}, {}});
+    m_commands.push_back({command::kind::join, std::move(lobby_id), {}, {}, false});
     m_wake.notify_all();
 }
 
 void online_link::leave_lobby() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::leave, {}, {}, {}});
+    m_commands.push_back({command::kind::leave, {}, {}, {}, false});
     m_wake.notify_all();
 }
 
@@ -409,6 +412,8 @@ void online_link::run() {
     bool profile_ready = false;
     bool machine_ready = false;
     bool pending_host = false;
+    bool pending_host_open = false;
+    bool pending_remember = true;
     std::string published_games_hash;
     std::string current_lobby;
     int64_t next_machine_poll = 0;
@@ -509,6 +514,7 @@ void online_link::run() {
                 pending_password = entry.secret;
                 pending_name = entry.extra;
                 pending_create = entry.what == command::kind::register_account;
+                pending_remember = entry.flag;
                 pending_auth = true;
                 publish(online_state::registering,
                         pending_create ? "Creating your account..."
@@ -549,6 +555,7 @@ void online_link::run() {
                 break;
             case command::kind::host:
                 pending_host = true;
+                pending_host_open = entry.flag;
                 break;
             case command::kind::join:
                 current_lobby = entry.argument;
@@ -611,7 +618,11 @@ void online_link::run() {
                 now, field_text(body, "expiresIn"));
             credential.uid = field_text(body, "localId");
             credential.email = pending_email;
-            credential.refresh_token = token.refresh_token;
+            // Only written to disk if this cabinet was told to remember it.
+            // The address is kept either way: it is not a secret, and it is
+            // the thing nobody wants to retype.
+            credential.refresh_token =
+                pending_remember ? token.refresh_token : std::string();
             // The machine keeps its own id for ever, so signing out and back
             // in - even as somebody else - does not orphan its document.
             if (credential.machine_id.empty())
@@ -859,7 +870,8 @@ void online_link::run() {
             fields["mode"] = online_wire::value_string("simultaneous");
             fields["places"] = online_wire::value_int(2);
             fields["state"] = online_wire::value_string("open");
-            fields["visibility"] = online_wire::value_string("friends");
+            fields["visibility"] = online_wire::value_string(
+                pending_host_open ? "public" : "invite");
             fields["memberUids"] = online_wire::value_strings({credential.uid});
             fields["readerUids"] = online_wire::value_strings({credential.uid});
             fields["startAtMs"] = online_wire::value_int(0);

@@ -52,9 +52,12 @@ public:
     // is not an identity of its own any more: it is one of the machines
     // belonging to whoever is signed in on it, and it registers itself the
     // moment that happens.
+    // `remember` decides whether the token that grants access is written to
+    // this cabinet's disk. Saying no keeps the session to this run only,
+    // which is what a shared or public machine wants.
     void register_account(std::string display_name, std::string email,
-                          std::string password);
-    void sign_in(std::string email, std::string password);
+                          std::string password, bool remember);
+    void sign_in(std::string email, std::string password, bool remember);
     std::string account_email() const;
     std::string display_name() const;
 
@@ -75,7 +78,9 @@ public:
 
     // --- lobbies ----------------------------------------------------------
     // Hosting one, or joining somebody else's by the code they read out.
-    void create_lobby();
+    // An open lobby is visible to anyone signed in; a locked one is only
+    // reachable by somebody who has been given the code.
+    void create_lobby(bool open_to_anyone);
     void join_lobby(std::string lobby_id);
     void leave_lobby();
     std::string joined_lobby() const;
@@ -97,6 +102,7 @@ private:
         std::string argument;   // email, or the lobby id
         std::string secret;     // password
         std::string extra;      // display name
+        bool flag{};            // stay signed in, or open to anyone
     };
 
     void run();
