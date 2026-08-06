@@ -1653,12 +1653,19 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 // friends-only one is listed for the friends it was made for.
                 using card = launcher_menu::mode_card;
                 using icon = launcher_menu::mode_icon;
+                auto last_asked = std::chrono::steady_clock::now() -
+                                  std::chrono::seconds(60);
                 for (;;) {
-                    // Asked again every time round, so a lobby somebody
-                    // opens while this screen is up appears by itself. It
-                    // was fetched once, which meant the list was only ever
-                    // as fresh as the moment you walked in.
-                    online->refresh_lobbies();
+                    // Asked again while this screen is up, so a lobby
+                    // somebody opens appears by itself - but on a timer, not
+                    // every time round. Refreshing bumps the revision, the
+                    // revision interrupts the screen, and the screen
+                    // refreshed again: a query loop that never rested.
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now - last_asked > std::chrono::seconds(4)) {
+                        last_asked = now;
+                        online->refresh_lobbies();
+                    }
                     const std::vector<online_lobby> open = online->lobbies();
                     std::vector<card> rows;
                     for (const online_lobby& entry : open) {
