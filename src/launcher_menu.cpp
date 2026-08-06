@@ -2619,9 +2619,18 @@ struct launcher_menu::implementation {
                                 SDL_Color{240, 244, 250,
                                           static_cast<Uint8>(
                                               card.unavailable ? 130 : 255)});
-                            const float scale = std::min(
-                                1.6f, (card_width - 32) /
-                                          std::max(1, name.width) * 1.0f);
+                            // Both operands were ints, so this divided as
+                            // integers before ever becoming a float: a title
+                            // wider than its tile scaled to zero and the box
+                            // came out blank. Floating point throughout, and
+                            // a floor so text can shrink to fit but never to
+                            // nothing.
+                            const float room =
+                                static_cast<float>(card_width - 32);
+                            const float scale = std::clamp(
+                                room / static_cast<float>(
+                                           std::max(1, name.width)),
+                                0.45f, 1.6f);
                             draw_text_scaled(
                                 renderer, name,
                                 x + (card_width -
