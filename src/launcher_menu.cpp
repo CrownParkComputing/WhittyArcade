@@ -2444,6 +2444,300 @@ struct launcher_menu::implementation {
         }
     }
 
+
+    // The card grid. Every screen in the launcher chooses between a handful
+    // of things, and until now all of them were drawn as a column of words
+    // on the left - because select_modes threw the icon, the artwork, the
+    // subtitle and the badge away and passed only the titles to the list.
+    // The data was always there; nothing drew it.
+    //
+    // A tile shows its artwork if it has any. If it does not, it shows its
+    // name set large on a field of its own colour, which is a tile rather
+    // than a line of text - the fallback is a different rendering of the
+    // same thing, not a different kind of screen.
+    struct card_texture {
+        SDL_Texture* texture{};
+        const uint8_t* source{};
+    };
+
+    // A stable colour per tile, so a publisher keeps the same field every
+    // time it is drawn and the shelf is recognisable at a glance.
+    static SDL_Color field_colour(const std::string& name, bool dim) {
+        uint32_t mixed = 2166136261u;
+        for (const char character : name) {
+            mixed ^= static_cast<unsigned char>(character);
+            mixed *= 16777619u;
+        }
+        static const SDL_Color palette[] = {
+            {46, 74, 112, 255},  {96, 52, 44, 255},   {48, 84, 66, 255},
+            {84, 58, 96, 255},   {104, 82, 36, 255},  {40, 78, 96, 255},
+            {90, 44, 62, 255},   {58, 66, 46, 255},
+        };
+        SDL_Color chosen = palette[mixed % (sizeof(palette) / sizeof(*palette))];
+        if (dim) {
+            chosen.r = static_cast<Uint8>(chosen.r / 2);
+            chosen.g = static_cast<Uint8>(chosen.g / 2);
+            chosen.b = static_cast<Uint8>(chosen.b / 2);
+        }
+        return chosen;
+    }
+
+    SDL_Texture* card_artwork(std::map<int, card_texture>& cache, int index,
+                              const launcher_menu::mode_card& card) {
+        if (!card.artwork || card.artwork_width <= 0 || card.artwork_height <= 0)
+            return nullptr;
+        auto& slot = cache[index];
+        if (slot.texture && slot.source == card.artwork) return slot.texture;
+        if (slot.texture) SDL_DestroyTexture(slot.texture);
+        slot.texture = SDL_CreateTexture(
+            renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
+            card.artwork_width, card.artwork_height);
+        if (slot.texture) {
+            SDL_UpdateTexture(slot.texture, nullptr, card.artwork,
+                              card.artwork_width * 4);
+            SDL_SetTextureScaleMode(slot.texture, SDL_SCALEMODE_LINEAR);
+            SDL_SetTextureBlendMode(slot.texture, SDL_BLENDMODE_BLEND);
+        }
+        slot.source = card.artwork;
+        return slot.texture;
+    }
+
+    int select_cards(const std::string& title, const std::string& description,
+                     const std::vector<launcher_menu::mode_card>& cards,
+                     const std::string& back_label, int initial_selection,
+                     const std::function<bool()>& interrupt,
+                     const std::function<bool()>& tick) {
+        const int total = static_cast<int>(cards.size());
+        int selected = std::clamp(initial_selection, 0, total - 1);
+        int first_row = 0;
+        std::map<int, card_texture> art;
+        bool redraw = true;
+
+        // Wider than a game cover: these are names and logos, not box art.
+        const int gap = 16;
+        const int usable = logical_width - horizontal_margin * 2;
+        const int columns = std::max(1, (usable + gap) / (300 + gap));
+        const int card_width = (usable - gap * (columns - 1)) / columns;
+        const int card_height = card_width * 9 / 16;
+        const int top = 150;
+        const int rows_visible =
+            std::max(1, (logical_height - 90 - top + gap) / (card_height + gap));
+
+        const auto keep_visible = [&] {
+            const int row = selected / columns;
+            if (row < first_row) first_row = row;
+            if (row >= first_row + rows_visible)
+                first_row = row - rows_visible + 1;
+        };
+
+        for (;;) {
+            if (redraw) {
+                keep_visible();
+                SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
+                SDL_RenderClear(renderer);
+                SDL_SetRenderDrawColor(renderer, 56, 198, 255, 255);
+                const SDL_FRect top_edge = frect(0, 0, logical_width, 5);
+                const SDL_FRect bottom_edge =
+                    frect(0, logical_height - 5, logical_width, 5);
+                SDL_RenderFillRect(renderer, &top_edge);
+                SDL_RenderFillRect(renderer, &bottom_edge);
+
+                rendered_text heading = make_text(
+                    renderer, title_font ? title_font : font, title,
+                    SDL_Color{56, 198, 255, 255});
+                draw_text(renderer, heading, horizontal_margin, 30);
+                destroy_text(heading);
+                if (!description.empty()) {
+                    rendered_text prose = make_text(
+                        renderer, desc_font ? desc_font : font, description,
+                        SDL_Color{168, 180, 196, 255}, usable);
+                    draw_text(renderer, prose, horizontal_margin, 74);
+                    destroy_text(prose);
+                }
+
+                for (int row = 0; row < rows_visible; ++row) {
+                    for (int column = 0; column < columns; ++column) {
+                        const int index =
+                            (first_row + row) * columns + column;
+                        if (index >= total) break;
+                        const launcher_menu::mode_card& card = cards[index];
+                        const int x = horizontal_margin +
+                                      column * (card_width + gap);
+                        const int y = top + row * (card_height + gap);
+                        const bool chosen = index == selected;
+
+                        const SDL_Color field =
+                            field_colour(card.title, card.unavailable);
+                        SDL_SetRenderDrawColor(renderer, field.r, field.g,
+                                               field.b, 255);
+                        const SDL_FRect tile =
+                            frect(x, y, card_width, card_height);
+                        SDL_RenderFillRect(renderer, &tile);
+
+                        if (SDL_Texture* picture =
+                                card_artwork(art, index, card)) {
+                            // Fitted, never stretched: a squashed logo looks
+                            // worse than a smaller one.
+                            float pw = 0, ph = 0;
+                            SDL_GetTextureSize(picture, &pw, &ph);
+                            const float scale = std::min(
+                                (card_width - 24) / std::max(pw, 1.0f),
+                                (card_height - 24) / std::max(ph, 1.0f));
+                            const SDL_FRect where = frect(
+                                x + (card_width - static_cast<int>(pw * scale)) / 2,
+                                y + (card_height - static_cast<int>(ph * scale)) / 2,
+                                static_cast<int>(pw * scale),
+                                static_cast<int>(ph * scale));
+                            SDL_SetTextureAlphaMod(
+                                picture, card.unavailable ? 110 : 255);
+                            SDL_RenderTexture(renderer, picture, nullptr, &where);
+                        } else {
+                            // No media, so the name becomes the tile.
+                            rendered_text name = make_text(
+                                renderer, title_font ? title_font : font,
+                                card.title,
+                                SDL_Color{240, 244, 250,
+                                          static_cast<Uint8>(
+                                              card.unavailable ? 130 : 255)});
+                            const float scale = std::min(
+                                1.6f, (card_width - 32) /
+                                          std::max(1, name.width) * 1.0f);
+                            draw_text_scaled(
+                                renderer, name,
+                                x + (card_width -
+                                     static_cast<int>(name.width * scale)) / 2,
+                                y + (card_height -
+                                     static_cast<int>(name.height * scale)) / 2 - 8,
+                                scale);
+                            destroy_text(name);
+                        }
+
+                        TTF_Font* small = hint_font ? hint_font : font;
+                        if (!card.status.empty()) {
+                            rendered_text badge = make_text(
+                                renderer, small, card.status,
+                                SDL_Color{16, 22, 30, 255});
+                            SDL_SetRenderDrawColor(renderer, 56, 198, 255, 235);
+                            const SDL_FRect badge_field =
+                                frect(x + card_width - badge.width - 18, y + 8,
+                                      badge.width + 12, badge.height + 6);
+                            SDL_RenderFillRect(renderer, &badge_field);
+                            draw_text(renderer, badge,
+                                      x + card_width - badge.width - 12, y + 11);
+                            destroy_text(badge);
+                        }
+                        if (!card.subtitle.empty()) {
+                            rendered_text note = make_text(
+                                renderer, small, card.subtitle,
+                                SDL_Color{206, 214, 226, 255},
+                                card_width - 24);
+                            draw_text(renderer, note, x + 12,
+                                      y + card_height - note.height - 10);
+                            destroy_text(note);
+                        }
+
+                        SDL_SetRenderDrawColor(
+                            renderer, chosen ? 56 : 40, chosen ? 198 : 52,
+                            chosen ? 255 : 66, 255);
+                        for (int ring = 0; ring < (chosen ? 4 : 1); ++ring) {
+                            const SDL_FRect edge =
+                                frect(x - ring, y - ring,
+                                      card_width + ring * 2,
+                                      card_height + ring * 2);
+                            SDL_RenderRect(renderer, &edge);
+                        }
+                    }
+                }
+
+                rendered_text footer = make_text(
+                    renderer, hint_font ? hint_font : font,
+                    "MOVE: ARROWS / STICK    SELECT: ENTER / A    " +
+                        (back_label.empty() ? std::string("BACK: ESC / B")
+                                            : back_label + ": ESC / B"),
+                    SDL_Color{130, 142, 158, 255});
+                draw_text(renderer, footer, horizontal_margin,
+                          logical_height - 44);
+                destroy_text(footer);
+
+                SDL_RenderPresent(renderer);
+                redraw = false;
+            }
+
+            if (tick && tick()) redraw = true;
+            if (interrupt && interrupt()) {
+                for (auto& entry : art)
+                    if (entry.second.texture)
+                        SDL_DestroyTexture(entry.second.texture);
+                return launcher_menu::interrupted;
+            }
+
+            SDL_Event event{};
+            if (!SDL_WaitEventTimeout(&event, 60)) continue;
+
+            const auto finish = [&](int result) {
+                for (auto& entry : art)
+                    if (entry.second.texture)
+                        SDL_DestroyTexture(entry.second.texture);
+                return result;
+            };
+            const auto move = [&](int by) {
+                const int wanted = std::clamp(selected + by, 0, total - 1);
+                selected = wanted;
+                redraw = true;
+            };
+
+            if (event.type == SDL_EVENT_QUIT)
+                return finish(launcher_menu::exit_requested);
+            if (event.type >= SDL_EVENT_WINDOW_FIRST &&
+                event.type <= SDL_EVENT_WINDOW_LAST) {
+                redraw = true;
+                continue;
+            }
+            if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+                open_controller(event.gdevice.which);
+                continue;
+            }
+            if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+                remove_disconnected_controllers();
+                continue;
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN) {
+                switch (event.key.scancode) {
+                case SDL_SCANCODE_ESCAPE: return finish(-1);
+                case SDL_SCANCODE_RETURN:
+                case SDL_SCANCODE_KP_ENTER:
+                case SDL_SCANCODE_SPACE:
+                    if (!cards[static_cast<std::size_t>(selected)].unavailable)
+                        return finish(selected);
+                    break;
+                case SDL_SCANCODE_LEFT:  move(-1); break;
+                case SDL_SCANCODE_RIGHT: move(1); break;
+                case SDL_SCANCODE_UP:    move(-columns); break;
+                case SDL_SCANCODE_DOWN:  move(columns); break;
+                case SDL_SCANCODE_HOME:  selected = 0; redraw = true; break;
+                case SDL_SCANCODE_END:   selected = total - 1; redraw = true; break;
+                default: break;
+                }
+                continue;
+            }
+            if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+                switch (event.gbutton.button) {
+                case SDL_GAMEPAD_BUTTON_SOUTH:
+                    if (!cards[static_cast<std::size_t>(selected)].unavailable)
+                        return finish(selected);
+                    break;
+                case SDL_GAMEPAD_BUTTON_EAST: return finish(-1);
+                case SDL_GAMEPAD_BUTTON_DPAD_LEFT:  move(-1); break;
+                case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: move(1); break;
+                case SDL_GAMEPAD_BUTTON_DPAD_UP:    move(-columns); break;
+                case SDL_GAMEPAD_BUTTON_DPAD_DOWN:  move(columns); break;
+                default: break;
+                }
+                continue;
+            }
+        }
+    }
+
     std::optional<input_binding> capture_binding(
         const std::string& title, const std::string& description,
         bool keyboard, int32_t controller_instance, bool allow_inherit) {
@@ -3298,8 +3592,8 @@ int launcher_menu::select_modes(const std::string& title,
     }
     SDL_SetWindowTitle(m_impl->window, title.c_str());
     SDL_RaiseWindow(m_impl->window);
-    return m_impl->select(title, description, items, back_label,
-                          initial_selection, interrupt, unavailable);
+    return m_impl->select_cards(title, description, cards, back_label,
+                                initial_selection, interrupt, tick);
 }
 
 int launcher_menu::show_scoreboard(
