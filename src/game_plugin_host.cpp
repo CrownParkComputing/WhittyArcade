@@ -1,6 +1,66 @@
 #include "game_plugin_host.h"
 
+// Loading a shared library, on both systems that do it differently.
+//
+// dlfcn.h is POSIX and does not exist on Windows, which broke the Windows
+// build the day the plugin host arrived: MANX.exe stopped being produced at
+// all because one translation unit could not find a header. The three calls
+// this file makes have exact Windows equivalents, so they are spelled once
+// here rather than scattered through the file behind conditionals.
+#if defined(_WIN32)
+#include <windows.h>
+
+namespace {
+void* plugin_open(const char* path) {
+    return reinterpret_cast<void*>(LoadLibraryA(path));
+}
+void* plugin_symbol(void* handle, const char* name) {
+    return reinterpret_cast<void*>(
+        GetProcAddress(reinterpret_cast<HMODULE>(handle), name));
+}
+void plugin_close(void* handle) {
+    FreeLibrary(reinterpret_cast<HMODULE>(handle));
+}
+// Windows reports the reason as a number rather than a string, and a bare
+// number in an error message is a number somebody has to go and look up.
+std::string plugin_error() {
+    const DWORD code = GetLastError();
+    if (code == 0) return {};
+    char* text = nullptr;
+    const DWORD length = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+            FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, code, 0, reinterpret_cast<char*>(&text), 0, nullptr);
+    std::string message = length && text ? std::string(text, length)
+                                         : "error " + std::to_string(code);
+    if (text) LocalFree(text);
+    while (!message.empty() &&
+           (message.back() == '\n' || message.back() == '\r'))
+        message.pop_back();
+    return message;
+}
+} // namespace
+#else
 #include <dlfcn.h>
+
+namespace {
+void* plugin_open(const char* path) {
+    // RTLD_LOCAL matters: two games may each carry their own copy of a
+    // symbol, and a global load would let one win for both.
+    return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+}
+void* plugin_symbol(void* handle, const char* name) {
+    return dlsym(handle, name);
+}
+void plugin_close(void* handle) { dlclose(handle); }
+std::string plugin_error() {
+    const char* message = dlerror();
+    return message != nullptr ? message : std::string();
+}
+} // namespace
+#endif
+
+#include <string>
 
 #include <algorithm>
 #include <filesystem>
@@ -13,31 +73,31 @@ loaded_plugin::~loaded_plugin() {
     // out points at code inside this library, so closing it while a session is
     // alive would leave the host calling into unmapped memory - a crash whose
     // stack blames the game rather than the unload that caused it.
-    if (m_handle != nullptr) dlclose(m_handle);
+    if (m_handle != nullptr) plugin_close(m_handle);
 }
 
 bool loaded_plugin::open(const std::string& library_path, std::string& error) {
-    m_handle = dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    m_handle = plugin_open(library_path.c_str());
     if (m_handle == nullptr) {
-        const char* message = dlerror();
-        error = message != nullptr ? message : "dlopen failed";
+        const std::string message = plugin_error();
+        error = message.empty() ? "could not load the plugin" : message;
         return false;
     }
     // RTLD_LOCAL above matters: two games may each carry their own copy of a
     // helper with the same name, and a global load would let the first one
     // loaded answer for both.
     auto entry = reinterpret_cast<manx_game_entry_fn>(
-        dlsym(m_handle, MANX_GAME_ENTRY_SYMBOL));
+        plugin_symbol(m_handle, MANX_GAME_ENTRY_SYMBOL));
     if (entry == nullptr) {
         error = "not a game plugin: no " MANX_GAME_ENTRY_SYMBOL " symbol";
-        dlclose(m_handle);
+        plugin_close(m_handle);
         m_handle = nullptr;
         return false;
     }
     const manx_game_api* api = entry();
     if (api == nullptr) {
         error = "plugin entry point returned nothing";
-        dlclose(m_handle);
+        plugin_close(m_handle);
         m_handle = nullptr;
         return false;
     }
@@ -45,7 +105,7 @@ bool loaded_plugin::open(const std::string& library_path, std::string& error) {
         error = "built for plugin ABI " + std::to_string(api->abi_version) +
                 ", this arcade speaks " +
                 std::to_string(MANX_GAME_ABI_VERSION);
-        dlclose(m_handle);
+        plugin_close(m_handle);
         m_handle = nullptr;
         return false;
     }
@@ -59,7 +119,7 @@ bool loaded_plugin::open(const std::string& library_path, std::string& error) {
         api->take_audio_cues == nullptr ||
         api->describe_audio_cues == nullptr) {
         error = "plugin table has a null entry";
-        dlclose(m_handle);
+        plugin_close(m_handle);
         m_handle = nullptr;
         return false;
     }
