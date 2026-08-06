@@ -1557,7 +1557,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                              "Get a code to read out to a friend",
                              icon::network), act_host);
                     add(card("Join A Lobby",
-                             "Type the code somebody gave you",
+                             "Pick from the lobbies you can see",
                              icon::local_players), act_join);
                 } else {
                     add(card("Lobby " + online->joined_lobby(),
@@ -1628,17 +1628,56 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             case act_host: {
                 const bool open_to_anyone = ask_yes_no(
                     "Who can join?",
-                    "An open lobby is listed for anyone signed in. A locked "
-                    "one can only be joined by somebody you give the code to.",
-                    "Open to anyone", "Locked - code only");
+                    "An open lobby is listed for anyone signed in. A friends "
+                    "only one is listed for your friends and nobody else.",
+                    "Open to anyone", "Friends only");
                 online->create_lobby(open_to_anyone);
                 break;
             }
             case act_join: {
-                const auto code = menu.prompt_text(
-                    "Lobby code", "The six characters the host read out.",
-                    {}, false, 6);
-                if (code && code->size() >= 4) online->join_lobby(*code);
+                // A list, not a field. Nobody should have to be told a code
+                // and type it in: an open lobby is there for anyone, and a
+                // friends-only one is listed for the friends it was made for.
+                using card = launcher_menu::mode_card;
+                using icon = launcher_menu::mode_icon;
+                online->refresh_lobbies();
+                for (;;) {
+                    const std::vector<online_lobby> open = online->lobbies();
+                    std::vector<card> rows;
+                    for (const online_lobby& entry : open) {
+                        std::string detail =
+                            entry.host.empty() ? std::string("Someone")
+                                               : entry.host;
+                        if (!entry.game.empty()) detail += "  -  " + entry.game;
+                        if (entry.places)
+                            detail += "  -  " + std::to_string(entry.members) +
+                                      " of " + std::to_string(entry.places);
+                        rows.push_back(card(
+                            entry.host.empty() ? entry.id
+                                               : entry.host + "'s lobby",
+                            detail, icon::network, 0, false,
+                            entry.open_to_anyone ? "OPEN" : "FRIENDS"));
+                    }
+                    if (rows.empty())
+                        rows.push_back(card("Nothing To Join",
+                                            "No open lobbies, and none of "
+                                            "your friends is hosting.",
+                                            icon::audit, 0, true));
+
+                    const uint64_t seen = online->revision();
+                    const std::function<bool()> moved = [online, seen] {
+                        return online->revision() != seen;
+                    };
+                    const int chosen = menu.select_modes(
+                        "Join A Lobby", "Pick one and you are in.", rows,
+                        "Back", 0, moved);
+                    if (chosen == launcher_menu::interrupted) continue;
+                    if (chosen >= 0 &&
+                        static_cast<std::size_t>(chosen) < open.size())
+                        online->join_lobby(open[
+                            static_cast<std::size_t>(chosen)].id);
+                    break;
+                }
                 break;
             }
             case act_leave:   online->leave_lobby(); break;

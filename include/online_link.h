@@ -24,6 +24,16 @@
 #include <thread>
 #include <vector>
 
+// One joinable lobby, as the browse screen needs to draw it.
+struct online_lobby {
+    std::string id;
+    std::string host;      // who made it, in words
+    std::string game;
+    int members{};
+    int places{};
+    bool open_to_anyone{};
+};
+
 enum class online_state : uint8_t {
     disabled = 0,   // no libcurl, or no project configured
     signed_out,     // configured, nobody signed in, no pairing under way
@@ -84,6 +94,10 @@ public:
     void join_lobby(std::string lobby_id);
     void leave_lobby();
     std::string joined_lobby() const;
+    // Lobbies this account may join: the open ones, and the friends-only
+    // ones its friends have made. Refreshed while the join screen is up.
+    void refresh_lobbies();
+    std::vector<online_lobby> lobbies() const;
     std::vector<online_wire::member> members() const;
 
     // --- what the screen draws --------------------------------------------
@@ -96,7 +110,8 @@ public:
 private:
     struct command {
         enum class kind {
-            register_account, sign_in, sign_out, forget, host, join, leave
+            register_account, sign_in, sign_out, forget, host, join, leave,
+            browse
         };
         kind what;
         std::string argument;   // email, or the lobby id
@@ -127,5 +142,6 @@ private:
     std::string m_machine_name;
     std::vector<std::string> m_games;
     std::vector<online_wire::member> m_members;
+    std::vector<online_lobby> m_lobbies;
     bool m_games_dirty{false};
 };

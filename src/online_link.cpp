@@ -332,6 +332,17 @@ void online_link::create_lobby(bool open_to_anyone) {
     m_wake.notify_all();
 }
 
+void online_link::refresh_lobbies() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_commands.push_back({command::kind::browse, {}, {}, {}, false});
+    m_wake.notify_all();
+}
+
+std::vector<online_lobby> online_link::lobbies() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_lobbies;
+}
+
 void online_link::join_lobby(std::string lobby_id) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::join, std::move(lobby_id), {}, {}, false});
@@ -413,6 +424,7 @@ void online_link::run() {
     bool machine_ready = false;
     bool pending_host = false;
     bool pending_host_open = false;
+    bool pending_browse = false;
     bool pending_remember = true;
     std::string published_games_hash;
     std::string current_lobby;
@@ -598,6 +610,9 @@ void online_link::run() {
                 }
                 publish(online_state::signed_out,
                         "This machine has forgotten everything.");
+                break;
+            case command::kind::browse:
+                pending_browse = true;
                 break;
             case command::kind::host:
                 pending_host = true;
@@ -902,6 +917,71 @@ void online_link::run() {
             next_machine_poll = now + (m_foreground.load() ? 5 : 120);
         }
 
+        // --- what is there to join ------------------------------------------
+        if (pending_browse && machine_ready) {
+            pending_browse = false;
+            const auto summarise = [&](const json& document, bool open) {
+                online_lobby entry;
+                // The document's own name ends with its id.
+                const auto name = document.find("name");
+                if (name != document.end() && name->is_string()) {
+                    const std::string path = name->get<std::string>();
+                    const std::size_t slash = path.rfind('/');
+                    if (slash != std::string::npos)
+                        entry.id = path.substr(slash + 1);
+                }
+                if (const auto* who =
+                        online_wire::find_field(document, "hostName"))
+                    entry.host = online_wire::read_string(*who);
+                if (const auto* game =
+                        online_wire::find_field(document, "gameShortName"))
+                    entry.game = online_wire::read_string(*game);
+                if (const auto* places =
+                        online_wire::find_field(document, "places"))
+                    entry.places = static_cast<int>(online_wire::read_int(*places));
+                entry.members = static_cast<int>(
+                    online_wire::parse_members(document).size());
+                entry.open_to_anyone = open;
+                return entry;
+            };
+            const auto listing = [&](const char* field, const char* op,
+                                     const std::string& value) {
+                json where;
+                where["fieldFilter"]["field"]["fieldPath"] = field;
+                where["fieldFilter"]["op"] = op;
+                where["fieldFilter"]["value"]["stringValue"] = value;
+                json structured;
+                structured["from"] =
+                    json::array({{{"collectionId", "lobbies"}}});
+                structured["where"] = where;
+                structured["limit"] = 30;
+                return run_query(structured);
+            };
+
+            std::vector<online_lobby> found;
+            for (const json& document : listing("visibility", "EQUAL", "public"))
+                found.push_back(summarise(document, true));
+            // Friends-only lobbies are listed for the people their host named,
+            // which is what makes them something to find rather than a code
+            // to be told.
+            for (const json& document :
+                     listing("readerUids", "ARRAY_CONTAINS", credential.uid)) {
+                online_lobby entry = summarise(document, false);
+                const bool already = std::any_of(
+                    found.begin(), found.end(),
+                    [&entry](const online_lobby& seen) {
+                        return seen.id == entry.id;
+                    });
+                if (!already && entry.id != current_lobby)
+                    found.push_back(entry);
+            }
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_lobbies = std::move(found);
+            }
+            touch();
+        }
+
         // --- hosting one ---------------------------------------------------
         if (pending_host && machine_ready) {
             pending_host = false;
@@ -911,6 +991,11 @@ void online_link::run() {
             auto& fields = document["fields"];
             fields["hostUid"] = online_wire::value_string(credential.uid);
             fields["hostOwnerUid"] = online_wire::value_string(credential.uid);
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                fields["hostName"] = online_wire::value_string(
+                    m_display_name.empty() ? host_name() : m_display_name);
+            }
             fields["gameShortName"] = online_wire::value_string(std::string());
             fields["gameDisplayName"] = online_wire::value_string(std::string());
             fields["mode"] = online_wire::value_string("simultaneous");
