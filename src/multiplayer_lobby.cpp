@@ -620,9 +620,12 @@ std::optional<lobby_link::remote_peer> multiplayer_lobby::local_endpoint() const
     // The first up, non-loopback interface. A machine with several is a
     // machine whose peers can reach it on any of them, and the roster only
     // has room for one - so this picks one rather than pretending to choose.
-    for (const lan::interface_v4& interface : lan::local_interfaces())
-        if (interface.address != 0)
-            return lobby_link::remote_peer{interface.address, lobby_port};
+    // Not named "interface": windows.h defines that as a macro for struct,
+    // so the loop variable expanded to a keyword and the file stopped
+    // parsing - on Windows only, which is the worst place to find out.
+    for (const lan::interface_v4& card : lan::local_interfaces())
+        if (card.address != 0)
+            return lobby_link::remote_peer{card.address, lobby_port};
     return std::nullopt;
 }
 

@@ -55,9 +55,12 @@ nat_kind multiplayer_lobby::nat() const { return nat_kind::unknown; }
 // The one stub that is not a stub. This is what the fix publishes, so a
 // harness that returned nothing here would prove nothing.
 std::optional<lobby_link::remote_peer> multiplayer_lobby::local_endpoint() const {
-    for (const lan::interface_v4& interface : lan::local_interfaces())
-        if (interface.address != 0)
-            return lobby_link::remote_peer{interface.address, 35109};
+    // Not named "interface": windows.h defines that as a macro for struct,
+    // so the loop variable expanded to a keyword and the file stopped
+    // parsing - on Windows only, which is the worst place to find out.
+    for (const lan::interface_v4& card : lan::local_interfaces())
+        if (card.address != 0)
+            return lobby_link::remote_peer{card.address, 35109};
     return std::nullopt;
 }
 int multiplayer_lobby::node() const { return 0; }
