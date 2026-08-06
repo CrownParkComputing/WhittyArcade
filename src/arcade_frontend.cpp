@@ -2027,6 +2027,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 exit_result.action = rom_selection_action::exit_requested;
                 return exit_result;
             }
+            // The status corner, pressed. Online and lobbies open over the
+            // shelf instead of being a trip through the system pages.
+            if (platform_choice == launcher_menu::shortcut) {
+                show_online_screen();
+                continue;
+            }
             if (platform_choice == launcher_menu::interrupted) {
                 rom_selection_result remote = take_remote_launch();
                 if (remote.action == rom_selection_action::selected)

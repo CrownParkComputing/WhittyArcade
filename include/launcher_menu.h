@@ -35,6 +35,11 @@ public:
     // Distinct from Back: the OS close button must terminate the launcher,
     // not reopen the menu that was underneath the current screen.
     static constexpr int exit_requested = -7;
+    // The status corner was pressed: whoever is signed in, who is about, and
+    // the lobbies. It opens over whatever screen asked for it rather than
+    // being somewhere to navigate to, because it is a thing you glance at
+    // and then act on, not a place you go.
+    static constexpr int shortcut = -8;
     // Compact utility mode is used for menus shown over a running game.
     explicit launcher_menu(bool compact_utility_window = false);
     ~launcher_menu();

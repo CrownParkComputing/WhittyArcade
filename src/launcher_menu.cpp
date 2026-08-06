@@ -2680,6 +2680,7 @@ struct launcher_menu::implementation {
 
                 rendered_text footer = make_text(
                     renderer, hint_font ? hint_font : font,
+                    std::string("ONLINE: TAB / Y    ") +
                     "MOVE: ARROWS / STICK    SELECT: ENTER / A    " +
                         (back_label.empty() ? std::string("BACK: ESC / B")
                                             : back_label + ": ESC / B"),
@@ -2743,6 +2744,9 @@ struct launcher_menu::implementation {
                 case SDL_SCANCODE_RIGHT: move(1); break;
                 case SDL_SCANCODE_UP:    move(-columns); break;
                 case SDL_SCANCODE_DOWN:  move(columns); break;
+                case SDL_SCANCODE_TAB:
+                case SDL_SCANCODE_F1:
+                    return finish(launcher_menu::shortcut);
                 case SDL_SCANCODE_HOME:  selected = 0; redraw = true; break;
                 case SDL_SCANCODE_END:   selected = total - 1; redraw = true; break;
                 default: break;
@@ -2756,6 +2760,8 @@ struct launcher_menu::implementation {
                         return finish(selected);
                     break;
                 case SDL_GAMEPAD_BUTTON_EAST: return finish(-1);
+                case SDL_GAMEPAD_BUTTON_NORTH:
+                    return finish(launcher_menu::shortcut);
                 case SDL_GAMEPAD_BUTTON_DPAD_LEFT:  move(-1); break;
                 case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: move(1); break;
                 case SDL_GAMEPAD_BUTTON_DPAD_UP:    move(-columns); break;
