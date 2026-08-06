@@ -31,6 +31,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
@@ -120,7 +121,14 @@ int main(int argc, char** argv) {
         std::printf("usage: %s <config-dir> <command> [args]\n", argv[0]);
         return 2;
     }
+    // Windows has no setenv. It is the same idea under a different name,
+    // and this is the only line in the harness that cared - which is how it
+    // reached CI and broke a build that had nothing else wrong with it.
+#if defined(_WIN32)
+    _putenv_s("XDG_CONFIG_HOME", argv[1]);
+#else
     ::setenv("XDG_CONFIG_HOME", argv[1], 1);
+#endif
     const std::string command = argv[2];
 
     if (!online_link::available()) {
