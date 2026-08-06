@@ -62,6 +62,10 @@ struct lobby_machine {
     multiplayer_invite invite{multiplayer_invite::idle};
     machine_presence presence{machine_presence::available};
     int node{};               // player number, 0 until a host assigns one
+    // Round trip to this machine, smoothed, in milliseconds. 0 means nothing
+    // has come back yet - which on a link that is otherwise working means
+    // the other end is an older build that does not answer pings.
+    int rtt_ms{};
     bool has_log{};
 
     // What to call it on screen: the name if it gave one, the address if
@@ -78,6 +82,18 @@ public:
     multiplayer_lobby& operator=(const multiplayer_lobby&) = delete;
 
     void set_installed_games(const std::vector<rom_choice>& games);
+
+    // Whether this cabinet looks for the others on this network at all.
+    //
+    // Off by default, and deliberately: discovery starts the moment the
+    // launcher opens, and a machine that announces itself uninvited next to
+    // an "Online Play" entry that reaches machines anywhere is two features
+    // that read as one. Turning it off does not touch the internet path -
+    // a lobby joined through MANX online still hands its addresses here and
+    // still connects, because those are peers this cabinet was told about
+    // rather than ones it went looking for.
+    void set_lan_discovery(bool on);
+    bool lan_discovery() const;
 
     // Every machine currently answering, in discovery order. A machine that
     // goes quiet drops out after a second and a half.
@@ -117,6 +133,16 @@ public:
     // does the lobby behaves exactly as it always has.
     void begin_public_endpoint_probe();
     std::optional<lobby_link::remote_peer> public_endpoint() const;
+
+    // Where this cabinet answers on its own network.
+    //
+    // Published alongside the public address, and it is the one that
+    // matters most often: two cabinets in one house share a public address,
+    // and punching at it means asking the router to send a packet back in
+    // through its own outside face. Plenty of routers will not, so an
+    // internet lobby between two machines in the same room connected only
+    // if this was there - and it was not, so it did not.
+    std::optional<lobby_link::remote_peer> local_endpoint() const;
     nat_kind nat() const;
 
     // The mask the hello publishes, so the online link can say the same thing
@@ -167,8 +193,42 @@ public:
     // of them brings all of them back to the lobby together.
     bool session_ended() const;
 
+    // The first of the eight consecutive UDP ports a linked session uses
+    // for the real boards' own comm hardware.
+    //
+    // Every machine in the session has to land on the same number without
+    // being told it: those ports are chosen before the board is built, and
+    // there is no channel open at that point to agree them on. It used to be
+    // derived from the process id, which is fine for two cabinets spawned on
+    // one computer - the parent hands its child the number - and wrong for
+    // two computers, which have no reason to share a pid. Each picked its
+    // own base, transmitted into a port nobody was listening on, and Sega
+    // Rally sat on CHECKING NETWORK for ever. The host's nonce is the one
+    // value everybody in the session already has.
+    uint16_t session_port_base() const;
+
+    // The slowest round trip to any machine currently answering, in
+    // milliseconds, and 0 when there is nobody to ask. The worst one rather
+    // than the average: a session is as playable as its furthest cabinet.
+    int worst_rtt_ms() const;
+
     // True when every machine that would take part has the named game.
+    // "Would take part" means has accepted an invitation, so this answers
+    // the question the linked-game browser asks - can everybody in this
+    // agreed session load what Player 1 just picked?
     bool everyone_has_game(std::string_view short_name, int places) const;
+
+    // A different question, asked earlier and by a different screen: is
+    // there a machine on the network right now that has this game?
+    //
+    // Nobody has been invited at the point somebody picks a game and is
+    // offered Network Play, so asking everyone_has_game() there answers "no"
+    // every time - it counts only machines that have accepted an invitation
+    // and there are none yet. That is the second reason the launch menu read
+    // NOT ON THE OTHERS with both cabinets holding the game, and it survived
+    // the fix to how the games mask is numbered because it has nothing to do
+    // with the numbering.
+    bool somebody_has_game(std::string_view short_name) const;
 
     // --- in-game traffic -----------------------------------------------
     // Once a game is running, the cabinets keep talking over this same
@@ -209,6 +269,7 @@ private:
     // afford, and resolving on the main thread would delay LAN discovery for
     // a feature LAN play does not use.
     std::thread m_resolve_thread;
+    std::atomic_bool m_lan_discovery{false};
     std::atomic_bool m_probe_requested{false};
     std::atomic_bool m_stop{false};
     std::atomic_bool m_connected{false};

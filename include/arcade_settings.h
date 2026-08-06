@@ -43,6 +43,12 @@ struct emulator_settings {
     // draws the game's name rather than silently substituting old artwork.
     std::string media_artwork_category{"box2d"};
     bool library_setup_complete{false};
+    // Cabinets on this network find each other by themselves, which is
+    // lovely when that is what somebody wants and confusing when it is not:
+    // "Network Play" and "Online Play" sit next to each other and one of
+    // them starts searching the moment the launcher opens. Off unless it is
+    // asked for.
+    bool network_play{false};
     // Runtime-only physical display assignment used by paired cabinet
     // processes. -1 follows the desktop/window-manager default. This is not
     // persisted because a portable install may see a different monitor order.

@@ -761,6 +761,11 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<online_link> online;
     if (startup_menu) {
         lobby = std::make_unique<multiplayer_lobby>();
+        // Off unless somebody has asked for it. The lobby is still built,
+        // because the internet path hands its addresses to exactly this
+        // object - what the switch decides is whether this cabinet also
+        // goes looking for the machines on its own network.
+        lobby->set_lan_discovery(load_settings().network_play);
         // Said out loud, because the alternative is a menu entry that is
         // simply absent, which looks identical whether the feature is off,
         // unbuilt or unconfigured.
@@ -911,8 +916,19 @@ int main(int argc, char* argv[]) {
             set_environment("MANX_TWO_PLAYER", "1");
         else
             unset_environment("MANX_TWO_PLAYER");
+        // Two computers have no reason to share a process id, so the
+        // pid-derived base only ever worked for a pair spawned on one
+        // machine. A network launch takes its ports from the session
+        // instead, which both ends can work out for themselves.
+        const uint16_t link_port_base =
+            (lobby && launch_mode == cabinet_launch_mode::linked_network)
+                ? lobby->session_port_base()
+                : pair_port_base;
+        if (lobby && launch_mode == cabinet_launch_mode::linked_network)
+            std::printf("Linked session comm ports start at %u\n",
+                        link_port_base);
         configure_cabinet_environment(
-            cabinet_node, cabinet_count, pair_port_base,
+            cabinet_node, cabinet_count, link_port_base,
             native_model2_link &&
                 launch_mode == cabinet_launch_mode::linked_network,
             native_system22_link &&
@@ -1103,6 +1119,29 @@ int main(int argc, char* argv[]) {
         const bool game_owns_the_window = emu->owns_its_own_window();
         if (game_owns_the_window && shared_video)
             shared_video->set_host_window_visible(false);
+        // Tell the network this cabinet is playing. The header has always
+        // said going into a game sets this on its own, and nothing did - so
+        // machine_presence::in_game was a state everything could read and
+        // nothing could ever reach. It is how another cabinet knows this one
+        // has finished loading, and how the online link knows to stop
+        // polling hard during a match.
+        if (lobby) lobby->set_presence(machine_presence::in_game);
+
+        // Native-link boards - Model 2, System 22 - link through their own
+        // emulated comm hardware, and that hardware gives up looking after
+        // about four seconds. A Model 2 takes longer than that to boot, so
+        // the cabinet that pressed go was already racing while the other was
+        // still loading, the search found nobody, and the two never paired:
+        // "the second machine did not start in time". So the cabinets wait
+        // for each other at the door and go through it together.
+        //
+        // The wait is bounded and then abandoned. Starting alone is a poor
+        // outcome; never starting at all is a worse one.
+        const auto barrier_opened_at = std::chrono::steady_clock::now();
+        bool cabinets_ready = !(lobby && native_hardware_link &&
+                                launch_mode ==
+                                    cabinet_launch_mode::linked_network);
+        int barrier_reported_second = -1;
         while ((host_action = emu->process_events()) ==
                arcade_host_action::continue_running) {
             if (cabinet_node &&
@@ -1168,6 +1207,7 @@ int main(int argc, char* argv[]) {
                             "the lobby\n");
                 arcade_audio_output::set_output_muted(true);
                 if (lobby) lobby->leave_session();
+                if (online) online->leave_lobby();
                 // Back to the launcher rather than out of the application:
                 // the players are still sitting at their machines and the
                 // next thing they want is to pick another game.
@@ -1196,6 +1236,16 @@ int main(int argc, char* argv[]) {
                     netplay_status += "  |  " +
                         std::to_string(arcade_input_netplay_lead()) +
                         " FRAMES BUFFERED";
+                }
+                // The connection, in the same line as the sync state. If a
+                // match feels wrong, this says in one glance whether it is
+                // the link or the emulator - and whether a machine in the
+                // middle would be worth paying for.
+                if (lobby) {
+                    const int trip = lobby->worst_rtt_ms();
+                    if (trip > 0)
+                        netplay_status += "  |  PING " +
+                                          std::to_string(trip) + " ms";
                 }
                 if (netplay_status != last_netplay_status) {
                     last_netplay_status = netplay_status;
@@ -1290,13 +1340,46 @@ int main(int argc, char* argv[]) {
             // the app that opens first would otherwise run for however long
             // it takes the second to appear - the drift that desynced every
             // early session.
+            if (!cabinets_ready) {
+                int playing = 0;
+                for (const lobby_machine& other : lobby->machines())
+                    if (other.presence == machine_presence::in_game) ++playing;
+                const auto waited = std::chrono::duration_cast<
+                    std::chrono::seconds>(
+                        std::chrono::steady_clock::now() - barrier_opened_at);
+                // Twenty seconds, not forty-five. The thing being waited for
+                // is another Model 2 finishing its boot, and if it has not
+                // appeared by now it is not coming - a longer wait only
+                // makes a black screen look more broken.
+                constexpr int barrier_seconds = 20;
+                if (playing >= std::max(cabinet_count - 1, 1)) {
+                    cabinets_ready = true;
+                    std::printf("All %d cabinets are up - starting together\n",
+                                cabinet_count);
+                } else if (waited.count() >= barrier_seconds) {
+                    cabinets_ready = true;
+                    std::printf("The other cabinet did not appear - starting "
+                                "anyway\n");
+                } else if (shared_video &&
+                           waited.count() != barrier_reported_second) {
+                    // Counted down out loud. A status line written once and
+                    // then left there is indistinguishable from a hang, and
+                    // that is exactly what it looked like.
+                    barrier_reported_second = static_cast<int>(waited.count());
+                    shared_video->set_cabinet_status(
+                        "WAITING FOR THE OTHER CABINET  |  " +
+                        std::to_string(barrier_seconds - waited.count()) +
+                        "s THEN STARTING ANYWAY");
+                }
+            }
+
             const bool netplay_waiting =
                 arcade_input_netplay_active() &&
                 (arcade_input_netplay_stalled() ||
                  !arcade_input_network_peer_seen());
             const bool paused = emu->paused();
             emu->set_paused(paused);
-            if (paused || netplay_waiting) {
+            if (paused || netplay_waiting || !cabinets_ready) {
                 // A stalled cabinet still has to watch the link, or it can
                 // never notice its partner leaving and would wait for ever.
                 if (netplay_waiting) emu->pump_netplay_link();
@@ -1401,8 +1484,16 @@ int main(int argc, char* argv[]) {
             arcade_input_netplay_request_shutdown();
         // Withdraw from the session on the way out, whichever way out this
         // is. The other cabinets are watching for exactly this and follow.
-        if (lobby && launch_mode == cabinet_launch_mode::linked_network)
+        if (lobby) lobby->set_presence(machine_presence::available);
+        if (lobby && launch_mode == cabinet_launch_mode::linked_network) {
             lobby->leave_session();
+            // And out of the internet lobby that started it. The document
+            // still said "starting", so coming back to the launcher put the
+            // cabinet straight back into the same game: it closed and
+            // reopened rather than closing. Leaving it is also what tells
+            // the other machines the owner has gone.
+            if (online) online->leave_lobby();
+        }
         // Take the channel back down with it. Left installed, the lobby
         // thread would go on filing input packets into an inbox that nothing
         // is draining any more.

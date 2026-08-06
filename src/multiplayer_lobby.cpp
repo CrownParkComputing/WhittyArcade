@@ -74,6 +74,25 @@ struct lobby_log_packet {
 };
 static_assert(std::is_trivially_copyable_v<lobby_log_packet>);
 
+// How long the round trip to another cabinet actually takes.
+//
+// A separate packet rather than two more fields on the hello: the hello's
+// layout is a contract with every other build, and this needs to be echoed
+// back immediately rather than on the next 200 ms tick, which is what makes
+// it a measurement instead of an estimate. An older build ignores an unknown
+// magic, so it simply reads as no answer.
+constexpr std::array<uint8_t, 4> ping_magic{{'W', 'A', 'L', '4'}};
+
+struct lobby_ping_packet {
+    std::array<uint8_t, 4> magic{};
+    uint8_t version{};
+    uint8_t reply{};        // 0 asking, 1 answering
+    uint8_t reserved[2]{};
+    uint64_t nonce{};       // who is asking
+    uint64_t stamp_us{};    // the asker's clock, echoed back untouched
+};
+static_assert(std::is_trivially_copyable_v<lobby_ping_packet>);
+
 // In-game traffic. The payload is opaque here: the lobby's job is to get it
 // to the other cabinets, not to understand it.
 constexpr std::array<uint8_t, 4> session_magic{{'W', 'A', 'L', '3'}};
@@ -451,6 +470,21 @@ void multiplayer_lobby::set_installed_games(
     m_local_games.store(mask, std::memory_order_release);
 }
 
+void multiplayer_lobby::set_lan_discovery(bool on) {
+    if (m_lan_discovery.exchange(on) == on) return;
+    if (on) return;
+    // Everything found by looking goes with it. Leaving the roster behind
+    // would keep a machine on screen that this cabinet has just stopped
+    // being able to hear from, which is worse than not having found it.
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_machines.clear();
+    m_search_exhausted.store(false, std::memory_order_release);
+}
+
+bool multiplayer_lobby::lan_discovery() const {
+    return m_lan_discovery.load(std::memory_order_acquire);
+}
+
 std::vector<lobby_machine> multiplayer_lobby::machines() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     std::vector<lobby_machine> copy = m_machines;
@@ -580,6 +614,51 @@ bool multiplayer_lobby::everyone_has_game(std::string_view short_name,
         ++counted;
     }
     return counted >= 2;
+}
+
+std::optional<lobby_link::remote_peer> multiplayer_lobby::local_endpoint() const {
+    // The first up, non-loopback interface. A machine with several is a
+    // machine whose peers can reach it on any of them, and the roster only
+    // has room for one - so this picks one rather than pretending to choose.
+    for (const lan::interface_v4& interface : lan::local_interfaces())
+        if (interface.address != 0)
+            return lobby_link::remote_peer{interface.address, lobby_port};
+    return std::nullopt;
+}
+
+uint16_t multiplayer_lobby::session_port_base() const {
+    uint64_t seed = m_nonce;
+    if (!hosting()) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        // A machine that has not been invited by anybody has nothing to
+        // agree with, so it keeps its own number and behaves as it always
+        // did.
+        if (m_host_nonce != 0) seed = m_host_nonce;
+    }
+    return static_cast<uint16_t>(36000 + (seed % 3000) * 8);
+}
+
+int multiplayer_lobby::worst_rtt_ms() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    int worst = 0;
+    for (const lobby_machine& machine : m_machines)
+        worst = std::max(worst, machine.rtt_ms);
+    return worst;
+}
+
+bool multiplayer_lobby::somebody_has_game(std::string_view short_name) const {
+    const int index = game_index(short_name);
+    if (index < 0 || index >= 64) return false;
+    const uint64_t bit = uint64_t{1} << index;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    // Any machine that is answering right now. Not "every machine", because
+    // a third cabinet in the room that does not own this game is no reason
+    // to tell somebody they cannot play it with the one that does - and not
+    // "every machine that has accepted", because nothing has been offered
+    // yet at the point this is asked.
+    for (const lobby_machine& machine : m_machines)
+        if ((machine.games & bit) != 0) return true;
+    return false;
 }
 
 void multiplayer_lobby::launch_game(std::string_view short_name,
@@ -765,6 +844,7 @@ void multiplayer_lobby::run() {
     loopback.sin_port = htons(lobby_port);
     loopback.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     lan::peer_sweep sweep;
+    std::chrono::steady_clock::time_point next_ping{};
     // Published so the emulation thread can send on it directly. One socket
     // and one port for everything multiplayer.
     m_socket.store(static_cast<std::intptr_t>(socket),
@@ -803,6 +883,7 @@ void multiplayer_lobby::run() {
                 lobby_packet hello;
                 lobby_log_packet log;
                 lobby_session_packet session;
+                lobby_ping_packet ping;
             } wire{};
             sockaddr_in sender{};
 #if defined(_WIN32)
@@ -875,11 +956,64 @@ void multiplayer_lobby::run() {
                                                    max_session_payload));
                 continue;
             }
+            if (received == static_cast<int>(sizeof(lobby_ping_packet)) &&
+                wire.ping.magic == ping_magic && wire.ping.version == 1 &&
+                wire.ping.nonce != m_nonce) {
+                if (wire.ping.reply == 0) {
+                    // Answered here, in the receive loop, rather than queued
+                    // for the next tick: a reply that waits is a reply that
+                    // measures the wait.
+                    lobby_ping_packet echo = wire.ping;
+                    echo.reply = 1;
+                    send_packet(socket, echo, sender);
+                } else {
+                    const uint64_t sent_at = wire.ping.stamp_us;
+                    const uint64_t now_us = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now()
+                                .time_since_epoch()).count());
+                    if (now_us > sent_at) {
+                        const int trip = static_cast<int>(
+                            std::min<uint64_t>((now_us - sent_at) / 1000,
+                                               60000));
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        for (lobby_machine& machine : m_machines)
+                            if (machine.nonce == wire.ping.nonce) {
+                                // Smoothed, because one late datagram is not
+                                // a worse connection - it is one late
+                                // datagram, and a number that jumps about is
+                                // one nobody can read anything from.
+                                machine.rtt_ms = machine.rtt_ms == 0
+                                    ? trip
+                                    : (machine.rtt_ms * 3 + trip) / 4;
+                            }
+                    }
+                }
+                continue;
+            }
             if (received != static_cast<int>(sizeof(lobby_packet))) continue;
             const lobby_packet& incoming = wire.hello;
             if (incoming.magic != lobby_magic || incoming.version != 2 ||
                 incoming.nonce == 0 || incoming.nonce == m_nonce)
                 continue;
+
+            // With discovery off, the only machines this cabinet answers are
+            // the ones the online link seeded it with. A neighbour
+            // announcing itself is not an answer to anything this machine
+            // asked, and letting it in would put a cabinet on the lobby
+            // screen that the player has switched this off to avoid.
+            if (!m_lan_discovery.load(std::memory_order_acquire)) {
+                bool seeded = false;
+                {
+                    std::lock_guard<std::mutex> lock(m_remote_mutex);
+                    for (const lobby_link::remote_peer& seed : m_remote_peers)
+                        if (seed.ipv4 == sender.sin_addr.s_addr) {
+                            seeded = true;
+                            break;
+                        }
+                }
+                if (!seeded) continue;
+            }
 
             const auto arrival = std::chrono::steady_clock::now();
             const bool first_sighting = last_seen.count(incoming.nonce) == 0;
@@ -1191,7 +1325,12 @@ void multiplayer_lobby::run() {
             }
 
             outgoing.invite = static_cast<uint8_t>(local_state);
-            send_packet(socket, outgoing, loopback);
+            // Announced to this network only when this cabinet is meant to
+            // be findable on it. A lobby joined over the internet still
+            // works with this off: those peers are seeded below, and they
+            // were told to us rather than found.
+            if (m_lan_discovery.load(std::memory_order_acquire))
+                send_packet(socket, outgoing, loopback);
 
             // Each machine that has answered is told its own player number,
             // and only the machines actually asked are told they are being
@@ -1247,6 +1386,25 @@ void multiplayer_lobby::run() {
                 cursor = first + count;
             }
 
+            // Once a second, ask everybody how far away they are. Cheap
+            // enough to leave running always: it is the number that says
+            // whether a match is going to be playable before anybody has
+            // spent a round finding out, and whether the connection - not
+            // the emulator - is what is wrong.
+            if (now >= next_ping) {
+                next_ping = now + std::chrono::seconds(1);
+                lobby_ping_packet ask{};
+                ask.magic = ping_magic;
+                ask.version = 1;
+                ask.reply = 0;
+                ask.nonce = m_nonce;
+                ask.stamp_us = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        now.time_since_epoch()).count());
+                for (const auto& entry : endpoints)
+                    send_packet(socket, ask, entry.second);
+            }
+
             std::vector<lobby_link::remote_peer> seeds;
             {
                 std::lock_guard<std::mutex> lock(m_remote_mutex);
@@ -1280,7 +1438,8 @@ void multiplayer_lobby::run() {
                 }
             }
 
-            if (lobby_link::should_sweep(!endpoints.empty())) {
+            if (m_lan_discovery.load(std::memory_order_acquire) &&
+                lobby_link::should_sweep(!endpoints.empty())) {
                 // Nobody found yet. Broadcast plus a paced sweep of the
                 // subnet - see lan_peers.h for why the sweep is what carries
                 // this through a deny-by-default firewall. Seeds deliberately

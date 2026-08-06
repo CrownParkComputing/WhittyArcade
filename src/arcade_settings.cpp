@@ -87,6 +87,8 @@ emulator_settings load_settings() {
         else if (key == "show_fps") parse_boolean(value, settings.show_fps);
         else if (key == "show_renderer")
             parse_boolean(value, settings.show_renderer);
+        else if (key == "network_play")
+            parse_boolean(value, settings.network_play);
         else if (key == "rom_directory")
             settings.rom_directory = std::string(value);
         else if (key == "chd_directory")
@@ -143,6 +145,7 @@ bool save_settings(const emulator_settings& settings) {
            << "linear_filtering=" << settings.linear_filtering << '\n'
            << "show_fps=" << settings.show_fps << '\n'
            << "show_renderer=" << settings.show_renderer << '\n'
+           << "network_play=" << settings.network_play << '\n'
            << "renderer=" << renderer_backend_name(settings.renderer) << '\n'
            << "output=" << output_mode_name(settings.output) << '\n'
            << "rom_directory=" << settings.rom_directory << '\n'
