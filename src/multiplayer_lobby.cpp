@@ -324,12 +324,27 @@ std::vector<lobby_link::remote_peer> peers_from_environment() {
     return peers;
 }
 
+// Which bit in the hello's mask stands for this game.
+//
+// It used to be the game's position in supported_rom_sets(), and plugins are
+// appended to that list - so two machines with any difference in what is
+// installed numbered the same game differently, each concluded the other did
+// not have it, and Network Play sat greyed out saying "not on the others"
+// with both cabinets holding the game. The name decides the bit now, so two
+// machines agree without having to agree on anything else.
+//
+// Sixty-four bits and a hash means two names can collide, which would claim
+// a machine has a game it does not. That is the failure the launcher already
+// handles - it says so when the ROM turns out to be missing - and it is much
+// the better way round than refusing a game everybody has.
 int game_index(std::string_view short_name) {
-    const auto& games = supported_rom_sets();
-    for (std::size_t index = 0; index < games.size(); ++index)
-        if (short_name == games[index].short_name)
-            return static_cast<int>(index);
-    return -1;
+    if (short_name.empty()) return -1;
+    uint64_t mixed = 1469598103934665603ull;
+    for (const char character : short_name) {
+        mixed ^= static_cast<unsigned char>(character);
+        mixed *= 1099511628211ull;
+    }
+    return static_cast<int>(mixed % 64);
 }
 } // namespace
 
