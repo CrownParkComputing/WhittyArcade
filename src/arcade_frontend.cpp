@@ -391,6 +391,182 @@ bool choose_library_folders(launcher_menu& menu, bool first_run) {
     }
 }
 
+// The first run.
+//
+// MANX needs four things put somewhere before it is any use, and the old
+// first-run screen asked for two of them in one sentence and explained
+// none. Somebody who has just downloaded an arcade emulator does not yet
+// know that a "CHD" is a disc image, that a linked-cabinet board keeps its
+// wiring in a settings chip, or that artwork is optional - and finding out
+// by trial is how a working program gets deleted as broken.
+//
+// So it is a walk through: what this folder is for, what goes in it, and
+// what happens if it is empty. It ends by pointing at the thing the whole
+// program is for rather than at a shelf somebody has to work out.
+enum class setup_outcome { quit, ready, host_a_game };
+
+setup_outcome run_setup_wizard(launcher_menu& menu) {
+    using card = launcher_menu::mode_card;
+    using icon = launcher_menu::mode_icon;
+    emulator_settings settings = load_settings();
+
+    const auto page = [&](const std::string& title,
+                          const std::string& body,
+                          std::vector<card> choices,
+                          const std::string& back) {
+        return menu.select_modes(title, body, choices, back, 0, {});
+    };
+
+    // --- what this is ----------------------------------------------------
+    if (page("Welcome to MANX",
+             "MANX plays arcade boards - properly emulated, and able to play "
+             "across two machines anywhere in the world. It needs to be told "
+             "where a few things live. Nothing is copied, imported or "
+             "repacked: your files stay exactly where they are.\n\n"
+             "This takes about a minute.",
+             {card("Set MANX up", "Four questions, then a game",
+                   icon::settings)},
+             "Exit MANX") < 0)
+        return setup_outcome::quit;
+
+    // --- the games -------------------------------------------------------
+    // A folder that is already set is an answer, not a question. Somebody
+    // re-running this - or running it after an upgrade - should be able to
+    // say "those are right" rather than find the picker for a path they
+    // chose last week.
+    for (;;) {
+        std::vector<card> choices;
+        // There is always an effective folder - an explicit one, or MANX's
+        // own per-user library when nobody has chosen. Either way it is
+        // already set, so offer it rather than opening a picker for a path
+        // that is not going to change.
+        const bool have_roms = true;
+        choices.push_back(card("Keep what I have", rom_library_path(),
+                               icon::folder));
+        choices.push_back(card(have_roms ? "Choose a different folder"
+                                         : "Choose my ROM folder",
+                               "Where your zips live", icon::folder));
+        choices.push_back(card("Use MANX's own folder",
+                               "An empty one to fill later", icon::storage));
+
+        const int chosen = page(
+            "1 of 4 - Your games",
+            "MANX reads the same ROM sets MAME does: one zip per game, named "
+            "by its MAME short name - galaxian.zip, srallyc.zip. Point it at "
+            "the folder you keep them in.\n\n"
+            "MANX ships no games. If you have none yet, the website says "
+            "where the legitimate ones are - and you can come back to this "
+            "in Settings at any time.",
+            choices, "Back");
+        if (chosen < 0) return setup_outcome::quit;
+        if (have_roms && chosen == 0) break;               // keep it
+        if (chosen == static_cast<int>(choices.size()) - 1) {
+            settings.rom_directory.clear();
+            break;
+        }
+        const std::vector<std::string> picked =
+            platform_file_selection(true, false, "Choose your MAME ROM folder");
+        if (picked.empty()) continue;
+        settings.rom_directory = picked.front();
+        break;
+    }
+
+    // --- the disc images -------------------------------------------------
+    for (;;) {
+        std::vector<card> choices;
+        const bool have_chd = true;
+        choices.push_back(card("Keep what I have", chd_library_path(),
+                               icon::folder));
+        choices.push_back(card("Beside my ROMs", "The same folder as the zips",
+                               icon::folder));
+        choices.push_back(card(have_chd ? "Choose a different folder"
+                                        : "A separate folder",
+                               "Keep disc images apart", icon::storage));
+
+        const int chosen = page(
+            "2 of 4 - Disc images",
+            "The bigger boards - Killer Instinct, the Model 2 racers - shipped "
+            "with a hard disk as well as ROM chips, and that disk is a .chd "
+            "file. If you have any, they can sit beside your zips or in a "
+            "folder of their own.\n\n"
+            "Games that need one simply will not appear until it is there.",
+            choices, "Back");
+        if (chosen < 0) return setup_outcome::quit;
+        if (have_chd && chosen == 0) break;                // keep it
+        if (chosen == static_cast<int>(choices.size()) - 2) {
+            settings.chd_directory = settings.rom_directory;
+            break;
+        }
+        const std::vector<std::string> picked = platform_file_selection(
+            true, false, "Choose your arcade CHD folder");
+        if (picked.empty()) continue;
+        settings.chd_directory = picked.front();
+        break;
+    }
+
+    // --- the link settings ------------------------------------------------
+    // Not a folder to choose: a thing to know about, because the failure it
+    // causes looks like a broken emulator rather than an unconfigured board.
+    if (page("3 of 4 - Linked cabinets",
+             "A few boards - Sega Rally, Daytona, Manx TT, Motor Raid, Rave "
+             "Racer, Ridge Racer 2 - link real cabinets together through their "
+             "own hardware, and read their cabinet number and link mode out of "
+             "a settings chip. A real arcade had that set once, on "
+             "installation. A freshly emulated board has not, and sits on "
+             "CHECKING NETWORK for ever.\n\n"
+             "The website has that chip, 128 bytes per board, beside each game "
+             "in the list. Unzip it into:\n\n" + nvram_root_path() +
+             "\n\nEvery other game - head to head, taking turns - needs none "
+             "of this. MANX drives the second player itself.",
+             {card("Understood", "Carry on", icon::information)},
+             "Back") < 0)
+        return setup_outcome::quit;
+
+    // --- the artwork -------------------------------------------------------
+    if (page("4 of 4 - Artwork",
+             "Optional, and entirely cosmetic: box art, marquees and "
+             "screenshots make the game list something to browse rather than "
+             "a list of names. Without it every game still plays; it just "
+             "shows its name.\n\n"
+             "Settings, Import Media brings in a pack from a folder or a "
+             "network share whenever you have one.",
+             settings.media_directory.empty()
+                 ? std::vector<card>{
+                       card("Skip for now", "Names are enough to start",
+                            icon::exit),
+                       card("Choose a media folder", "I have a pack already",
+                            icon::title_art)}
+                 : std::vector<card>{
+                       card("Keep what I have", settings.media_directory,
+                            icon::title_art),
+                       card("Choose a different folder", "Somewhere else",
+                            icon::folder)},
+             "Back") == 1 && settings.media_directory.empty()) {
+        const std::vector<std::string> picked = platform_file_selection(
+            true, false, "Choose your media folder");
+        if (!picked.empty()) settings.media_directory = picked.front();
+    }
+
+    settings.library_setup_complete = true;
+    save_settings(settings);
+
+    // --- and now a game ----------------------------------------------------
+    // The point of finishing a setup screen is playing something, so the last
+    // question is the first game rather than "OK".
+    const int finish = page(
+        "Ready",
+        "That is everything. MANX is at its best with somebody else on the "
+        "other end: open a lobby, and whoever joins plays the same board on "
+        "their own machine - not a video of yours.\n\n"
+        "You can also do this at any time from the account button in the "
+        "corner of the shelf.",
+        {card("Play somebody", "Open a lobby and pick a game",
+              icon::network),
+         card("Just look around", "Browse the shelf", icon::solo)},
+        "");
+    return finish == 0 ? setup_outcome::host_a_game : setup_outcome::ready;
+}
+
 void show_library_folder_settings(launcher_menu& menu) {
     for (;;) {
         const emulator_settings current = load_settings();
@@ -1416,11 +1592,15 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // for the life of the selector so moving between lists does not refetch.
     banner::library banners;
     std::map<std::string, banner::banner_image> banner_pixels;
-    if (!load_settings().library_setup_complete &&
-        !choose_library_folders(menu, true)) {
-        rom_selection_result exit_result;
-        exit_result.action = rom_selection_action::exit_requested;
-        return exit_result;
+    bool wizard_wants_host = false;
+    if (!load_settings().library_setup_complete) {
+        const setup_outcome outcome = run_setup_wizard(menu);
+        if (outcome == setup_outcome::quit) {
+            rom_selection_result exit_result;
+            exit_result.action = rom_selection_action::exit_requested;
+            return exit_result;
+        }
+        wizard_wants_host = outcome == setup_outcome::host_a_game;
     }
     menu.show_splash("Reading the game library", 0.35f);
     std::vector<rom_choice> choices = discover_rom_choices(current_path);
@@ -2270,6 +2450,22 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                         const platform_entry& right) {
                          return left.name < right.name;
                      });
+
+    // The wizard's last question was "play somebody?", and this is the first
+    // moment the answer can be acted on: hosting needs the game browser and
+    // the account, both of which are defined above this point.
+    if (wizard_wants_host) {
+        wizard_wants_host = false;
+        if (online && online->signed_in()) {
+            host_a_lobby();
+        } else {
+            show_online_screen();
+            if (account_wants_host) {
+                account_wants_host = false;
+                host_a_lobby();
+            }
+        }
+    }
 
     // Platform is the first selection. Once inside one, Back returns to the
     // platform tiles; Back there opens the system menu. This keeps a marquee

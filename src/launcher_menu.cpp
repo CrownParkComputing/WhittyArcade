@@ -2605,7 +2605,31 @@ struct launcher_menu::implementation {
         const int columns = std::max(1, (usable + gap) / (300 + gap));
         const int card_width = (usable - gap * (columns - 1)) / columns;
         const int card_height = card_width * 9 / 16;
-        const int top = 150;
+
+        // Where the cards start, measured rather than assumed.
+        //
+        // It used to be a fixed 150 pixels, which is right for the one-line
+        // descriptions this screen was built for and wrong for anything
+        // longer: a setup page that explains what a folder is for wraps to
+        // several lines, and the cards were drawn straight over the end of
+        // it. Measure the prose, then start below it.
+        int description_bottom = 74;
+        if (!description.empty()) {
+            rendered_text measured = make_text(
+                renderer, desc_font ? desc_font : font, description,
+                SDL_Color{168, 180, 196, 255}, usable);
+            description_bottom = 74 + measured.height;
+            destroy_text(measured);
+        }
+        const int top = std::max(150, description_bottom + 28);
+
+        // Centred, not pushed against the left margin. Two cards in a row
+        // that could hold six sat in the corner of a wide screen looking
+        // like the rest had failed to load.
+        const int shown_across = std::min(total, columns);
+        const int band = shown_across * card_width + (shown_across - 1) * gap;
+        const int left = std::max(horizontal_margin,
+                                  (logical_width - band) / 2);
         const int rows_visible =
             std::max(1, (logical_height - 90 - top + gap) / (card_height + gap));
 
@@ -2652,8 +2676,7 @@ struct launcher_menu::implementation {
                             (first_row + row) * columns + column;
                         if (index >= total) break;
                         const launcher_menu::mode_card& card = cards[index];
-                        const int x = horizontal_margin +
-                                      column * (card_width + gap);
+                        const int x = left + column * (card_width + gap);
                         const int y = top + row * (card_height + gap);
                         const bool chosen = index == selected;
 
