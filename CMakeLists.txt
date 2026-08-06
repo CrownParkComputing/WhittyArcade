@@ -277,6 +277,9 @@ target_compile_options(arcade_audio_output PRIVATE
 set(SOURCES
     src/main.cpp
     src/play_stats.cpp
+    src/manx_http.cpp
+    src/manx_stun.cpp
+    src/online_link.cpp
     src/banner_library.cpp
     src/system16_data.cpp
     src/bezel_artwork.cpp
@@ -606,6 +609,34 @@ add_executable(netplay_lockstep_test
 )
 target_compile_options(netplay_lockstep_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME netplay_lockstep_test COMMAND netplay_lockstep_test)
+
+# Deliberately does not link libcurl: manx_stun opens no socket and resolves
+# no name, which is what lets the whole codec be tested from a byte buffer.
+add_executable(manx_stun_test
+    tests/manx_stun_test.cpp
+    src/manx_stun.cpp
+)
+target_include_directories(manx_stun_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(manx_stun_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME manx_stun_test COMMAND manx_stun_test)
+
+add_executable(lobby_targets_test
+    tests/lobby_targets_test.cpp
+)
+target_include_directories(lobby_targets_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(lobby_targets_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME lobby_targets_test COMMAND lobby_targets_test)
+
+# Header-only under test, so this needs neither libcurl nor a network: canned
+# Firestore JSON in, decisions out.
+add_executable(online_wire_test
+    tests/online_wire_test.cpp
+)
+target_include_directories(online_wire_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/json)
+target_compile_options(online_wire_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME online_wire_test COMMAND online_wire_test)
 
 add_executable(menu_stick_test
     tests/menu_stick_test.cpp

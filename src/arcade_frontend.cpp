@@ -11,6 +11,7 @@
 #include "launcher_menu.h"
 #include "media_library.h"
 #include "multiplayer_lobby.h"
+#include "online_link.h"
 #include "persistent_data.h"
 #include "platform_file_dialog.h"
 #include "rom_library.h"
@@ -1345,7 +1346,8 @@ std::string show_in_game_game_browser(const std::vector<rom_choice>& choices) {
 }
 
 rom_selection_result show_rom_selector(const std::string& current_path,
-                                       multiplayer_lobby* lobby) {
+                                       multiplayer_lobby* lobby,
+                                       online_link* online) {
     launcher_menu menu;
     // The boot screen goes up before anything slow happens, so switching the
     // cabinet on shows the cabinet rather than an empty desktop.
@@ -1501,6 +1503,113 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         return {};
     };
 
+    // Internet play. Everything about it is a screen showing what the online
+    // link is doing, because there is nothing here to drive: the whole
+    // feature is getting two machines to exchange addresses, after which the
+    // ordinary lobby screen next door does the rest.
+    const auto show_online_screen = [&]() {
+        if (!online) return;
+        using card = launcher_menu::mode_card;
+        using icon = launcher_menu::mode_icon;
+        online->set_foreground(true);
+        for (;;) {
+            const online_state state = online->state();
+            const std::string status = online->status_text();
+            const std::string code = online->pairing_code();
+            const std::vector<online_wire::member> members = online->members();
+            const std::string joined = online->joined_lobby();
+
+            std::string description = status;
+            if (state == online_state::pairing && !code.empty()) {
+                // Read off a screen and typed on a phone, so it is shown
+                // split in the middle: eight characters in one run is where
+                // people lose their place.
+                description = "Your code is  " + code.substr(0, 4) + " - " +
+                              code.substr(4) + "\n\n" + status;
+            } else if (state == online_state::in_lobby) {
+                description = status + "\nLobby " + joined;
+                for (const online_wire::member& member : members)
+                    description += "\n  " + member.name + " - " +
+                                   (member.link.empty() ? "idle" : member.link);
+            }
+            if (const auto endpoint = lobby ? lobby->public_endpoint()
+                                            : std::nullopt) {
+                (void)endpoint;
+                if (lobby && lobby->nat() == nat_kind::symmetric)
+                    description +=
+                        "\n\nThis router gives every destination its own "
+                        "port, so other machines cannot connect directly to "
+                        "this one.";
+            }
+
+            std::vector<card> cards;
+            std::vector<int> what;
+            enum { online_nothing, online_pair, online_cancel, online_leave,
+                   online_sign_out };
+            const auto add = [&](card entry, int action) {
+                cards.push_back(std::move(entry));
+                what.push_back(action);
+            };
+
+            switch (state) {
+            case online_state::disabled:
+                add(card("Not Available", status, icon::audit, 0, true),
+                    online_nothing);
+                break;
+            case online_state::signed_out:
+            case online_state::error:
+                add(card("Add This Machine",
+                         "Show a code to type on the MANX website",
+                         icon::cabinet_count), online_pair);
+                break;
+            case online_state::pairing:
+                add(card("Cancel", "Stop waiting for the website",
+                         icon::controls), online_cancel);
+                break;
+            case online_state::signing_in:
+                add(card("Signing In", status, icon::audit, 0, true),
+                    online_nothing);
+                break;
+            case online_state::online:
+                add(card("Waiting For A Lobby",
+                         "Create or join one on the MANX website",
+                         icon::audit, 0, true), online_nothing);
+                add(card("Forget This Machine",
+                         "Sign out and unpair from the account",
+                         icon::controls), online_sign_out);
+                break;
+            case online_state::in_lobby:
+                add(card("Leave Lobby", "Stop connecting to these machines",
+                         icon::controls), online_leave);
+                add(card("Forget This Machine",
+                         "Sign out and unpair from the account",
+                         icon::controls), online_sign_out);
+                break;
+            }
+
+            // The same redraw-on-change idiom the lobby screen uses, driven
+            // by the link's revision counter, so an arriving machine appears
+            // instead of waiting behind a keypress.
+            const uint64_t seen = online->revision();
+            const std::function<bool()> changed = [online, seen] {
+                return online->revision() != seen;
+            };
+
+            const int picked = menu.select_modes(
+                "Internet Play", description, cards, "Back", 0, changed);
+            if (picked == launcher_menu::interrupted) continue;
+            if (picked < 0 || picked >= static_cast<int>(what.size())) break;
+            switch (what[static_cast<std::size_t>(picked)]) {
+            case online_pair:     online->start_pairing(); break;
+            case online_cancel:   online->cancel_pairing(); break;
+            case online_leave:    online->leave_lobby(); break;
+            case online_sign_out: online->sign_out(); break;
+            default: break;
+            }
+        }
+        online->set_foreground(false);
+    };
+
     // The board/publisher browser with the cover grid, shared by every menu
     // that ends in "pick a game". filter narrows the library - the same-
     // machine menu offers only games with a second-player path - and a game
@@ -1607,6 +1716,23 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     bool enter_network_page = false;
     for (;;) {
         if (lobby) lobby->set_installed_games(choices);
+        if (online) {
+            // Short names, not the lobby's index mask. The mask numbers games
+            // by their position in supported_rom_sets(), which plugins push
+            // about, so two machines with different plugins installed give
+            // the same game different bits and the mask means nothing between
+            // them. Over the internet the builds will differ, so the cloud
+            // path names games instead of numbering them.
+            std::vector<std::string> installed;
+            installed.reserve(choices.size());
+            for (const rom_choice& choice : choices)
+                if (const auto identity = identify_arcade_game(choice.path))
+                    installed.push_back(identity->short_name);
+            std::sort(installed.begin(), installed.end());
+            installed.erase(std::unique(installed.begin(), installed.end()),
+                            installed.end());
+            online->set_installed_games(std::move(installed));
+        }
         const bool lobby_connected_at_draw = lobby && lobby->connected();
         // The grid re-enters this loop whenever the connection changes, so
         // setting it here is enough to keep it honest.
@@ -1618,11 +1744,14 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     " machines connected - network play ready" :
                 "Waiting for another machine - no network play yet",
             lobby_connected_at_draw);
+        const uint64_t online_at_draw = online ? online->revision() : 0;
         const std::function<bool()> interrupt = lobby ?
-            std::function<bool()>([lobby, lobby_connected_at_draw] {
+            std::function<bool()>([lobby, online, lobby_connected_at_draw,
+                                   online_at_draw] {
                 return lobby->launch_pending() ||
                        lobby->connected() != lobby_connected_at_draw ||
-                       lobby->pending_invitation().has_value();
+                       lobby->pending_invitation().has_value() ||
+                       (online && online->revision() != online_at_draw);
             }) :
             std::function<bool()>{};
         // Someone on the other machine has asked for a game. Whatever this
@@ -1661,9 +1790,64 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         if (!selected_platform) {
             std::vector<launcher_menu::mode_card> platform_cards;
             std::vector<std::string> platform_logo_keys;
-            platform_cards.reserve(platforms.size() + 1);
-            platform_logo_keys.reserve(platforms.size() + 1);
-            // First card, always: the lobby. It is dark until another
+            platform_cards.reserve(platforms.size() + 2);
+            platform_logo_keys.reserve(platforms.size() + 2);
+            // Before anything else: is this machine on its own, on its
+            // network, or on the internet? It is the first question a player
+            // has, so it is the first card - not something to be found
+            // several screens down inside a lobby they have no reason to
+            // open yet.
+            {
+                std::string mode_state = "Not set up on this machine";
+                std::string mode_badge = "OFF";
+                bool mode_dark = true;
+                if (online) {
+                    switch (online->state()) {
+                    case online_state::disabled:
+                        mode_state = online->status_text();
+                        break;
+                    case online_state::pairing:
+                        mode_state = "Showing a code - add it on the website";
+                        mode_badge = "PAIRING";
+                        mode_dark = false;
+                        break;
+                    case online_state::signing_in:
+                        mode_state = "Signing in";
+                        mode_badge = "PAIRING";
+                        mode_dark = false;
+                        break;
+                    case online_state::online:
+                        mode_state = online->machine_name().empty()
+                            ? "Signed in - waiting for a lobby"
+                            : "Signed in as " + online->machine_name();
+                        mode_badge = "ONLINE";
+                        mode_dark = false;
+                        break;
+                    case online_state::in_lobby:
+                        mode_state = "In lobby " + online->joined_lobby();
+                        mode_badge = "ONLINE";
+                        mode_dark = false;
+                        break;
+                    case online_state::error:
+                        mode_state = online->status_text();
+                        mode_badge = "ERROR";
+                        mode_dark = false;
+                        break;
+                    default:
+                        mode_state = "Offline - add this machine to your "
+                                     "account to play over the internet";
+                        mode_badge = "OFFLINE";
+                        mode_dark = false;
+                        break;
+                    }
+                }
+                platform_cards.push_back({
+                    "Online Play", mode_state,
+                    launcher_menu::mode_icon::network, 0, mode_dark,
+                    mode_badge});
+                platform_logo_keys.push_back({});
+            }
+            // Then the lobby. It is dark until another
             // machine is on the network and lights up by itself when one
             // arrives, so it reads as "nobody to play with yet" rather than
             // as a menu that does nothing.
@@ -1733,12 +1917,17 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             if (platform_choice < 0) {
                 system_menu_requested = true;
             } else if (platform_choice == 0) {
+                show_online_screen();
+                continue;
+            } else if (platform_choice == 1) {
                 enter_network_page = true;
                 continue;
             } else {
+                // Two cards precede the platforms now: online mode, then the
+                // local lobby.
                 platform_cursor = platform_choice;
                 selected_platform = platforms[
-                    static_cast<std::size_t>(platform_choice - 1)].board;
+                    static_cast<std::size_t>(platform_choice - 2)].board;
             }
         }
 
@@ -1865,9 +2054,16 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             lobby && lobby->connected() ?
                 "Network player connected - Network Play launches a shared "
                 "game across both computers." :
-                "System pages. Network Play searches for a second "
-                "MANX on the local network automatically.",
-            {{"Network Play",
+                "System pages. Online Play reaches machines anywhere; "
+                "Network Play finds the ones on this network by itself.",
+            {{"Online Play",
+              online ? online->status_text()
+                     : std::string("Not set up on this machine"),
+              launcher_menu::mode_icon::network, 0,
+              !online || online->state() == online_state::disabled,
+              !online ? "OFF"
+                      : (online->signed_in() ? "ONLINE" : "OFFLINE")},
+             {"Network Play",
               lobby_connected_at_draw ?
                   std::to_string(machines_here) + " machine" +
                       (machines_here == 1 ? "" : "s") + " found" :
@@ -1891,13 +2087,17 @@ rom_selection_result show_rom_selector(const std::string& current_path,
               launcher_menu::mode_icon::exit}},
             "Back to Platforms");
         if (selected_page == launcher_menu::exit_requested ||
-            selected_page == 6) {
+            selected_page == 7) {
             rom_selection_result exit_result;
             exit_result.action = rom_selection_action::exit_requested;
             return exit_result;
         }
         if (selected_page < 0) continue;
         if (selected_page == 0) {
+            show_online_screen();
+            continue;
+        }
+        if (selected_page == 1) {
             if (!lobby) {
                 menu.show_text(
                     "Multiplayer Lobby",
@@ -1957,6 +2157,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     act_nothing, act_invite_one, act_invite_all, act_allow,
                     act_deny, act_withdraw, act_logs, act_alternating,
                     act_simultaneous, act_system_link, act_presence,
+                    act_online,
                 };
                 const auto add = [&](card entry, int what,
                                      uint64_t target = 0) {
@@ -2104,6 +2305,19 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 // Always available, wherever the negotiation has got to: the
                 // moment worth reading a machine's output is the moment it
                 // has stopped answering.
+                // Machines somewhere else. Once they are found they appear in
+                // the list above with everything else, so this is only the
+                // way in - pairing this machine to an account, and seeing
+                // what the connection is doing.
+                if (online && online_link::available())
+                    add(card("Internet Play",
+                             online->signed_in()
+                                 ? (online->joined_lobby().empty()
+                                        ? "Signed in - no lobby yet"
+                                        : "In lobby " + online->joined_lobby())
+                                 : "Play machines on other networks",
+                             icon::cabinet_count), act_online);
+
                 add(card("Machine Logs",
                          lobby->has_any_log() ? "Relayed from the network"
                                               : "Nothing relayed yet",
@@ -2133,6 +2347,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     arcade_multiplayer_mode::simultaneous;
                 switch (actions[slot]) {
                 case act_nothing:
+                    continue;
+                case act_online:
+                    show_online_screen();
                     continue;
                 case act_logs:
                     choose_machine_log();
@@ -2254,7 +2471,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             }
             continue;
         }
-        if (selected_page == 1) {
+        if (selected_page == 2) {
             // Arcade wall: pick how many columns, then a game for each. Every
             // column runs its own independent cabinet in one fullscreen
             // window; the highlighted column is the one you play, and Tab
@@ -2335,20 +2552,20 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             wall.wall_games = std::move(picked);
             return wall;
         }
-        if (selected_page == 2) {
+        if (selected_page == 3) {
             show_rom_library_manager(menu);
             choices = discover_rom_choices(current_path);
             continue;
         }
-        if (selected_page == 3) {
+        if (selected_page == 4) {
             show_input_mapper(menu, choices);
             continue;
         }
-        if (selected_page == 4) {
+        if (selected_page == 5) {
             show_eeprom_manager(menu);
             continue;
         }
-        if (selected_page == 5) {
+        if (selected_page == 6) {
             show_high_score_viewer(menu);
             continue;
         }

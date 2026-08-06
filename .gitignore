@@ -44,3 +44,15 @@ Thumbs.db
 # Scratch patches from local experiments
 test_patch.diff
 test_mirror.diff
+
+# MANX online. The web config is public by design and IS committed - the API
+# key names the project and authorises nothing. These are the things that
+# genuinely must not be: deploy caches, and any credential that grants
+# server-side access to the project.
+/web/.firebase/
+/web/node_modules/
+/web/package-lock.json
+firebase-debug.log
+firestore-debug.log
+*-serviceaccount.json
+*-adminsdk-*.json

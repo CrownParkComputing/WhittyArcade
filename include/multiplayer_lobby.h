@@ -2,6 +2,7 @@
 #pragma once
 
 #include "arcade_types.h"
+#include "lobby_targets.h"
 
 #include <atomic>
 #include <cstddef>
@@ -37,6 +38,18 @@ enum class machine_presence : uint8_t {
 // The most cabinets one session can hold. The comm ring the arcade boards
 // themselves implement tops out here, so nothing is gained by going wider.
 constexpr int lobby_max_machines = 8;
+
+// What this machine's router does to an outgoing datagram's source port, and
+// therefore whether another machine can ever punch back to it. A cabinet
+// behind a symmetric NAT gets a fresh port for every destination, so the
+// address a STUN server reports is not the address a peer would have to send
+// to, and no amount of waiting will connect the two. Worth knowing so the
+// screen can say that rather than leaving somebody watching "connecting".
+enum class nat_kind : uint8_t {
+    unknown = 0,
+    cone = 1,        // one mapping for everybody; punching works
+    symmetric = 2,   // a mapping per destination; punching cannot work
+};
 
 // One other MANX on the network, as the lobby screen needs to draw it.
 struct lobby_machine {
@@ -85,6 +98,31 @@ public:
     // wrong rather than slow, so the launcher can stop saying "searching"
     // and say what a user can actually do about it.
     bool search_exhausted() const;
+
+    // --- machines that cannot be found by looking ----------------------
+    // Everything above finds machines on this network. These are the ones
+    // somewhere else: the online link learns their public addresses from the
+    // lobby service and hands them over here, and from that moment they are
+    // ordinary entries in the same roster. Nothing downstream - invitations,
+    // player numbers, launching, in-game traffic - knows the difference.
+    //
+    // Replaced wholesale rather than added one at a time, so a poll can never
+    // leave the set half-empty for a hello tick and drop a punch in flight.
+    void set_remote_peers(std::vector<lobby_link::remote_peer> peers);
+    std::size_t remote_peer_count() const;
+
+    // Asks the internet what address this machine's lobby socket appears to
+    // come from, so it can be published for others to punch at. Idempotent;
+    // the answer arrives on the lobby thread some seconds later, and until it
+    // does the lobby behaves exactly as it always has.
+    void begin_public_endpoint_probe();
+    std::optional<lobby_link::remote_peer> public_endpoint() const;
+    nat_kind nat() const;
+
+    // The mask the hello publishes, so the online link can say the same thing
+    // about this machine that the LAN hello does rather than working it out a
+    // second way and disagreeing.
+    uint64_t games_mask() const;
 
     // --- agreeing on a game -------------------------------------------
     // Asks one machine, or every machine found, for a game. Either makes
@@ -163,8 +201,15 @@ public:
 
 private:
     void run();
+    void resolve_stun_servers();
 
     std::thread m_thread;
+    // One shot, and only if somebody asks for a public address. getaddrinfo
+    // blocks for as long as it likes, which the 200 ms hello loop cannot
+    // afford, and resolving on the main thread would delay LAN discovery for
+    // a feature LAN play does not use.
+    std::thread m_resolve_thread;
+    std::atomic_bool m_probe_requested{false};
     std::atomic_bool m_stop{false};
     std::atomic_bool m_connected{false};
     std::atomic_bool m_search_exhausted{false};
@@ -198,7 +243,29 @@ private:
     // and called from the lobby thread.
     mutable std::mutex m_session_mutex;
     std::function<void(const void*, std::size_t)> m_session_receiver;
-    std::intptr_t m_socket{-1};
+    // Written by the lobby thread, read by the emulation thread through
+    // send_to_session. Atomic because that is exactly what it is.
+    std::atomic<std::intptr_t> m_socket{-1};
+
+    // Deliberately not m_mutex. That one is held inside the receive hot loop
+    // and by send_to_session on the emulation thread; this set is touched by
+    // an HTTP worker a few times a second. The rule, which must not be
+    // broken: never hold both. run() copies the set out and releases before
+    // it sends anything.
+    mutable std::mutex m_remote_mutex;
+    std::vector<lobby_link::remote_peer> m_remote_peers;
+
+    // Guards only the resolved STUN server list, shared with the resolver
+    // thread and nothing else.
+    mutable std::mutex m_stun_mutex;
+    std::vector<uint32_t> m_stun_ipv4;     // network order
+    std::vector<uint16_t> m_stun_port;     // host order
+    std::atomic_bool m_stun_resolved{false};
+
+    // (ipv4 << 16) | port, zero while unknown. Packed into one atomic so the
+    // address and the port can never be read half-updated.
+    std::atomic_uint64_t m_public_endpoint{0};
+    std::atomic_uint8_t m_nat{0};
 
     mutable std::mutex m_launch_mutex;
     std::string m_outgoing_game;

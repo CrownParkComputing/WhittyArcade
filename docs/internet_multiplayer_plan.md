@@ -1,4 +1,34 @@
 # Internet multiplayer (MANX)
+
+> **Superseded in part, August 2026.** Phases 1–3 below were built differently
+> from what this document proposed, and the tree now follows the built version.
+> Instead of a self-hosted Go server with vendored libjuice ICE and RFC 8628
+> device codes, the shipped design is:
+>
+> * **Firebase** (Auth + Firestore) on the free Spark plan as pure signalling —
+>   no server to run, no Cloud Functions. The website and the security rules
+>   live in their own repo, **CrownParkComputing/MANXOnline**, deployed to
+>   Coolify; `firestore.rules` there is the entire security boundary, and its
+>   `public/js/model.js` must stay in lock-step with `include/online_wire.h`
+>   and `src/online_link.cpp` here.
+> * **Minimal STUN instead of ICE.** `manx_stun` (about 200 lines, no
+>   dependency) asks for the lobby socket's own public address; libjuice,
+>   monocypher and TURN were not vendored. The consequence is stated honestly
+>   rather than hidden: two machines both behind symmetric NAT cannot connect
+>   and there is no relay.
+> * **No new transport at all.** `multiplayer_lobby` builds its peer table from
+>   the source address of arriving hellos, so seeding a remote public endpoint
+>   makes the existing 200 ms hello stream the hole punch *and* the NAT
+>   keepalive. Invitations, the roster, launching and lockstep are unchanged.
+>   `manx_link` with three backends was not needed.
+> * **Pairing instead of device codes**, because the launcher has no text input
+>   of any kind: the cabinet shows a code and the website mints its account.
+>
+> **Phase 0 remains outstanding and is now the blocker on playability**: the
+> negotiated input delay and the 8-frame redundancy described below are not
+> built, so a connected internet match will stall. Everything about lockstep,
+> streaming, security and the games-mask bug below still stands.
+
 The goal: a site where players register, a client that links to it without
 shipping a secret, friends lists, presence, and matches over the internet —
 for real multiplayer games and for two-player arcade games taken in turns.

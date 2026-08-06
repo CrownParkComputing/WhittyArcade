@@ -3,6 +3,7 @@
 #include "arcade_catalog.h"
 #include "lan_peers.h"
 #include "manx_log_tap.h"
+#include "manx_stun.h"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <set>
 #include <type_traits>
 
 #if defined(_WIN32)
@@ -20,6 +22,7 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -29,7 +32,6 @@
 namespace {
 constexpr uint16_t lobby_port = 35109;
 constexpr std::array<uint8_t, 4> lobby_magic{{'W', 'A', 'L', '1'}};
-constexpr auto peer_timeout = std::chrono::milliseconds(1500);
 
 // Version 2 carries the machine name and the host's roster, which version 1
 // had nowhere to put. The version and the length are both checked, so a
@@ -164,6 +166,164 @@ uint64_t random_nonce() {
     return value ? value : 1;
 }
 
+// The public-address probe, as a plain object driven by the lobby loop. It
+// owns no thread and no lock, and it borrows the lobby's socket rather than
+// opening one - which is the entire point. A mapping learned on a different
+// socket describes a different hole in the router and is worth nothing to a
+// peer trying to reach the one the game will actually use.
+struct stun_probe {
+    struct server {
+        uint32_t ipv4{};
+        uint16_t port{};
+    };
+
+    std::vector<server> servers;
+    std::size_t current{};
+    int attempt{};
+    bool waiting{};
+    manx_stun::transaction_id id{};
+    std::chrono::steady_clock::time_point next_send{};
+
+    // The first answer is published immediately, because a player waiting to
+    // connect should not also wait for a classification. A second server is
+    // then asked the same question: the same port back means one mapping for
+    // every destination and punching will work; a different port means a
+    // mapping per destination, and no amount of patience will connect this
+    // machine to anything.
+    bool confirming{};
+    manx_stun::mapped_endpoint first{};
+
+    static std::chrono::milliseconds gap(int attempt_number) {
+        switch (attempt_number) {
+        case 1:  return std::chrono::milliseconds(500);
+        case 2:  return std::chrono::milliseconds(1000);
+        default: return std::chrono::milliseconds(2000);
+        }
+    }
+    // Four attempts is RFC 5389's shape trimmed to something a launcher can
+    // wait through: about four seconds before a server is written off.
+    static constexpr int attempts_per_server = 4;
+    static constexpr auto cycle_gap = std::chrono::seconds(60);
+
+    void begin(std::chrono::steady_clock::time_point now, std::size_t which) {
+        if (servers.empty()) return;
+        current = which % servers.size();
+        attempt = 0;
+        waiting = true;
+        id = manx_stun::make_transaction_id();
+        next_send = now;
+    }
+
+    void tick(native_socket socket,
+              std::chrono::steady_clock::time_point now) {
+        if (servers.empty() || !waiting || now < next_send) return;
+        if (attempt >= attempts_per_server) {
+            // This server is not answering. Try the next one, and when they
+            // have all been tried, leave the address unknown and come back
+            // in a minute rather than hammering.
+            const std::size_t next = current + 1;
+            if (next >= servers.size() || confirming) {
+                waiting = false;
+                next_send = now + cycle_gap;
+                confirming = false;
+                return;
+            }
+            begin(now, next);
+        }
+        uint8_t request[manx_stun::header_bytes];
+        const std::size_t bytes =
+            manx_stun::build_binding_request(id, request, sizeof(request));
+        sockaddr_in endpoint{};
+        endpoint.sin_family = AF_INET;
+        endpoint.sin_addr.s_addr = servers[current].ipv4;
+        endpoint.sin_port = htons(servers[current].port);
+        sendto(socket, reinterpret_cast<const char*>(request),
+               static_cast<int>(bytes), 0,
+               reinterpret_cast<const sockaddr*>(&endpoint), sizeof(endpoint));
+        ++attempt;
+        next_send = now + gap(attempt);
+    }
+
+    // True when this datagram was an answer to our question and it changed
+    // what we know. `mapping` is only meaningful on the first answer of a
+    // cycle; `nat` is only meaningful after the confirming one.
+    bool absorb(const void* data, std::size_t bytes,
+                std::chrono::steady_clock::time_point now,
+                manx_stun::mapped_endpoint& mapping, nat_kind& nat,
+                bool& mapping_known) {
+        if (!waiting) return false;
+        const auto answer =
+            manx_stun::parse_binding_response(data, bytes, id);
+        if (!answer) return false;
+
+        if (!confirming) {
+            first = *answer;
+            mapping = *answer;
+            mapping_known = true;
+            if (servers.size() < 2) {
+                // Nothing to compare against. Leave the classification
+                // unknown rather than guessing from one sample.
+                waiting = false;
+                next_send = now + cycle_gap;
+                return true;
+            }
+            confirming = true;
+            begin(now, current + 1);
+            return true;
+        }
+
+        nat = (answer->ipv4 == first.ipv4 && answer->port == first.port)
+                  ? nat_kind::cone
+                  : nat_kind::symmetric;
+        mapping = first;
+        mapping_known = true;
+        waiting = false;
+        confirming = false;
+        next_send = now + cycle_gap;
+        return true;
+    }
+
+    // A cycle that finished, or one that gave up, comes round again so a
+    // router that rebinds or a WAN address that changes is noticed.
+    void restart_if_due(std::chrono::steady_clock::time_point now) {
+        if (waiting || servers.empty() || now < next_send) return;
+        confirming = false;
+        begin(now, 0);
+    }
+};
+
+// "1.2.3.4:35109,5.6.7.8:40000" - the escape hatch that makes the whole
+// seeding path testable with two processes on one machine and no cloud
+// account anywhere.
+std::vector<lobby_link::remote_peer> peers_from_environment() {
+    std::vector<lobby_link::remote_peer> peers;
+    const char* list = std::getenv("MANX_REMOTE_PEER");
+    if (!list || !*list) return peers;
+
+    std::string text(list);
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t comma = text.find(',', start);
+        const std::size_t end = comma == std::string::npos ? text.size() : comma;
+        const std::string entry = text.substr(start, end - start);
+        const std::size_t colon = entry.rfind(':');
+        if (colon != std::string::npos) {
+            in_addr address{};
+            if (inet_pton(AF_INET, entry.substr(0, colon).c_str(),
+                          &address) == 1) {
+                lobby_link::remote_peer peer;
+                peer.ipv4 = address.s_addr;
+                peer.port = static_cast<uint16_t>(
+                    std::strtoul(entry.c_str() + colon + 1, nullptr, 10));
+                if (peer.port != 0) peers.push_back(peer);
+            }
+        }
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return peers;
+}
+
 int game_index(std::string_view short_name) {
     const auto& games = supported_rom_sets();
     for (std::size_t index = 0; index < games.size(); ++index)
@@ -188,6 +348,75 @@ multiplayer_lobby::multiplayer_lobby()
 multiplayer_lobby::~multiplayer_lobby() {
     m_stop.store(true, std::memory_order_release);
     if (m_thread.joinable()) m_thread.join();
+    if (m_resolve_thread.joinable()) m_resolve_thread.join();
+}
+
+void multiplayer_lobby::set_remote_peers(
+        std::vector<lobby_link::remote_peer> peers) {
+    if (peers.size() > static_cast<std::size_t>(lobby_max_machines))
+        peers.resize(lobby_max_machines);
+    std::lock_guard<std::mutex> lock(m_remote_mutex);
+    m_remote_peers = std::move(peers);
+}
+
+std::size_t multiplayer_lobby::remote_peer_count() const {
+    std::lock_guard<std::mutex> lock(m_remote_mutex);
+    return m_remote_peers.size();
+}
+
+void multiplayer_lobby::begin_public_endpoint_probe() {
+    // Idempotent: the first caller starts the resolver, everybody else has
+    // already got what they asked for.
+    if (m_probe_requested.exchange(true, std::memory_order_acq_rel)) return;
+    m_resolve_thread =
+        std::thread(&multiplayer_lobby::resolve_stun_servers, this);
+}
+
+std::optional<lobby_link::remote_peer>
+multiplayer_lobby::public_endpoint() const {
+    const uint64_t packed = m_public_endpoint.load(std::memory_order_acquire);
+    if (packed == 0) return std::nullopt;
+    lobby_link::remote_peer endpoint;
+    endpoint.ipv4 = static_cast<uint32_t>(packed >> 16);
+    endpoint.port = static_cast<uint16_t>(packed & 0xffff);
+    return endpoint;
+}
+
+nat_kind multiplayer_lobby::nat() const {
+    return static_cast<nat_kind>(m_nat.load(std::memory_order_acquire));
+}
+
+uint64_t multiplayer_lobby::games_mask() const {
+    return m_local_games.load(std::memory_order_acquire);
+}
+
+void multiplayer_lobby::resolve_stun_servers() {
+    std::vector<uint32_t> addresses;
+    std::vector<uint16_t> ports;
+    for (const manx_stun::server_address& server : manx_stun::default_servers()) {
+        if (m_stop.load(std::memory_order_acquire)) return;
+        addrinfo hints{};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        addrinfo* results = nullptr;
+        if (getaddrinfo(server.host.c_str(), nullptr, &hints, &results) != 0)
+            continue;
+        for (const addrinfo* at = results; at; at = at->ai_next) {
+            if (at->ai_family != AF_INET || !at->ai_addr) continue;
+            const auto* address =
+                reinterpret_cast<const sockaddr_in*>(at->ai_addr);
+            addresses.push_back(address->sin_addr.s_addr);
+            ports.push_back(server.port);
+            break;   // one address per server is plenty
+        }
+        freeaddrinfo(results);
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_stun_mutex);
+        m_stun_ipv4 = std::move(addresses);
+        m_stun_port = std::move(ports);
+    }
+    m_stun_resolved.store(true, std::memory_order_release);
 }
 
 void multiplayer_lobby::set_installed_games(
@@ -399,7 +628,7 @@ std::optional<std::string> multiplayer_lobby::take_launch() {
 void multiplayer_lobby::send_to_session(const void* data,
                                        std::size_t bytes) {
     if (!data || bytes == 0 || bytes > max_session_payload) return;
-    const std::intptr_t handle = m_socket;
+    const std::intptr_t handle = m_socket.load(std::memory_order_acquire);
     if (handle == -1) return;
     lobby_session_packet packet{};
     packet.magic = session_magic;
@@ -523,12 +752,27 @@ void multiplayer_lobby::run() {
     lan::peer_sweep sweep;
     // Published so the emulation thread can send on it directly. One socket
     // and one port for everything multiplayer.
-    m_socket = static_cast<std::intptr_t>(socket);
+    m_socket.store(static_cast<std::intptr_t>(socket),
+                   std::memory_order_release);
 
     std::map<uint64_t, std::chrono::steady_clock::time_point> last_seen;
     std::map<uint64_t, sockaddr_in> endpoints;
     std::map<uint64_t, uint32_t> log_cursor;
+    // Which machines were reached by seeding rather than by looking. They
+    // are given a far longer silence before being written off, because a
+    // second of bursty loss is a normal internet event and dissolving a live
+    // game over it would be worse than waiting.
+    std::set<uint64_t> remote_nonces;
+    stun_probe probe;
     auto next_hello = std::chrono::steady_clock::now();
+
+    // Set by hand, this exercises the whole seed - punch - dedupe - retire
+    // path with two processes on one machine, no router and no cloud.
+    if (const auto forced = peers_from_environment(); !forced.empty()) {
+        set_remote_peers(forced);
+        std::printf("Lobby seeded with %zu remote peer(s) from "
+                    "MANX_REMOTE_PEER\n", forced.size());
+    }
 
     std::printf("Multiplayer lobby discovery on UDP %u (%s) as \"%s\"\n",
                 lobby_port,
@@ -556,6 +800,41 @@ void multiplayer_lobby::run() {
                 static_cast<int>(sizeof(wire)), 0,
                 reinterpret_cast<sockaddr*>(&sender), &sender_size));
             if (received <= 0) break;
+
+            // Before anything length-based. A STUN response carrying a
+            // couple of attributes is exactly the size of a hello, so the
+            // magic cookie is the only thing that can tell them apart, and
+            // asking it first costs one comparison.
+            if (manx_stun::looks_like_stun(&wire,
+                                           static_cast<std::size_t>(received))) {
+                manx_stun::mapped_endpoint mapped{};
+                nat_kind kind = nat();
+                bool known = false;
+                if (probe.absorb(&wire, static_cast<std::size_t>(received),
+                                 std::chrono::steady_clock::now(), mapped,
+                                 kind, known)) {
+                    if (known) {
+                        m_public_endpoint.store(
+                            (static_cast<uint64_t>(mapped.ipv4) << 16) |
+                                mapped.port,
+                            std::memory_order_release);
+                        std::printf("Lobby socket is seen from the internet "
+                                    "as %s:%u\n",
+                                    address_text(mapped.ipv4).c_str(),
+                                    mapped.port);
+                    }
+                    if (kind != nat()) {
+                        m_nat.store(static_cast<uint8_t>(kind),
+                                    std::memory_order_release);
+                        if (kind == nat_kind::symmetric)
+                            std::printf("This router gives every destination "
+                                        "its own port, so other machines "
+                                        "cannot connect directly to this "
+                                        "one.\n");
+                    }
+                }
+                continue;
+            }
 
             if (received == static_cast<int>(sizeof(lobby_log_packet)) &&
                 wire.log.magic == log_magic && wire.log.version == 1 &&
@@ -591,6 +870,19 @@ void multiplayer_lobby::run() {
             const bool first_sighting = last_seen.count(incoming.nonce) == 0;
             last_seen[incoming.nonce] = arrival;
             endpoints[incoming.nonce] = sender;
+            {
+                // A hello arriving from an address we were seeded with is
+                // the punch succeeding. Remember which machines those are:
+                // from here they are ordinary peers in every respect except
+                // how long they are allowed to go quiet.
+                std::lock_guard<std::mutex> lock(m_remote_mutex);
+                for (const lobby_link::remote_peer& seed : m_remote_peers)
+                    if (seed.ipv4 == sender.sin_addr.s_addr &&
+                        seed.port == ntohs(sender.sin_port)) {
+                        remote_nonces.insert(incoming.nonce);
+                        break;
+                    }
+            }
             if (first_sighting) {
                 // A machine that has just arrived gets the recent history of
                 // this one, not only what happens from here.
@@ -739,11 +1031,29 @@ void multiplayer_lobby::run() {
 
         const auto now = std::chrono::steady_clock::now();
 
+        // The public-address probe, once the resolver has finished and only
+        // if anybody asked for one. LAN play never does, and never pays for
+        // it: without a request this whole block is one atomic load.
+        if (probe.servers.empty() &&
+            m_stun_resolved.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(m_stun_mutex);
+            for (std::size_t index = 0; index < m_stun_ipv4.size(); ++index)
+                probe.servers.push_back(
+                    stun_probe::server{m_stun_ipv4[index], m_stun_port[index]});
+            if (!probe.servers.empty()) probe.begin(now, 0);
+        }
+        if (!probe.servers.empty()) {
+            probe.restart_if_due(now);
+            probe.tick(socket, now);
+        }
+
         // Retire machines that have stopped answering.
         {
             std::vector<uint64_t> gone;
             for (const auto& entry : last_seen)
-                if (now - entry.second > peer_timeout)
+                if (now - entry.second >
+                    lobby_link::timeout_for(
+                        remote_nonces.count(entry.first) != 0))
                     gone.push_back(entry.first);
             if (!gone.empty()) {
                 bool empty_now = false;
@@ -753,6 +1063,7 @@ void multiplayer_lobby::run() {
                         last_seen.erase(nonce);
                         endpoints.erase(nonce);
                         log_cursor.erase(nonce);
+                        remote_nonces.erase(nonce);
                         m_machines.erase(
                             std::remove_if(
                                 m_machines.begin(), m_machines.end(),
@@ -867,64 +1178,99 @@ void multiplayer_lobby::run() {
             outgoing.invite = static_cast<uint8_t>(local_state);
             send_packet(socket, outgoing, loopback);
 
-            if (!endpoints.empty()) {
-                // Each machine is told its own player number, and only the
-                // machines actually asked are told they are being asked.
-                for (const auto& entry : endpoints) {
-                    lobby_packet personal = outgoing;
-                    if (hosting()) {
-                        const bool asked =
-                            std::find(invited.begin(), invited.end(),
-                                      entry.first) != invited.end();
-                        personal.invite = static_cast<uint8_t>(
-                            asked ? multiplayer_invite::inviting
-                                  : multiplayer_invite::idle);
-                    }
-                    const auto place = assigned.find(entry.first);
-                    personal.assigned_node = static_cast<uint8_t>(
-                        place == assigned.end() ? 0 : place->second);
-                    send_packet(socket, personal, entry.second);
-
-                    uint32_t& cursor = log_cursor[entry.first];
-                    uint32_t first = cursor;
-                    const std::vector<std::string> lines =
-                        manx_log_tap::lines_from(cursor, 32, &first);
-                    if (lines.empty()) {
-                        cursor = manx_log_tap::next_sequence();
-                        continue;
-                    }
-                    lobby_log_packet relay{};
-                    relay.magic = log_magic;
-                    relay.version = 1;
-                    relay.nonce = m_nonce;
-                    relay.first_line = first;
-                    std::size_t used = 0;
-                    uint32_t count = 0;
-                    for (const std::string& line : lines) {
-                        if (used + line.size() + 1 > log_payload_bytes) break;
-                        std::memcpy(relay.text + used, line.data(),
-                                    line.size());
-                        used += line.size();
-                        relay.text[used++] = '\n';
-                        ++count;
-                    }
-                    if (count == 0) {
-                        // One line longer than the whole payload: send what
-                        // fits rather than wedging the cursor here for ever.
-                        used = log_payload_bytes - 1;
-                        std::memcpy(relay.text, lines.front().data(), used);
-                        relay.text[used++] = '\n';
-                        count = 1;
-                    }
-                    relay.bytes = static_cast<uint16_t>(used);
-                    relay.line_count = count;
-                    send_packet(socket, relay, entry.second);
-                    cursor = first + count;
+            // Each machine that has answered is told its own player number,
+            // and only the machines actually asked are told they are being
+            // asked.
+            for (const auto& entry : endpoints) {
+                lobby_packet personal = outgoing;
+                if (hosting()) {
+                    const bool asked =
+                        std::find(invited.begin(), invited.end(),
+                                  entry.first) != invited.end();
+                    personal.invite = static_cast<uint8_t>(
+                        asked ? multiplayer_invite::inviting
+                              : multiplayer_invite::idle);
                 }
-            } else {
+                const auto place = assigned.find(entry.first);
+                personal.assigned_node = static_cast<uint8_t>(
+                    place == assigned.end() ? 0 : place->second);
+                send_packet(socket, personal, entry.second);
+
+                uint32_t& cursor = log_cursor[entry.first];
+                uint32_t first = cursor;
+                const std::vector<std::string> lines =
+                    manx_log_tap::lines_from(cursor, 32, &first);
+                if (lines.empty()) {
+                    cursor = manx_log_tap::next_sequence();
+                    continue;
+                }
+                lobby_log_packet relay{};
+                relay.magic = log_magic;
+                relay.version = 1;
+                relay.nonce = m_nonce;
+                relay.first_line = first;
+                std::size_t used = 0;
+                uint32_t count = 0;
+                for (const std::string& line : lines) {
+                    if (used + line.size() + 1 > log_payload_bytes) break;
+                    std::memcpy(relay.text + used, line.data(), line.size());
+                    used += line.size();
+                    relay.text[used++] = '\n';
+                    ++count;
+                }
+                if (count == 0) {
+                    // One line longer than the whole payload: send what
+                    // fits rather than wedging the cursor here for ever.
+                    used = log_payload_bytes - 1;
+                    std::memcpy(relay.text, lines.front().data(), used);
+                    relay.text[used++] = '\n';
+                    count = 1;
+                }
+                relay.bytes = static_cast<uint16_t>(used);
+                relay.line_count = count;
+                send_packet(socket, relay, entry.second);
+                cursor = first + count;
+            }
+
+            std::vector<lobby_link::remote_peer> seeds;
+            {
+                std::lock_guard<std::mutex> lock(m_remote_mutex);
+                seeds = m_remote_peers;
+            }
+            if (!seeds.empty()) {
+                // A seed gets the plain hello and nothing else: it has no
+                // nonce yet, so there is nothing personal to say to it, and
+                // a console log is not worth pushing down a metered link to
+                // a machine that may not even be there. What this datagram
+                // is really for is opening this router's return path so the
+                // other machine's hello can arrive.
+                std::vector<lobby_link::hello_target> answering;
+                answering.reserve(endpoints.size());
+                for (const auto& entry : endpoints)
+                    answering.push_back(lobby_link::hello_target{
+                        entry.second.sin_addr.s_addr,
+                        ntohs(entry.second.sin_port), true});
+                const auto self = public_endpoint();
+                const std::vector<lobby_link::hello_target> targets =
+                    lobby_link::merge_hello_targets(
+                        answering, seeds, self ? self->ipv4 : 0,
+                        self ? self->port : 0);
+                sockaddr_in target{};
+                target.sin_family = AF_INET;
+                for (const lobby_link::hello_target& at : targets) {
+                    if (at.relay_logs) continue;   // answered already, sent above
+                    target.sin_addr.s_addr = at.ipv4;
+                    target.sin_port = htons(at.port);
+                    send_packet(socket, outgoing, target);
+                }
+            }
+
+            if (lobby_link::should_sweep(!endpoints.empty())) {
                 // Nobody found yet. Broadcast plus a paced sweep of the
                 // subnet - see lan_peers.h for why the sweep is what carries
-                // this through a deny-by-default firewall.
+                // this through a deny-by-default firewall. Seeds deliberately
+                // do not suppress this: a machine punching at somebody in
+                // another country must still find the one next to it.
                 sockaddr_in target{};
                 target.sin_family = AF_INET;
                 target.sin_port = htons(lobby_port);
@@ -932,13 +1278,17 @@ void multiplayer_lobby::run() {
                     target.sin_addr.s_addr = address;
                     send_packet(socket, outgoing, target);
                 }
-                if (sweep.swept_once())
+                // "Nothing on this network" becomes advice about firewalls
+                // in the launcher, and that advice would be wrong while a
+                // punch to somewhere far away is still in flight.
+                if (lobby_link::search_is_exhausted(sweep.swept_once(),
+                                                    !seeds.empty()))
                     m_search_exhausted.store(true, std::memory_order_release);
             }
             next_hello = now + std::chrono::milliseconds(200);
         }
         wait_for_traffic(socket, in_session ? 1 : 20);
     }
-    m_socket = -1;
+    m_socket.store(-1, std::memory_order_release);
     close_socket(socket);
 }

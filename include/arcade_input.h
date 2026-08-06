@@ -56,11 +56,12 @@ void arcade_input_netplay_request_shutdown();
 void arcade_input_netplay_poll();
 uint32_t arcade_input_network_peer_ipv4();
 
-// Multiplayer traffic normally rides the lobby's socket, which is already up,
-// already unicast to every machine in the session and already through
-// whatever firewalls are in the way. Installing a transport switches the
-// in-game link onto it; without one the link opens a socket of its own,
-// which is what a cabinet started straight from the command line does.
+// Multiplayer traffic rides the lobby's socket, which is already up, already
+// unicast to every machine in the session and already through whatever
+// firewalls are in the way - and, for a machine across the internet, is the
+// only socket anybody has punched a hole for. A transport must be installed
+// before the board is built; without one the link has no channel and reports
+// so, rather than quietly opening a socket nothing can reach.
 void arcade_input_set_netplay_transport(
     std::function<void(const void*, std::size_t)> send);
 // Handed each payload the transport delivers. Safe to call from any thread.

@@ -18,6 +18,9 @@
 #include "wall_capacity.h"
 #include "manx_log_tap.h"
 #include "multiplayer_lobby.h"
+#include "manx_cloud_config.h"
+#include "manx_http.h"
+#include "online_link.h"
 #include "namco/system22/system22_c139_transport.h"
 #include "namco/system22/system22_cpu.h"
 #include "persistent_data.h"
@@ -752,15 +755,34 @@ int main(int argc, char* argv[]) {
     bool restart = true;
     bool startup_menu = runtime.positional.empty();
     std::unique_ptr<multiplayer_lobby> lobby;
-    if (startup_menu)
+    // Machines somewhere else are reached through the same lobby: the online
+    // link only learns their public addresses and hands them over, so it is
+    // built beside the lobby and lives exactly as long.
+    std::unique_ptr<online_link> online;
+    if (startup_menu) {
         lobby = std::make_unique<multiplayer_lobby>();
+        // Said out loud, because the alternative is a menu entry that is
+        // simply absent, which looks identical whether the feature is off,
+        // unbuilt or unconfigured.
+        if (online_link::available()) {
+            online = std::make_unique<online_link>(*lobby);
+            std::printf("MANX online: enabled for project %s\n",
+                        manx_cloud::project_id().c_str());
+        } else if (!manx_http::available()) {
+            std::printf("MANX online: off - this build has no libcurl\n");
+        } else {
+            std::printf("MANX online: off - no Firebase project. Set "
+                        "MANX_FIREBASE_KEY, or build with "
+                        "-DMANX_FIREBASE_API_KEY\n");
+        }
+    }
 
     while (restart) {
         restart = false;
         if (startup_menu) {
             startup_menu = false;
             rom_selection_result selection =
-                show_rom_selector(rom_path, lobby.get());
+                show_rom_selector(rom_path, lobby.get(), online.get());
             if (selection.action == rom_selection_action::selected) {
                 // The first-run/settings UI may have changed the persisted
                 // library paths. Reload the full settings record before
@@ -770,36 +792,15 @@ int main(int argc, char* argv[]) {
                 rom_path = std::move(selection.path);
                 launch_mode = selection.launch_mode;
                 cabinet_node = selection.cabinet_node;
-                // Hand the cabinet the address the launcher is already
-                // talking to. The machines have a live conversation at this
-                // point; naming the partner means the in-game link continues
-                // it rather than starting a fresh search that a firewall may
-                // not let through. The host looks up Player 2 in its own
-                // roster; everyone else already knows the host.
-                uint32_t partner = 0;
-                if (launch_mode == cabinet_launch_mode::linked_network &&
-                    lobby) {
-                    partner = lobby->host_ipv4();
-                    if (!partner && cabinet_node == 1) {
-                        for (const lobby_machine& machine :
-                                 lobby->machines()) {
-                            if (machine.node == 2) {
-                                partner = machine.ipv4;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (partner) {
-                    in_addr peer_address{};
-                    peer_address.s_addr = partner;
-                    char text[INET_ADDRSTRLEN]{};
-                    if (inet_ntop(AF_INET, &peer_address, text,
-                                  sizeof(text)))
-                        set_environment("MANX_INPUT_PEER_HOST", text);
-                } else {
-                    unset_environment("MANX_INPUT_PEER_HOST");
-                }
+                // There is deliberately no peer address handed over here any
+                // more. The in-game link rides the lobby's own socket (see
+                // where the transport is installed, below), which is already
+                // up, already talking to every machine in the roster and
+                // already through whatever firewalls are in the way. A second
+                // link would have to win all of that again from inside a
+                // running game - and across the internet it could not win it
+                // at all, because a fresh socket gets a fresh hole in the
+                // router that nobody has punched.
                 cabinet_count = std::clamp(selection.cabinet_count, 2, 8);
                 settings.twin_separate_monitors =
                     selection.twin_separate_monitors;
@@ -997,6 +998,22 @@ int main(int argc, char* argv[]) {
         // Under netplay both cabinets run the whole board and are heard;
         // silencing Player 2 belonged to the streaming era, when its local
         // board was a puppet behind a received picture.
+
+        // Hand the in-game link the lobby's socket, before the board is
+        // built: initialising the board is what asks the link whether it has
+        // a channel, and it decides there and then. One socket and one port
+        // for everything multiplayer - discovery, invitations, the roster and
+        // now the input stream too. Boards with real comm hardware (Model 2,
+        // System 22) keep their own sockets and are not touched here.
+        if (lobby && launch_mode == cabinet_launch_mode::linked_network &&
+            !native_hardware_link) {
+            multiplayer_lobby* channel = lobby.get();
+            lobby->set_session_receiver(&arcade_input_netplay_deliver);
+            arcade_input_set_netplay_transport(
+                [channel](const void* data, std::size_t bytes) {
+                    channel->send_to_session(data, bytes);
+                });
+        }
 
         std::unique_ptr<emulator_session> emu = create_emulator_session(
             identity->board, shared_video, cabinet_state);
@@ -1386,6 +1403,11 @@ int main(int argc, char* argv[]) {
         // is. The other cabinets are watching for exactly this and follow.
         if (lobby && launch_mode == cabinet_launch_mode::linked_network)
             lobby->leave_session();
+        // Take the channel back down with it. Left installed, the lobby
+        // thread would go on filing input packets into an inbox that nothing
+        // is draining any more.
+        arcade_input_set_netplay_transport({});
+        if (lobby) lobby->set_session_receiver({});
         if (host_action == arcade_host_action::return_to_menu) {
             // A spawned cabinet has no launcher to go back to: leaving the
             // game means leaving the process. Only cabinet 1 owns the menu.

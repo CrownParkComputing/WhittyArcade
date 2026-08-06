@@ -10,6 +10,7 @@
 #include <vector>
 
 class multiplayer_lobby;
+class online_link;
 
 enum class rom_selection_action : uint8_t {
     no_change,
@@ -60,7 +61,8 @@ int linked_cabinet_maximum(const std::string& short_name);
 std::string show_in_game_game_browser(const std::vector<rom_choice>& choices);
 
 rom_selection_result show_rom_selector(const std::string& current_path,
-                                       multiplayer_lobby* lobby = nullptr);
+                                       multiplayer_lobby* lobby = nullptr,
+                                       online_link* online = nullptr);
 std::vector<rom_choice> discover_rom_choices(const std::string& current_path);
 operator_menu_definition make_system22_operator_menu(
     uint16_t switches, ridge_racer_rom_set set);
