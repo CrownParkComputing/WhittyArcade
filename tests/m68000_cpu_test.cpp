@@ -34,7 +34,13 @@ public:
     void put16(uint32_t address, uint16_t value) { write16(address, value); }
     void put32(uint32_t address, uint32_t value) {
         put16(address, static_cast<uint16_t>(value >> 16));
-        put16(address, static_cast<uint16_t>(value));
+        // The low half goes two bytes along, not on top of the high half.
+        // Writing both to the same address left the reset vector reading
+        // back as 0x00080000 instead of 0x00000008 - so every run of this
+        // test started the CPU at half a megabyte and asserted on the first
+        // line, and the fault was in the test's own bus rather than in the
+        // 68000 it was testing.
+        put16(address + 2, static_cast<uint16_t>(value));
     }
     uint16_t peek16(uint32_t address) { return read16(address); }
 };
@@ -42,21 +48,26 @@ public:
 // Program layout per instance:
 //   0x00: SSP = 0x00010000, PC = 0x00000008
 //   0x08: move.w #imm,d0        303C imm
-//   0x0C: move.w d0,(0x200).w   33C0 0200
+//   0x0C: move.w d0,(0x200).w   31C0 0200
 //   0x10: andi.w #0xF000,sr     027C F000   (lower IPL mask so L4 fires)
 //   0x14: bra.s -2              60FE
 // Level-4 autovector (vector 28, offset 0x70) -> handler at 0x20:
-//   0x20: move.w d0,(0x202).w   33C0 0202
+//   0x20: move.w d0,(0x202).w   31C0 0202
 //   0x24: rte                   4E73
 void load_program(ram_bus& bus, uint16_t imm) {
     bus.put32(0x00, 0x00010000);
     bus.put32(0x04, 0x00000008);
     bus.put16(0x08, 0x303c); bus.put16(0x0a, imm);
-    bus.put16(0x0c, 0x33c0); bus.put16(0x0e, 0x0200);
+    // 31c0, not 33c0. 0x33C0 is move.w d0,(xxx).L - absolute long, six
+    // bytes and a 32-bit address - so this wrote d0 to whatever address the
+    // next two words happened to spell, fell through into the middle of the
+    // following instruction, and ended up executing the vector table. The
+    // absolute-short form the comment describes is 0x31C0.
+    bus.put16(0x0c, 0x31c0); bus.put16(0x0e, 0x0200);
     bus.put16(0x10, 0x027c); bus.put16(0x12, 0xf000);
     bus.put16(0x14, 0x60fe);
     bus.put32(0x70, 0x00000020);
-    bus.put16(0x20, 0x33c0); bus.put16(0x22, 0x0202);
+    bus.put16(0x20, 0x31c0); bus.put16(0x22, 0x0202);
     bus.put16(0x24, 0x4e73);
 }
 
