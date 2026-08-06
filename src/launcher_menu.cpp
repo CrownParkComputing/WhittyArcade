@@ -2300,6 +2300,150 @@ struct launcher_menu::implementation {
         }
     }
 
+    // The character wheel a cabinet with no keyboard uses: everything an
+    // email address or a password is likely to contain, in an order somebody
+    // can predict.
+    static const std::string& wheel() {
+        static const std::string characters =
+            "abcdefghijklmnopqrstuvwxyz"
+            "0123456789"
+            "@._-+"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "!#$%&*?/";
+        return characters;
+    }
+
+    std::optional<std::string> prompt_text(
+            const std::string& title, const std::string& description,
+            const std::string& initial, bool password,
+            std::size_t max_length) {
+        std::string value = initial.substr(0, max_length);
+        std::size_t cursor = value.size();
+        std::size_t wheel_at = 0;
+        bool redraw = true;
+
+        SDL_StartTextInput(window);
+        struct stop_text_input {
+            SDL_Window* window;
+            ~stop_text_input() { SDL_StopTextInput(window); }
+        } const stopper{window};
+
+        for (;;) {
+            if (redraw) {
+                // Masked, but the length is still shown: typing a password
+                // blind with no feedback at all is how people give up.
+                std::string shown = password ? std::string(value.size(), '*')
+                                             : value;
+                shown.insert(std::min(cursor, shown.size()), "_");
+                const std::vector<std::string> rows{
+                    shown.empty() ? std::string("_") : shown,
+                    "",
+                    "Type it, or use the stick: up and down pick a letter, "
+                    "left and right move along."};
+                draw_frame(title, description, rows, 0, 0,
+                           static_cast<int>(rows.size()), 152,
+                           "ENTER: DONE    ESC: CANCEL    BACKSPACE: DELETE");
+                redraw = false;
+            }
+
+            SDL_Event event{};
+            if (!SDL_WaitEvent(&event)) continue;
+            if (event.type == SDL_EVENT_QUIT) return std::nullopt;
+            if (event.type >= SDL_EVENT_WINDOW_FIRST &&
+                event.type <= SDL_EVENT_WINDOW_LAST) {
+                redraw = true;
+                continue;
+            }
+            if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+                open_controller(event.gdevice.which);
+                continue;
+            }
+            if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+                remove_disconnected_controllers();
+                continue;
+            }
+
+            if (event.type == SDL_EVENT_TEXT_INPUT) {
+                for (const char* at = event.text.text; at && *at; ++at) {
+                    if (value.size() >= max_length) break;
+                    // One line, so anything that would break it is dropped
+                    // rather than silently mangling the field.
+                    if (static_cast<unsigned char>(*at) < 0x20) continue;
+                    value.insert(value.begin() +
+                                 static_cast<std::ptrdiff_t>(cursor), *at);
+                    ++cursor;
+                }
+                redraw = true;
+                continue;
+            }
+
+            const auto insert_wheel = [&] {
+                if (value.size() >= max_length) return;
+                value.insert(value.begin() +
+                             static_cast<std::ptrdiff_t>(cursor),
+                             wheel()[wheel_at]);
+                ++cursor;
+            };
+            const auto backspace = [&] {
+                if (cursor == 0 || value.empty()) return;
+                value.erase(value.begin() +
+                            static_cast<std::ptrdiff_t>(cursor - 1));
+                --cursor;
+            };
+
+            if (event.type == SDL_EVENT_KEY_DOWN) {
+                switch (event.key.scancode) {
+                case SDL_SCANCODE_ESCAPE:
+                    return std::nullopt;
+                case SDL_SCANCODE_RETURN:
+                case SDL_SCANCODE_KP_ENTER:
+                    return value;
+                case SDL_SCANCODE_BACKSPACE: backspace(); break;
+                case SDL_SCANCODE_DELETE:
+                    if (cursor < value.size())
+                        value.erase(value.begin() +
+                                    static_cast<std::ptrdiff_t>(cursor));
+                    break;
+                case SDL_SCANCODE_LEFT:
+                    if (cursor > 0) --cursor;
+                    break;
+                case SDL_SCANCODE_RIGHT:
+                    if (cursor < value.size()) ++cursor;
+                    break;
+                case SDL_SCANCODE_HOME: cursor = 0; break;
+                case SDL_SCANCODE_END: cursor = value.size(); break;
+                default: break;
+                }
+                redraw = true;
+                continue;
+            }
+
+            if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+                switch (event.gbutton.button) {
+                case SDL_GAMEPAD_BUTTON_SOUTH: insert_wheel(); break;
+                case SDL_GAMEPAD_BUTTON_EAST:  backspace(); break;
+                case SDL_GAMEPAD_BUTTON_START: return value;
+                case SDL_GAMEPAD_BUTTON_BACK:  return std::nullopt;
+                case SDL_GAMEPAD_BUTTON_DPAD_UP:
+                    wheel_at = (wheel_at + wheel().size() - 1) % wheel().size();
+                    break;
+                case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
+                    wheel_at = (wheel_at + 1) % wheel().size();
+                    break;
+                case SDL_GAMEPAD_BUTTON_DPAD_LEFT:
+                    if (cursor > 0) --cursor;
+                    break;
+                case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:
+                    if (cursor < value.size()) ++cursor;
+                    break;
+                default: break;
+                }
+                redraw = true;
+                continue;
+            }
+        }
+    }
+
     std::optional<input_binding> capture_binding(
         const std::string& title, const std::string& description,
         bool keyboard, int32_t controller_instance, bool allow_inherit) {
@@ -3101,6 +3245,13 @@ void launcher_menu::show_text(const std::string& title,
 std::vector<launcher_controller_info> launcher_menu::controllers() {
     return m_impl->ready() ? m_impl->controller_list() :
                              std::vector<launcher_controller_info>{};
+}
+
+std::optional<std::string> launcher_menu::prompt_text(
+        const std::string& title, const std::string& description,
+        const std::string& initial, bool password, std::size_t max_length) {
+    return m_impl->prompt_text(title, description, initial, password,
+                               max_length);
 }
 
 std::optional<input_binding> launcher_menu::capture_binding(

@@ -299,6 +299,18 @@ public:
     // Returns controllers currently recognised by SDL's GameController API.
     std::vector<launcher_controller_info> controllers();
 
+    // Reads a line of text. An empty optional means cancel.
+    //
+    // The launcher had no text input at all before this: every other screen
+    // is a list somebody points at. Signing in needs an email address and a
+    // password, and neither can be pointed at - so this is a real field,
+    // typed on a keyboard, with a character wheel on the d-pad for a cabinet
+    // that has no keyboard attached.
+    std::optional<std::string> prompt_text(
+        const std::string& title, const std::string& description,
+        const std::string& initial = {}, bool password = false,
+        std::size_t max_length = 128);
+
     // Waits for one key/button/axis movement. An empty optional means cancel;
     // an input_binding of type none means Clear. When allow_inherit is true,
     // Backspace returns an inherit binding for a per-game profile.
