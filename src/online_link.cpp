@@ -730,24 +730,55 @@ void online_link::run() {
         if (!token.usable(now) || token.needs_refresh(now)) {
             if (token.refresh_token.empty())
                 token.refresh_token = credential.refresh_token;
-            // A GET that will 401 and drive the refresh in `call`. Cheaper
-            // than a second refresh path that could drift from the first.
-            const manx_http::response answer =
-                call(manx_http::method::get,
-                     document_url("machines/" + credential.machine_id), {},
-                     true);
+
+            // Ask for a new token, plainly.
+            //
+            // This used to send a request with no Authorization header at all
+            // and rely on the 401 to drive the refresh inside `call`. But a
+            // Firestore request with no credential is answered 403, not 401 -
+            // so the refresh never happened, the token stayed empty, and the
+            // branch below deleted the saved login and announced that the
+            // machine was no longer paired. Signing in was remembered
+            // perfectly and thrown away on every start.
+            manx_http::request renew;
+            renew.verb = manx_http::method::post;
+            renew.url = manx_cloud::refresh_url();
+            renew.content_type = "application/x-www-form-urlencoded";
+            renew.body = "grant_type=refresh_token&refresh_token=" +
+                         token.refresh_token;
+            renew.cancel = &m_stop;
+            const manx_http::response answer = manx_http::perform(renew);
+            if (answer.ok()) {
+                const json body = parse_or_empty(answer.body);
+                token.id_token = field_text(body, "id_token");
+                const std::string rotated = field_text(body, "refresh_token");
+                if (!rotated.empty()) {
+                    token.refresh_token = rotated;
+                    if (!credential.refresh_token.empty()) {
+                        credential.refresh_token = rotated;
+                        save_credential(credential);
+                    }
+                }
+                token.expires_unix = online_wire::expiry_from_expires_in(
+                    now, field_text(body, "expires_in"));
+            }
             if (token.id_token.empty()) {
-                if (!answer.ok() && answer.status == 0) {
-                    publish(online_state::error, "No answer from MANX online.");
+                // Only a definite answer from the token service means the
+                // credential is dead. Anything else - no network, a hiccup,
+                // a 500 - is a reason to wait, not to throw away a login
+                // that is probably fine.
+                const bool refused = answer.status >= 400 && answer.status < 500;
+                if (!refused) {
+                    publish(online_state::error,
+                            "No answer from MANX online. Trying again.");
                     backoff_until = now + backoff_seconds;
                     backoff_seconds = std::min<int64_t>(backoff_seconds * 2, 60);
                 } else {
-                    // The account is gone, or its password was changed on the
-                    // website. Pair again rather than retrying for ever.
-                    forget_credential();
-                    credential = {};
+                    credential.uid.clear();
+                    credential.refresh_token.clear();
+                    save_credential(credential);   // keeps the email
                     publish(online_state::signed_out,
-                            "This machine is no longer paired.");
+                            "Signed out - please sign in again.");
                 }
                 continue;
             }
