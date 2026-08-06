@@ -1636,8 +1636,13 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         return static_cast<std::size_t>(picked);
     };
 
+    // Grouped by who published the machine, not by the board inside it. A
+    // player looking for Out Run is looking for Sega, and has no reason to
+    // know or care that it is a System 16 or a Model 2 - the board is an
+    // implementation detail of the emulator, and it made the shelf read like
+    // a parts list.
     struct platform_entry {
-        arcade_board_type board;
+        std::string publisher;
         std::string name;
         std::string logo;
         int games{};
@@ -1693,17 +1698,26 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             return std::string();
         }
     };
+    // A game with no publisher recorded still has to live somewhere, and a
+    // shelf that silently omits it is worse than one with an "Other" tile.
+    const auto publisher_of = [](const rom_choice& choice) {
+        return choice.publisher.empty() ? std::string("Other")
+                                        : choice.publisher;
+    };
     for (const rom_choice& choice : choices) {
+        const std::string who = publisher_of(choice);
         const auto found = std::find_if(
             platforms.begin(), platforms.end(),
             [&](const platform_entry& entry) {
-                return entry.board == choice.board;
+                return entry.publisher == who;
             });
         if (found != platforms.end()) {
             ++found->games;
         } else {
-            platforms.push_back({choice.board, platform_name(choice.board),
-                                 platform_logo(choice.board), 1,
+            // The logo key is the publisher's own name, so the artwork
+            // fetcher looks for "Sega" rather than for whatever board
+            // happened to be underneath.
+            platforms.push_back({who, who, who, 1,
                                  platform_icon(choice.board)});
         }
     }
@@ -1717,7 +1731,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // platform tiles; Back there opens the system menu. This keeps a marquee
     // carousel short and coherent instead of mixing every board generation.
     int play_style = 0;
-    std::optional<arcade_board_type> selected_platform;
+    std::optional<std::string> selected_platform;
     int platform_cursor = 0;
     // Set when this machine has just agreed to a game: the network page is
     // opened for them rather than left to be found.
@@ -1935,17 +1949,17 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 // local lobby.
                 platform_cursor = platform_choice;
                 selected_platform = platforms[
-                    static_cast<std::size_t>(platform_choice - 2)].board;
+                    static_cast<std::size_t>(platform_choice - 2)].publisher;
             }
         }
 
         int picked = -1;
         if (!system_menu_requested) {
-            const std::string title = platform_name(*selected_platform);
+            const std::string title = *selected_platform;
             picked = browse_library_grid(
                 menu, choices, banners, banner_pixels, title,
                 [&](const rom_choice& choice) {
-                    return choice.board == *selected_platform;
+                    return publisher_of(choice) == *selected_platform;
                 }, &play_style, interrupt, "Platforms");
         }
         if (picked == launcher_menu::exit_requested) {
