@@ -658,6 +658,16 @@ std::optional<int> run_tool_command(int argc, char* argv[]) {
             }
             return out;
         };
+        // Note what this describes: whatever this cabinet can play, which
+        // includes any plugin installed on it. The website's list must be
+        // what a *downloaded* build ships with, so generate it with the
+        // plugin directory out of the way:
+        //
+        //     XDG_DATA_HOME=/tmp/empty MANX --catalogue-json catalogue.json
+        //
+        // Without that, a developer's own machine advertises games nobody
+        // else has - which is exactly what it did.
+        //
         // Written to a file rather than stdout when one is named. The log
         // tap mirrors stderr into stdout so a cabinet can relay its console
         // to another machine, which means neither stream is clean enough to

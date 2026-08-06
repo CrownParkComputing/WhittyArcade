@@ -200,12 +200,16 @@ constexpr std::array<rom_set_manifest, arcade_builtin_game_count> builtin_manife
      arcade_board_type::namco_system1, "", "", true,
      arcade_multiplayer_mode::alternating,
      "Namco"},
+    // Not working yet, and marked so rather than listed as if it were: the
+    // Wolf Unit's memory map here is a guess, and a guessed map is why the
+    // board never reaches its boot code. Listing a game that cannot start is
+    // a promise the program does not keep.
     {"kinst", "Killer Instinct (v1.5d)",
-     arcade_board_type::midway, "", "kinst.chd", true,
+     arcade_board_type::midway, "", "kinst.chd", false,
      arcade_multiplayer_mode::simultaneous,
      "Midway / Rare"},
     {"kinst2", "Killer Instinct 2 (v1.4)",
-     arcade_board_type::midway, "", "kinst2.chd", true,
+     arcade_board_type::midway, "", "kinst2.chd", false,
      arcade_multiplayer_mode::simultaneous,
      "Midway / Rare"},
 }};

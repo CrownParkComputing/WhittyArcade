@@ -837,6 +837,7 @@ int browse_library_grid(
     std::map<std::size_t, banner::banner_image> flow_box;
     std::map<std::size_t, banner::banner_image> flow_marquee;
     std::map<std::size_t, banner::banner_image> flow_snap;
+    std::map<std::size_t, banner::banner_image> flow_fanart;
     // Media names resolved once per game: media_names_for_choice hashes the
     // ROM archive to identify it, far too expensive for a per-frame call.
     std::map<std::size_t, std::vector<std::string>> flow_names;
@@ -1186,14 +1187,26 @@ int browse_library_grid(
                         media.marquee_w = marquee.width;
                         media.marquee_h = marquee.height;
                     }
+                    // Screenshots only. Fan art used to be the last resort
+                    // here, which meant the one wide image in the pack was
+                    // spent on a small pane and the page behind it had
+                    // nothing to show.
                     const banner::banner_image& snap = flow_art(
                         flow_snap,
                         {"images", "titles", "title", "snaps", "snap",
-                         "thumbnails", "fanarts"});
+                         "thumbnails"});
                     if (snap.valid()) {
                         media.snap_pixels = snap.rgba.data();
                         media.snap_w = snap.width;
                         media.snap_h = snap.height;
+                    }
+
+                    const banner::banner_image& fanart = flow_art(
+                        flow_fanart, {"fanarts", "fanart", "backgrounds"});
+                    if (fanart.valid()) {
+                        media.fanart_pixels = fanart.rgba.data();
+                        media.fanart_w = fanart.width;
+                        media.fanart_h = fanart.height;
                     }
 
                     const rom_choice& choice = choices[entry];
@@ -1655,6 +1668,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // way through is a flag the caller acts on rather than one lambda
     // reaching forward into the other.
     bool account_wants_friends = false;
+    // Set when the account screen is asked to host: the game browser is
+    // defined below it, so the trip out and back is how the two meet.
+    bool account_wants_host = false;
     // A game that started while somebody was looking at the lobby screen.
     // The screen cannot return a launch - it returns nothing - so it leaves
     // it here and the caller, which can, picks it up.
@@ -1861,97 +1877,15 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 return;
             case act_signout: online->sign_out(); break;
             case act_forget:  online->forget_machine(); break;
-            case act_host: {
-                // What to play is decided here, before anybody is asked to
-                // join. A lobby is an invitation to play something, and one
-                // with no game in it is not something a person reading the
-                // join list can choose between.
-                std::vector<std::size_t> playable;
-                for (std::size_t index = 0; index < choices.size(); ++index) {
-                    const auto identity =
-                        identify_arcade_game(choices[index].path);
-                    const rom_set_manifest* manifest = identity ?
-                        find_supported_rom_set(identity->short_name) : nullptr;
-                    if (manifest &&
-                        (supports_network_two_player(*manifest) ||
-                         supports_native_system_link(*manifest)))
-                        playable.push_back(index);
-                }
-                if (playable.empty()) {
-                    menu.show_text(
-                        "Nothing to host",
-                        "None of the games in this library can be played "
-                        "across two machines yet.");
-                    break;
-                }
-                std::vector<card> game_cards;
-                for (const std::size_t index : playable) {
-                    const auto identity =
-                        identify_arcade_game(choices[index].path);
-                    const rom_set_manifest* manifest =
-                        find_supported_rom_set(identity->short_name);
-                    game_cards.push_back(card(
-                        choices[index].label,
-                        supports_native_system_link(*manifest)
-                            ? "Linked cabinets"
-                            : (manifest->multiplayer ==
-                                       arcade_multiplayer_mode::alternating
-                                   ? "Take turns"
-                                   : "Play together"),
-                        icon::network));
-                }
-                const int chosen_game = menu.select_modes(
-                    "What are you playing?",
-                    "Whoever joins this lobby is joining this game.",
-                    game_cards, "Back", 0, {});
-                if (chosen_game < 0 ||
-                    static_cast<std::size_t>(chosen_game) >= playable.size())
-                    break;
-                const rom_choice& hosting_choice =
-                    choices[playable[static_cast<std::size_t>(chosen_game)]];
-                const auto hosting_identity =
-                    identify_arcade_game(hosting_choice.path);
-                if (!hosting_identity) break;
-                const rom_set_manifest* hosting_manifest =
-                    find_supported_rom_set(hosting_identity->short_name);
-                if (!hosting_manifest) break;
-
-                // Two-player games have nothing to ask: two is what they
-                // are. A linked-cabinet game can take a row of them, so it
-                // asks - and that answer is also what decides whether this
-                // lobby starts by itself or waits for its host.
-                int places = 2;
-                std::string mode = "simultaneous";
-                if (hosting_manifest->multiplayer ==
-                        arcade_multiplayer_mode::alternating)
-                    mode = "alternating";
-                if (supports_native_system_link(*hosting_manifest)) {
-                    mode = "native_link";
-                    const int how_many = menu.select_modes(
-                        "How many machines?",
-                        "Two starts as soon as somebody joins. More than "
-                        "two waits for you to say go.",
-                        {card("2 Machines", "Starts the moment one joins",
-                              icon::local_players),
-                         card("3 Machines", "You decide when to start",
-                              icon::cabinet_count),
-                         card("4 Machines", "You decide when to start",
-                              icon::cabinet_count)},
-                        "Back", 0, {});
-                    if (how_many < 0) break;
-                    places = 2 + how_many;
-                }
-
-                const bool open_to_anyone = ask_yes_no(
-                    "Who can join?",
-                    "An open lobby is listed for anyone signed in. A friends "
-                    "only one is listed for your friends and nobody else.",
-                    "Open to anyone", "Friends only");
-                online->create_lobby(open_to_anyone,
-                                     hosting_identity->short_name,
-                                     hosting_choice.label, places, mode);
-                break;
-            }
+            case act_host:
+                // Picked in the cover browser, not in a list of tiles with
+                // the names blown up to fill them. It is the same screen
+                // used to choose a game to play alone - artwork, names, the
+                // lot - and it lives further down this function, so the
+                // caller runs it and comes back with an answer.
+                account_wants_host = true;
+                online->set_foreground(false);
+                return;
             case act_join: {
                 // A list, not a field. Nobody should have to be told a code
                 // and type it in: an open lobby is there for anyone, and a
@@ -2180,6 +2114,64 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             exit_from_nested_browser = true;
         if (picked < 0) return std::nullopt;
         return static_cast<std::size_t>(picked);
+    };
+
+    // Opening a lobby: what are we playing, how many machines, and who may
+    // join. The game comes first because a lobby is an invitation to play
+    // something, and it is chosen in the cover browser like any other game.
+    const auto host_a_lobby = [&]() {
+        if (!online) return;
+        const auto picked = browse_for_game(
+            "Host A Lobby - What Are You Playing?",
+            [](const rom_choice& choice) {
+                const auto identity = identify_arcade_game(choice.path);
+                const rom_set_manifest* manifest = identity ?
+                    find_supported_rom_set(identity->short_name) : nullptr;
+                return manifest && (supports_network_two_player(*manifest) ||
+                                    supports_native_system_link(*manifest));
+            });
+        if (!picked) return;
+
+        const rom_choice& chosen = choices[*picked];
+        const auto identity = identify_arcade_game(chosen.path);
+        if (!identity) return;
+        const rom_set_manifest* manifest =
+            find_supported_rom_set(identity->short_name);
+        if (!manifest) return;
+
+        // Two-player games have nothing to ask: two is what they are. A
+        // linked-cabinet game can take a row of them, and that answer also
+        // decides whether the lobby starts by itself or waits for its host.
+        int places = 2;
+        std::string mode = "simultaneous";
+        if (manifest->multiplayer == arcade_multiplayer_mode::alternating)
+            mode = "alternating";
+        if (supports_native_system_link(*manifest)) {
+            mode = "native_link";
+            using card = launcher_menu::mode_card;
+            using icon = launcher_menu::mode_icon;
+            const int how_many = menu.select_modes(
+                "How many machines?",
+                "Two starts as soon as somebody joins. More than two waits "
+                "for you to say go.",
+                {card("2 Machines", "Starts the moment one joins",
+                      icon::local_players),
+                 card("3 Machines", "You decide when to start",
+                      icon::cabinet_count),
+                 card("4 Machines", "You decide when to start",
+                      icon::cabinet_count)},
+                "Back", 0, {});
+            if (how_many < 0) return;
+            places = 2 + how_many;
+        }
+
+        const bool open_to_anyone = ask_yes_no(
+            "Who can join?",
+            "An open lobby is listed for anyone signed in. A friends only "
+            "one is listed for your friends and nobody else.",
+            "Open to anyone", "Friends only");
+        online->create_lobby(open_to_anyone, identity->short_name,
+                             chosen.label, places, mode);
     };
 
     // Grouped by who published the machine, not by the board inside it. A
@@ -2517,6 +2509,10 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 show_online_screen();
                 if (online_started.action == rom_selection_action::selected)
                     return online_started;
+                if (account_wants_host) {
+                    account_wants_host = false;
+                    host_a_lobby();
+                }
                 if (account_wants_friends) {
                     account_wants_friends = false;
                     show_friends_screen();
@@ -2731,6 +2727,10 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             show_online_screen();
             if (online_started.action == rom_selection_action::selected)
                 return online_started;
+            if (account_wants_host) {
+                account_wants_host = false;
+                host_a_lobby();
+            }
             if (account_wants_friends) {
                 account_wants_friends = false;
                 show_friends_screen();
@@ -3047,6 +3047,10 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     if (online_started.action ==
                         rom_selection_action::selected)
                         return online_started;
+                    if (account_wants_host) {
+                        account_wants_host = false;
+                        host_a_lobby();
+                    }
                     continue;
                 case act_logs:
                     choose_machine_log();
@@ -3127,6 +3131,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                             wanted_mode ==
                                     arcade_multiplayer_mode::alternating ?
                                 icon::local_players : icon::network);
+                    game_cards.back().plain_title = true;
                 }
                 const int selected = menu.select_modes(
                     system_link ? "Arcade System Link" :

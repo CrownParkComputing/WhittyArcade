@@ -855,8 +855,17 @@ void online_link::run() {
         post.body = request.dump();
         post.cancel = &m_stop;
         const manx_http::response answer = manx_http::perform(post);
-        if (!answer.ok()) return false;
         const json body = parse_or_empty(answer.body);
+        if (!answer.ok()) {
+            // A refusal with a reason is worth repeating: "MANX online is
+            // full" is something a player can understand and wait out, and
+            // it is otherwise indistinguishable from the cabinet quietly
+            // failing to reach anything.
+            const auto why = body.find("error");
+            if (why != body.end() && why->is_string())
+                announce(why->get<std::string>());
+            return false;
+        }
         const auto id = body.find("session");
         if (id == body.end() || !id->is_string()) return false;
         {

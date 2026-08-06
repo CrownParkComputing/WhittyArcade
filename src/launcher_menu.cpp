@@ -428,7 +428,9 @@ struct launcher_menu::implementation {
             (compact_utility_window ?
                  (SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_UTILITY) : 0);
         window = SDL_CreateWindow(
-            "MANX",
+            // What the name is short for, where somebody will actually read
+            // it: the window they are looking at while they browse.
+            "MANX - Multiscreen Arcade Nexus",
             compact_utility_window ? compact_window_width : logical_width,
             compact_utility_window ? compact_window_height : logical_height,
             window_flags);
@@ -1443,29 +1445,48 @@ struct launcher_menu::implementation {
                 cf_video.close();
                 open_coverflow_video(path);
             }
-            // Video behind everything, near-full strength: it is the point
-            // of the page, the wash below keeps the text readable.
-            if (cf_video.texture) {
-                SDL_SetTextureAlphaMod(cf_video.texture, 230);
-                const SDL_FRect full{0, 0,
-                    static_cast<float>(logical_width),
-                    static_cast<float>(logical_height)};
-                SDL_RenderTexture(renderer, cf_video.texture,
-                                  nullptr, &full);
-            }
         }
 #endif
-
-        // Light wash over video for legibility
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 55);
-        const SDL_FRect wash{0, 0,
-            static_cast<float>(logical_width),
-            static_cast<float>(logical_height)};
-        SDL_RenderFillRect(renderer, &wash);
 
         // ---- Gather media for the selected game ------------------------
         launcher_menu::game_media media;
         if (media_for) media = media_for(selected);
+
+        // The page's backdrop is a still, not the video.
+        //
+        // The video used to be drawn across the whole screen at nearly full
+        // strength, which made every other thing on the page - the box, the
+        // marquee, the words about the game - something laid over moving
+        // pictures. A backdrop should sit still while somebody reads, and be
+        // there before the decoder has produced its first frame.
+        if (media.fanart_pixels && media.fanart_w > 0 && media.fanart_h > 0) {
+            if (SDL_Texture* back = grid_texture_for(
+                    textures, selected + 30000,
+                    launcher_menu::cover{media.fanart_pixels, media.fanart_w,
+                                         media.fanart_h})) {
+                // Filled rather than fitted: this is wallpaper, and a band of
+                // background either side of it would look like a mistake.
+                const float across = static_cast<float>(logical_width) /
+                                     static_cast<float>(media.fanart_w);
+                const float down = static_cast<float>(logical_height) /
+                                   static_cast<float>(media.fanart_h);
+                const float scale = std::max(across, down);
+                const float wide = media.fanart_w * scale;
+                const float tall = media.fanart_h * scale;
+                const SDL_FRect where{(logical_width - wide) / 2.0f,
+                                      (logical_height - tall) / 2.0f,
+                                      wide, tall};
+                SDL_SetTextureAlphaMod(back, 150);
+                SDL_RenderTexture(renderer, back, nullptr, &where);
+            }
+        }
+
+        // Enough wash to read over, whatever is behind it.
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 120);
+        const SDL_FRect wash{0, 0,
+            static_cast<float>(logical_width),
+            static_cast<float>(logical_height)};
+        SDL_RenderFillRect(renderer, &wash);
 
         // Box art texture
         SDL_Texture* box_tex = nullptr;
@@ -1600,15 +1621,41 @@ struct launcher_menu::implementation {
                 static_cast<float>(snap_h)};
             SDL_RenderFillRect(renderer, &snap_shadow);
 
-            SDL_SetTextureAlphaMod(snap_tex, 230);
             const SDL_FRect snap_dest{
                 static_cast<float>(snap_x), static_cast<float>(snap_y),
                 static_cast<float>(snap_w), static_cast<float>(snap_h)};
-            SDL_RenderTexture(renderer, snap_tex, nullptr, &snap_dest);
+
+            // The video plays here, in the screenshot's pane, and the
+            // screenshot is what is shown until it has a frame to play. One
+            // place on the page moves; everything else holds still.
+            bool playing = false;
+#ifdef MANX_HAVE_FFMPEG
+            if (cf_video.texture) {
+                SDL_SetTextureAlphaMod(cf_video.texture, 255);
+                SDL_RenderTexture(renderer, cf_video.texture, nullptr,
+                                  &snap_dest);
+                playing = true;
+            }
+#endif
+            if (!playing) {
+                SDL_SetTextureAlphaMod(snap_tex, 230);
+                SDL_RenderTexture(renderer, snap_tex, nullptr, &snap_dest);
+            }
 
             SDL_SetRenderDrawColor(renderer, 40, 50, 65, 180);
             SDL_RenderRect(renderer, &snap_dest);
         }
+#ifdef MANX_HAVE_FFMPEG
+        else if (cf_video.texture) {
+            // A game with a video and no screenshot still gets the pane.
+            const SDL_FRect only{cf_rects[1].x, cf_rects[1].y,
+                                 cf_rects[1].w, cf_rects[1].h};
+            SDL_SetTextureAlphaMod(cf_video.texture, 255);
+            SDL_RenderTexture(renderer, cf_video.texture, nullptr, &only);
+            SDL_SetRenderDrawColor(renderer, 40, 50, 65, 180);
+            SDL_RenderRect(renderer, &only);
+        }
+#endif
 
         // ---- Marquee/logo centred above title --------------------------
         {
@@ -2651,10 +2698,12 @@ struct launcher_menu::implementation {
                             // nothing.
                             const float room =
                                 static_cast<float>(card_width - 32);
+                            // Shrinks to fit either way; only a tile that
+                            // wants to be a wordmark grows.
                             const float scale = std::clamp(
                                 room / static_cast<float>(
                                            std::max(1, name.width)),
-                                0.45f, 1.6f);
+                                0.45f, card.plain_title ? 1.0f : 1.6f);
                             draw_text_scaled(
                                 renderer, name,
                                 x + (card_width -
@@ -3602,7 +3651,7 @@ int launcher_menu::select_interruptible(
 
 void launcher_menu::show_splash(const std::string& step, float progress) {
     if (!m_impl || !m_impl->ready()) return;
-    SDL_SetWindowTitle(m_impl->window, "MANX");
+    SDL_SetWindowTitle(m_impl->window, "MANX - Multiscreen Arcade Nexus");
     m_impl->splash(step, progress);
 }
 
@@ -3611,7 +3660,7 @@ void launcher_menu::show_loading_screen(
     const std::string& subtitle,
     const std::function<bool(float&)>& step_for) {
     if (!m_impl || !m_impl->ready()) return;
-    SDL_SetWindowTitle(m_impl->window, "MANX");
+    SDL_SetWindowTitle(m_impl->window, "MANX - Multiscreen Arcade Nexus");
     m_impl->loading_screen(title, subtitle, step_for);
 }
 

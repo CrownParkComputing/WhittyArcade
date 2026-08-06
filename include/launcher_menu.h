@@ -114,6 +114,11 @@ public:
         // arriving, or when Commons has no image for an obscure maker.
         // Empty preserves the normal graphical mode icon.
         std::string artwork_fallback;
+        // Draw the title at its own size rather than swelling it to fill the
+        // tile. A shelf of eight publishers wants big words; a list of forty
+        // games is a list, and blowing every name up to fit its box makes it
+        // shout rather than read.
+        bool plain_title{};
 
         mode_card() = default;
         mode_card(std::string title_in, std::string subtitle_in,
@@ -163,6 +168,11 @@ public:
         int marquee_w{}, marquee_h{};
         const uint8_t* snap_pixels{};
         int snap_w{}, snap_h{};
+        // The wide artwork behind everything. A still is a better backdrop
+        // than a video: it does not move while somebody is reading, and it
+        // is there before the decoder has produced a frame.
+        const uint8_t* fanart_pixels{};
+        int fanart_w{}, fanart_h{};
         std::string publisher;
         std::string year;
         std::string players;
