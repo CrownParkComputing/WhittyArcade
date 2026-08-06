@@ -18,11 +18,17 @@
 #define MANX_FIREBASE_PROJECT_ID "manx-online-network"
 #endif
 
-// Deliberately empty by default. An empty key means online play reports
-// itself unconfigured and disappears from the launcher, which is the right
-// behaviour for a source build nobody has pointed at a project yet.
+// The project's own key, so every build reaches it without being launched
+// with an environment variable somebody has to remember. A cabinet that has
+// to be started a particular way is a cabinet that reports itself "not set
+// up" on the second machine and nowhere says why.
+//
+// This is not a secret being committed. A Firebase web API key names a
+// project and authorises nothing at all: it is served in the page source of
+// the website and is readable in this binary with `strings`. What protects
+// the data is firestore.rules in the MANXOnline repo.
 #if !defined(MANX_FIREBASE_API_KEY)
-#define MANX_FIREBASE_API_KEY ""
+#define MANX_FIREBASE_API_KEY "AIzaSyDMp5CcExwsw5lM5Oo-a6PMB4ZwlwSkn7k"
 #endif
 
 namespace manx_cloud {

@@ -1594,6 +1594,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // Who else is about. On a console this is the first thing anybody looks
     // at, and until now the only way to see it was the local network lobby -
     // which cannot show a friend in another house at all.
+    bool friends_wants_lobby = false;
     const auto show_friends_screen = [&]() {
         if (!online) return;
         using card = launcher_menu::mode_card;
@@ -1636,6 +1637,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
 
             // Local machines are friends too, in the sense that matters:
             // somebody to play with right now.
+            const std::size_t local_from = cards.size();
             if (lobby) {
                 for (const lobby_machine& machine : lobby->machines())
                     cards.push_back(card(machine.label(),
@@ -1651,6 +1653,11 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             const int picked = menu.select_modes(
                 "Friends", description, cards, "Back", 0, changed);
             if (picked == launcher_menu::interrupted) continue;
+            // Choosing a machine on this network goes where inviting it and
+            // agreeing a game already lives, rather than duplicating that
+            // negotiation on a second screen.
+            if (picked >= 0 && static_cast<std::size_t>(picked) >= local_from)
+                friends_wants_lobby = true;
             break;
         }
         online->set_foreground(false);
@@ -1856,8 +1863,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         if (!selected_platform) {
             std::vector<launcher_menu::mode_card> platform_cards;
             std::vector<std::string> platform_logo_keys;
-            platform_cards.reserve(platforms.size() + 3);
-            platform_logo_keys.reserve(platforms.size() + 3);
+            platform_cards.reserve(platforms.size() + 2);
+            platform_logo_keys.reserve(platforms.size() + 2);
             // Before anything else: is this machine on its own, on its
             // network, or on the internet? It is the first question a player
             // has, so it is the first card - not something to be found
@@ -2007,16 +2014,16 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 continue;
             } else if (platform_choice == 1) {
                 show_friends_screen();
-                continue;
-            } else if (platform_choice == 2) {
-                enter_network_page = true;
+                if (friends_wants_lobby) {
+                    friends_wants_lobby = false;
+                    enter_network_page = true;
+                }
                 continue;
             } else {
-                // Three cards precede the shelf: online, friends, and the
-                // local network lobby.
+                // Two cards precede the shelf: online, then friends.
                 platform_cursor = platform_choice;
                 selected_platform = platforms[
-                    static_cast<std::size_t>(platform_choice - 3)].publisher;
+                    static_cast<std::size_t>(platform_choice - 2)].publisher;
             }
         }
 
