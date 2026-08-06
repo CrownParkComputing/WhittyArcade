@@ -873,7 +873,16 @@ void online_link::run() {
             fields["visibility"] = online_wire::value_string(
                 pending_host_open ? "public" : "invite");
             fields["memberUids"] = online_wire::value_strings({credential.uid});
-            fields["readerUids"] = online_wire::value_strings({credential.uid});
+            // "Friends only" has to mean something, so the friends are named
+            // here: the rules never look a friendship up - that would be a
+            // billed read on every access - so the list travels with the
+            // lobby it guards.
+            std::vector<std::string> readers{credential.uid};
+            if (!pending_host_open)
+                for (const std::string& friend_uid :
+                         fetch_friends(credential.uid))
+                    readers.push_back(friend_uid);
+            fields["readerUids"] = online_wire::value_strings(readers);
             fields["startAtMs"] = online_wire::value_int(0);
             fields["seed"] = online_wire::value_int(1);
             fields["delayFrames"] = online_wire::value_int(3);
