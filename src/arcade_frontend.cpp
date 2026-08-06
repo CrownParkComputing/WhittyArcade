@@ -1563,6 +1563,14 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                          icon::cabinet_count), online_pair);
                 break;
             case online_state::pairing:
+                // The code as the card's title, because that is what is
+                // drawn large enough to read from where a cabinet is
+                // usually standing. Disabled, because it is something to
+                // read rather than something to press.
+                if (!code.empty())
+                    add(card(code.substr(0, 4) + "-" + code.substr(4),
+                             "Type this at Cabinets, Add a cabinet",
+                             icon::network, 0, true, "CODE"), online_nothing);
                 add(card("Cancel", "Stop waiting for the website",
                          icon::controls), online_cancel);
                 break;

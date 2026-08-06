@@ -134,6 +134,44 @@ std::string host_name() {
     return "cabinet";
 }
 
+// The code has to leave this machine and be typed somewhere else, and the
+// launcher has no clipboard, no text field and no way to select anything on
+// screen. So it goes everywhere it can usefully go: the terminal, a file, and
+// the desktop clipboard. Reading eight characters off a screen and typing
+// them on a phone is fine; being unable to copy them when the browser is on
+// the same desktop is just annoying.
+void announce_pairing_code(const std::string& code) {
+    std::printf("\n"
+                "  +--------------------------------------------+\n"
+                "  |  MANX online pairing code:  %s  |\n"
+                "  +--------------------------------------------+\n"
+                "  Enter it under Cabinets -> Add a cabinet.\n\n",
+                code.c_str());
+    std::fflush(stdout);
+
+    const fs::path root = manx_platform::config_root();
+    const fs::path where =
+        (root.empty() ? fs::current_path() : root) / "MANX" / "pairing-code.txt";
+    std::error_code error;
+    if (where.has_parent_path())
+        fs::create_directories(where.parent_path(), error);
+    if (std::ofstream out(where, std::ios::trunc); out) out << code << '\n';
+
+#if !defined(_WIN32)
+    // The code is eight characters of [0-9A-Z] by construction, so there is
+    // nothing here a shell could misread.
+    if (!std::getenv("MANX_NO_CLIPBOARD")) {
+        const char* tool = std::getenv("WAYLAND_DISPLAY")
+            ? "wl-copy 2>/dev/null" : "xclip -selection clipboard 2>/dev/null";
+        if (FILE* pipe = popen(tool, "w")) {
+            std::fputs(code.c_str(), pipe);
+            if (pclose(pipe) == 0)
+                std::printf("  (also copied to the clipboard)\n");
+        }
+    }
+#endif
+}
+
 // --- the credential on disk ---------------------------------------------
 // Only the refresh token, never the password. The password exists for the
 // few seconds between the website writing it and this machine using it, and
@@ -463,11 +501,13 @@ void online_link::run() {
                     pairing_code = random_code(pairing_code_length);
                     anonymous_uid.clear();
                     token = {};
-                    {
-                        std::lock_guard<std::mutex> lock(m_mutex);
-                        m_pairing_code = pairing_code;
-                    }
-                    publish(online_state::pairing, "Getting a code...");
+                    // Deliberately NOT published yet. A code only means
+                    // something once it is in the database: shown any
+                    // earlier it can still be refused, or regenerated after
+                    // a collision, and somebody will already have typed the
+                    // one that no longer exists.
+                    publish(online_state::pairing,
+                            "Getting a code from MANX online...");
                 }
                 break;
             case command::kind::cancel_pair:
@@ -588,9 +628,11 @@ void online_link::run() {
                     std::lock_guard<std::mutex> lock(m_mutex);
                     m_pairing_code = pairing_code;
                 }
+                announce_pairing_code(pairing_code);
                 publish(online_state::pairing,
                         "Type this code on the MANX website to add this "
-                        "machine to your account.");
+                        "machine to your account. It is also on the "
+                        "clipboard and in MANX/pairing-code.txt.");
             } else {
                 const manx_http::response answer =
                     call(manx_http::method::get,
