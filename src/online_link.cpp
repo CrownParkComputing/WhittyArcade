@@ -438,6 +438,10 @@ std::string online_link::account_email() const {
     return m_email;
 }
 
+bool online_link::remembered() const {
+    return m_remembered.load();
+}
+
 bool online_link::signed_in() const {
     const online_state state = m_state.load();
     return state == online_state::online || state == online_state::in_lobby;
@@ -707,6 +711,11 @@ void online_link::run() {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_email = credential.email;
     }
+    // A token on disk means this cabinet has an account and is about to use
+    // it. Anything asking "does this machine need to sign in?" wants this
+    // answer, not signed_in() - which is false for the first few seconds of
+    // every start, on a machine that has been signed in for months.
+    m_remembered.store(!credential.refresh_token.empty());
     bool pending_auth = false;
     bool pending_create = false;
     std::string pending_email;
@@ -1036,6 +1045,7 @@ void online_link::run() {
                 credential.uid.clear();
                 credential.refresh_token.clear();
                 save_credential(credential);
+                m_remembered.store(false);
                 token = {};
                 profile_ready = false;
                 machine_ready = false;
@@ -1171,6 +1181,7 @@ void online_link::run() {
             // the thing nobody wants to retype.
             credential.refresh_token =
                 pending_remember ? token.refresh_token : std::string();
+            m_remembered.store(!credential.refresh_token.empty());
             // The machine keeps its own id for ever, so signing out and back
             // in - even as somebody else - does not orphan its document.
             if (credential.machine_id.empty())

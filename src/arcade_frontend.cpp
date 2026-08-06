@@ -11,6 +11,8 @@
 #include "launcher_menu.h"
 #include "media_library.h"
 #include "multiplayer_lobby.h"
+#include "manx_cloud_config.h"
+#include "manx_http.h"
 #include "online_link.h"
 #include "persistent_data.h"
 #include "platform_file_dialog.h"
@@ -391,6 +393,73 @@ bool choose_library_folders(launcher_menu& menu, bool first_run) {
     }
 }
 
+// Fetching the link settings the website publishes, and putting them where
+// the boards look.
+//
+// The download is the same manifest the site draws its own list from, so
+// there is one source for "which boards need this" rather than a list here
+// that goes stale. Files that already exist are left alone: somebody may
+// have configured a board themselves, and quietly overwriting that would be
+// a poor way to repay them for reading the instructions.
+struct eeprom_import { int installed{}; int kept{}; int failed{}; bool reached{}; };
+
+eeprom_import install_link_eeproms() {
+    eeprom_import result;
+    manx_http::request ask;
+    ask.verb = manx_http::method::get;
+    ask.url = manx_cloud::lobby_service() + "/api/../nvram/index.json";
+    ask.timeout_seconds = 20;
+    manx_http::response answer = manx_http::perform(ask);
+    if (!answer.ok()) {
+        ask.url = manx_cloud::lobby_service() + "/nvram/index.json";
+        answer = manx_http::perform(ask);
+    }
+    if (!answer.ok()) return result;
+    result.reached = true;
+
+    const nlohmann::json body =
+        nlohmann::json::parse(answer.body, nullptr, false);
+    if (body.is_discarded()) return result;
+    const auto settings = body.find("settings");
+    if (settings == body.end() || !settings->is_object()) return result;
+
+    const std::filesystem::path root(nvram_root_path());
+    for (auto board = settings->begin(); board != settings->end(); ++board) {
+        const auto files = board.value().find("files");
+        if (files == board.value().end() || !files->is_array()) continue;
+        for (const nlohmann::json& file : *files) {
+            const std::string where = file.value("path", std::string());
+            const std::string url = file.value("url", std::string());
+            if (where.empty() || url.empty()) continue;
+            // No traversal out of the nvram folder, whatever the manifest
+            // says: this writes to disk from something fetched over the
+            // network, and the only safe assumption is that it is hostile.
+            if (where.find("..") != std::string::npos ||
+                where.front() == '/') { ++result.failed; continue; }
+
+            const std::filesystem::path target = root / where;
+            std::error_code error;
+            if (std::filesystem::exists(target, error)) { ++result.kept; continue; }
+
+            manx_http::request fetch;
+            fetch.verb = manx_http::method::get;
+            fetch.url = manx_cloud::lobby_service() + url;
+            fetch.timeout_seconds = 20;
+            const manx_http::response got = manx_http::perform(fetch);
+            if (!got.ok() || got.body.empty()) { ++result.failed; continue; }
+
+            std::filesystem::create_directories(target.parent_path(), error);
+            std::ofstream out(target, std::ios::binary | std::ios::trunc);
+            if (!out) { ++result.failed; continue; }
+            out.write(got.body.data(),
+                      static_cast<std::streamsize>(got.body.size()));
+            if (!out.good()) { ++result.failed; continue; }
+            ++result.installed;
+        }
+    }
+    return result;
+}
+
 // The first run.
 //
 // MANX needs four things put somewhere before it is any use, and the old
@@ -508,20 +577,53 @@ setup_outcome run_setup_wizard(launcher_menu& menu,
     // --- the link settings ------------------------------------------------
     // Not a folder to choose: a thing to know about, because the failure it
     // causes looks like a broken emulator rather than an unconfigured board.
-    if (page("3 of 5 - Linked cabinets",
-             "A few boards - Sega Rally, Daytona, Manx TT, Motor Raid, Rave "
-             "Racer, Ridge Racer 2 - link real cabinets together through their "
-             "own hardware, and read their cabinet number and link mode out of "
-             "a settings chip. A real arcade had that set once, on "
-             "installation. A freshly emulated board has not, and sits on "
-             "CHECKING NETWORK for ever.\n\n"
-             "The website has that chip, 128 bytes per board, beside each game "
-             "in the list. Unzip it into:\n\n" + nvram_root_path() +
-             "\n\nEvery other game - head to head, taking turns - needs none "
-             "of this. MANX drives the second player itself.",
-             {card("Understood", "Carry on", icon::information)},
-             "Back") < 0)
-        return setup_outcome::quit;
+    for (;;) {
+        const int chosen = page(
+            "3 of 5 - Linked cabinets",
+            "A few boards - Sega Rally, Daytona, Manx TT, Motor Raid, Rave "
+            "Racer, Ridge Racer 2 - link real cabinets together through their "
+            "own hardware, and read their cabinet number and link mode out of "
+            "a settings chip. A real arcade had that set once, on "
+            "installation. A freshly emulated board has not, and sits on "
+            "CHECKING NETWORK for ever.\n\n"
+            "MANX can fetch those chips now - 128 bytes each - and put them "
+            "where the boards look. Anything you have already configured is "
+            "left alone.\n\n"
+            "Every other game needs none of this: MANX drives the second "
+            "player itself.",
+            {card("Fetch them now", "Six boards, a few hundred bytes",
+                  icon::refresh),
+             card("Not now", "I will do it by hand later", icon::exit)},
+            "Back");
+        if (chosen < 0) return setup_outcome::quit;
+        if (chosen != 0) break;
+
+        menu.show_splash("Fetching link settings", 0.5f);
+        const eeprom_import got = install_link_eeproms();
+        if (!got.reached) {
+            if (page("Could not reach the website",
+                     "The link settings live at " +
+                     manx_cloud::lobby_service() + " and it did not answer. "
+                     "This is not fatal - the boards that need them will say "
+                     "CHECKING NETWORK until they have them, and you can try "
+                     "again from Settings whenever you like.",
+                     {card("Try again", "", icon::refresh),
+                      card("Carry on", "", icon::exit)}, "Back") == 0)
+                continue;
+            break;
+        }
+        std::string said = std::to_string(got.installed) +
+                           " settings file(s) installed";
+        if (got.kept)
+            said += ", " + std::to_string(got.kept) +
+                    " left alone because this machine already had them";
+        if (got.failed)
+            said += ", " + std::to_string(got.failed) + " could not be written";
+        page("Link settings installed", said + ".\n\nThey went into:\n" +
+             nvram_root_path(),
+             {card("Carry on", "", icon::information)}, "");
+        break;
+    }
 
     // --- the artwork -------------------------------------------------------
     if (page("4 of 5 - Artwork",
@@ -556,8 +658,12 @@ setup_outcome run_setup_wizard(launcher_menu& menu,
     // opening a lobby needs an account, and a cabinet that has never signed
     // in queues the request against nobody. Asked here, once, rather than
     // found later in the corner of another screen.
+    // Skipped entirely when this machine already has an account: a cabinet
+    // that has been signed in for months is not signed in during the first
+    // few seconds of a start, and asking it to sign up again is asking
+    // somebody to answer a question the program already knows the answer to.
     if (online && online->state() != online_state::disabled &&
-        !online->signed_in()) {
+        !online->signed_in() && !online->remembered()) {
         for (;;) {
             const int chosen = page(
                 "5 of 5 - Your account",
@@ -620,7 +726,16 @@ setup_outcome run_setup_wizard(launcher_menu& menu,
     // --- and now a game ----------------------------------------------------
     // The point of finishing a setup screen is playing something, so the last
     // question is the first game rather than "OK".
-    const bool can_host = online && online->signed_in();
+    // A remembered account is about to be signed in - the worker is doing it
+    // now - so the offer stands. Waiting a moment is better than deciding on
+    // a fact that is three seconds out of date.
+    if (online && online->remembered() && !online->signed_in())
+        for (int tick = 0; tick < 40 && !online->signed_in(); ++tick) {
+            menu.show_splash(online->status_text(), 0.6f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+    const bool can_host = online && (online->signed_in() ||
+                                     online->remembered());
     const int finish = page(
         "Ready",
         can_host

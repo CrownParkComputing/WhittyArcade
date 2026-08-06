@@ -89,6 +89,11 @@ public:
     void sign_out();       // forgets the token, remembers the address
     void forget_machine(); // wipes the credential file entirely
     bool signed_in() const;
+    // True when this machine already has an account remembered on disk, and
+    // is therefore going to sign itself in shortly. Distinct from signed_in:
+    // that is false for the first few seconds of every start, which is not
+    // the same thing as nobody having an account.
+    bool remembered() const;
     std::string machine_name() const;
 
     // --- being visible ---------------------------------------------------
@@ -205,6 +210,7 @@ private:
     std::atomic<online_state> m_state{online_state::disabled};
     std::atomic_uint64_t m_revision{0};
     std::atomic_bool m_foreground{false};
+    std::atomic_bool m_remembered{false};
     // When the last announcement was made, so the routine heartbeat does not
     // rub out an answer to something somebody has just asked.
     std::atomic_int64_t m_announced_unix{0};
