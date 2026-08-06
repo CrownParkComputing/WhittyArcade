@@ -1765,9 +1765,15 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     };
     // A game with no publisher recorded still has to live somewhere, and a
     // shelf that silently omits it is worse than one with an "Other" tile.
+    // The primary name only. Catalogue entries carry co-development credits
+    // - "Sega / Westone", "Midway / Rare" - which split the shelf into tiles
+    // nobody is looking for and match no logo anywhere, so every one of them
+    // rendered as bare text. Wonder Boy belongs under Sega.
     const auto publisher_of = [](const rom_choice& choice) {
-        return choice.publisher.empty() ? std::string("Other")
-                                        : choice.publisher;
+        if (choice.publisher.empty()) return std::string("Other");
+        const std::size_t split = choice.publisher.find(" / ");
+        return split == std::string::npos ? choice.publisher
+                                          : choice.publisher.substr(0, split);
     };
     for (const rom_choice& choice : choices) {
         const std::string who = publisher_of(choice);
