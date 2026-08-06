@@ -307,7 +307,14 @@ bool online_link::available() {
 }
 
 void online_link::publish(online_state state, std::string status) {
-    m_state.store(state);
+    const online_state was = m_state.exchange(state);
+    // Narrated to the terminal as well as the screen. The screen is on a
+    // cabinet that may be across the room, in a menu somebody has already
+    // navigated away from, and it keeps no history - so when pairing fails
+    // the one place the reason survives is here.
+    if (was != state || state == online_state::error)
+        std::printf("MANX online: %s\n", status.c_str());
+    std::fflush(stdout);
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_status = std::move(status);
@@ -571,6 +578,9 @@ void online_link::run() {
         // --- pairing ----------------------------------------------------
         if (!pairing_code.empty() && credential.refresh_token.empty()) {
             if (anonymous_uid.empty()) {
+                std::printf("MANX online: signing in anonymously to claim a "
+                            "pairing code\n");
+                std::fflush(stdout);
                 const manx_http::response answer =
                     call(manx_http::method::post,
                          manx_cloud::identity_url("signUp"),
@@ -598,10 +608,17 @@ void online_link::run() {
                 // Fifteen minutes, matching the rules and the TTL policy. A
                 // code that lives longer is a credential that lives longer.
                 document["fields"]["expiresAt"] = online_wire::value_time(now + 14 * 60);
+                std::printf("MANX online: publishing pairing code %s\n",
+                            pairing_code.c_str());
+                std::fflush(stdout);
                 const manx_http::response created = call(
                     manx_http::method::patch,
                     document_url("pairings/" + pairing_code), document.dump(),
                     true);
+                if (!created.ok())
+                    std::printf("MANX online: publishing the code returned "
+                                "HTTP %ld %s\n", created.status,
+                                created.body.substr(0, 300).c_str());
                 if (!created.ok()) {
                     // A refused write here is not a taken code - the rules
                     // are what refuse it, and trying a different code for
