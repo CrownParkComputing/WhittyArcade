@@ -1503,6 +1503,131 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         return {};
     };
 
+    // A round trip, in words as well as milliseconds. The number alone
+    // answers "how far away is it"; what somebody actually wants to know is
+    // whether the connection is what is wrong, and whether a machine in the
+    // middle would help.
+    const auto ping_label = [](int rtt) {
+        if (rtt <= 0) return std::string("NO PING");
+        const std::string ms = std::to_string(rtt) + " ms";
+        if (rtt < 30)  return ms + " - LOCAL";
+        if (rtt < 80)  return ms + " - GOOD";
+        if (rtt < 150) return ms + " - PLAYABLE";
+        return ms + " - POOR";
+    };
+
+    // What turns an internet lobby into a running game.
+    //
+    // The lobby service agrees who is playing and what; the launch itself is
+    // the same machinery a LAN game uses, because by this point the machines
+    // are ordinary entries in the same roster and nothing downstream knows
+    // the difference. So this is the join between the two: the host asks the
+    // roster, the roster agrees, and the game goes.
+    //
+    // Called every time round the shelf, so it happens whether or not
+    // anybody is looking at the lobby screen - the whole point is that
+    // somebody who opened a lobby and wandered off still gets pulled in.
+    // When the host said go. A lobby that says "starting" and then does
+    // nothing is the worst thing this can do, so it is given a while and
+    // then told the truth.
+    std::chrono::steady_clock::time_point starting_since{};
+    const auto drive_online_session = [&]() -> rom_selection_result {
+        if (!online || !lobby) return {};
+        // A launch the host has already sent.
+        //
+        // Taken here rather than only on the shelf, because the machine that
+        // joined is standing on the lobby screen watching for exactly this -
+        // and that screen is not the shelf, so nothing there ever consumed
+        // it. The host started, went into the game and waited for a player
+        // two who was sitting in a lobby screen that had already been told
+        // to go.
+        if (lobby->launch_pending()) return take_remote_launch();
+        if (online->joined_lobby().empty()) return {};
+        const std::string game = online->lobby_game();
+        if (game.empty()) return {};
+        const int places = std::max(2, online->lobby_places());
+
+        // Two places, both filled: there is nothing left to decide and
+        // nobody left to wait for. More than two waits for its host.
+        if (online->hosting_lobby() && !online->lobby_starting() &&
+            places == 2 && online->members().size() >= 2)
+            online->start_lobby();
+
+        if (!online->lobby_starting()) {
+            starting_since = {};
+            // A machine that joined. It said yes when it joined; being asked
+            // again by the very machine it joined is a question with one
+            // answer, so it is not asked.
+            if (!online->hosting_lobby() && lobby->pending_invitation())
+                lobby->answer_invite(true);
+            return {};
+        }
+
+        // Going. From here the two are either talking directly within a few
+        // seconds or they are never going to.
+        const auto now = std::chrono::steady_clock::now();
+        if (starting_since.time_since_epoch().count() == 0)
+            starting_since = now;
+
+        if (!online->hosting_lobby()) {
+            if (lobby->pending_invitation()) lobby->answer_invite(true);
+            if (lobby->agreed_count() >= 2 || lobby->connected()) return {};
+        } else {
+            if (!lobby->hosting()) lobby->invite_everyone();
+        }
+
+        // Everybody has to be on the roster with a player number before the
+        // launch goes out, or a machine arrives in the game as nobody.
+        if (lobby->agreed_count() < 2) {
+            if (now - starting_since < std::chrono::seconds(25)) return {};
+            // Said plainly, with the thing to try. The addresses were
+            // swapped through the lobby service - that part worked, which is
+            // why both machines are listed - and the direct link between
+            // them never came up.
+            starting_since = {};
+            const bool same_house = lobby->remote_peer_count() > 0;
+            menu.show_text(
+                "Could not reach the other machine",
+                std::string("Both machines are in the lobby, but they could "
+                            "not open a direct link to each other, so the "
+                            "game has not started.\n\n") +
+                    (same_house
+                         ? "If they are on the same network, switch Network "
+                           "Play on from the system menu - two cabinets in "
+                           "one house should find each other directly "
+                           "instead of going out to the internet and back.\n\n"
+                         : "") +
+                    "Otherwise this is usually a router that will not let "
+                    "two machines punch through to each other. The lobby has "
+                    "been left; you can try again.",
+                "Back");
+            online->leave_lobby();
+            lobby->cancel_invite();
+            return {};
+        }
+        if (!online->hosting_lobby()) return {};
+        lobby->launch_game(game, places);
+        rom_selection_result mine = linked_result(game, 1);
+        if (mine.action != rom_selection_action::selected) {
+            menu.show_text(
+                "Multiplayer game unavailable",
+                "This lobby is for " + online->lobby_game_name() +
+                    ", which is not installed on this machine any more.",
+                "Back");
+            online->leave_lobby();
+            return {};
+        }
+        mine.cabinet_count = std::max(lobby->agreed_count(), 2);
+        for (const rom_choice& choice : choices) {
+            const auto identity = identify_arcade_game(choice.path);
+            if (identity && identity->short_name == game) {
+                run_loading_screen(menu, choice);
+                break;
+            }
+        }
+        return mine;
+    };
+
     // Internet play. Everything about it is a screen showing what the online
     // link is doing, because there is nothing here to drive: the whole
     // feature is getting two machines to exchange addresses, after which the
@@ -1524,24 +1649,45 @@ rom_selection_result show_rom_selector(const std::string& current_path,
 
     // Signing in, and creating an account, on the cabinet itself. No
     // website, no second device, no code to carry between them.
+    //
+    // Set when the account page is asked for the friends list. The friends
+    // screen is defined below this one and both capture by reference, so the
+    // way through is a flag the caller acts on rather than one lambda
+    // reaching forward into the other.
+    bool account_wants_friends = false;
+    // A game that started while somebody was looking at the lobby screen.
+    // The screen cannot return a launch - it returns nothing - so it leaves
+    // it here and the caller, which can, picks it up.
+    rom_selection_result online_started;
     const auto show_online_screen = [&]() {
         if (!online) return;
         using card = launcher_menu::mode_card;
         using icon = launcher_menu::mode_icon;
         online->set_foreground(true);
         for (;;) {
+            // Driven from in here as well as from the shelf: a host waiting
+            // on this very screen for somebody to join is the most likely
+            // person in the building to be waiting for it.
+            if (rom_selection_result go = drive_online_session();
+                go.action == rom_selection_action::selected) {
+                online_started = go;
+                online->set_foreground(false);
+                return;
+            }
             const online_state state = online->state();
             // The corner is set when the shelf is drawn, so on any screen
             // that is not the shelf it kept whatever it last said - which
             // meant signing in and then watching OFFLINE sit there, because
             // nothing on this screen had ever updated it.
+            const std::string who = online->display_name().empty()
+                                        ? online->account_email()
+                                        : online->display_name();
             menu.set_status(
                 state == online_state::error
                     ? online->status_text()
                     : (online->signed_in()
-                           ? (online->account_email().empty()
-                                  ? std::string("ONLINE")
-                                  : "ONLINE  " + online->account_email())
+                           ? (who.empty() ? std::string("ONLINE")
+                                          : "ONLINE  " + who)
                            : std::string("OFFLINE")),
                 online->signed_in());
             std::string description = online->status_text();
@@ -1555,7 +1701,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             std::vector<card> cards;
             std::vector<int> what;
             enum { act_none, act_register, act_signin, act_signout,
-                   act_forget, act_host, act_join, act_leave };
+                   act_forget, act_host, act_join, act_leave, act_friends,
+                   act_start };
             const auto add = [&](card entry, int action) {
                 cards.push_back(std::move(entry));
                 what.push_back(action);
@@ -1573,11 +1720,82 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                              "Pick from the lobbies you can see",
                              icon::local_players), act_join);
                 } else {
-                    add(card("Lobby " + online->joined_lobby(),
-                             online->status_text(), icon::network, 0, true,
-                             "CODE"), act_none);
+                    // The waiting room. What is being played, who is here,
+                    // and - when there is a decision left to make - the one
+                    // person who gets to make it.
+                    const int places = std::max(2, online->lobby_places());
+                    const std::vector<online_wire::member> here =
+                        online->members();
+                    const std::string what =
+                        online->lobby_game_name().empty()
+                            ? online->lobby_game()
+                            : online->lobby_game_name();
+                    add(card(what.empty() ? "Lobby " + online->joined_lobby()
+                                          : what,
+                             "Lobby " + online->joined_lobby() + "  -  " +
+                                 std::to_string(here.size()) + " of " +
+                                 std::to_string(places) + " here",
+                             icon::network, 0, true,
+                             online->lobby_starting() ? "STARTING" : "CODE"),
+                        act_none);
+                    const int rtt = lobby ? lobby->worst_rtt_ms() : 0;
+                    for (const online_wire::member& member : here) {
+                        const bool up = member.link == "connected";
+                        std::string detail =
+                            member.has_game
+                                ? (up ? std::string("Here, and has the game")
+                                      : std::string("Connecting"))
+                                : std::string("Does not have this game");
+                        // Measured by this cabinet, so it is only worth
+                        // showing against somebody who is not this cabinet.
+                        if (up && rtt > 0)
+                            detail += "  -  " + ping_label(rtt);
+                        add(card(member.name.empty() ? std::string("Cabinet")
+                                                     : member.name,
+                                 detail, icon::local_players, 0, true,
+                                 !member.has_game ? "NO GAME"
+                                                  : (up ? "READY"
+                                                        : "CONNECTING")),
+                            act_none);
+                    }
+                    // Two machines need no start button: the game goes the
+                    // moment the second one is in. More than two is a
+                    // judgement about who is still coming, and that is the
+                    // host's to make.
+                    if (online->hosting_lobby() && places > 2)
+                        add(card("Start Now",
+                                 here.size() >= 2
+                                     ? "Play with everybody who is here"
+                                     : "Nobody else has joined yet",
+                                 icon::network, 0,
+                                 here.size() < 2 || online->lobby_starting()),
+                            act_start);
                     add(card("Leave Lobby", "Stop connecting to these machines",
                              icon::controls), act_leave);
+                }
+                // Who is about, and who is waiting for an answer. Counted
+                // here so an unanswered request is visible from the corner
+                // rather than only from inside the screen that lists it.
+                {
+                    const std::vector<online_friend> people = online->friends();
+                    int waiting = 0;
+                    int about = 0;
+                    int agreed = 0;
+                    for (const online_friend& person : people) {
+                        if (person.incoming) ++waiting;
+                        if (!person.accepted) continue;
+                        ++agreed;
+                        if (person.online) ++about;
+                    }
+                    std::string detail =
+                        agreed == 0
+                            ? std::string("Add somebody by their name")
+                            : std::to_string(about) + " of " +
+                                  std::to_string(agreed) + " online";
+                    add(card("Friends", detail, icon::local_players, 0, false,
+                             waiting ? std::to_string(waiting) + " WAITING"
+                                     : std::string()),
+                        act_friends);
                 }
                 add(card("Sign Out", online->account_email(), icon::controls),
                     act_signout);
@@ -1592,11 +1810,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             }
 
             const uint64_t seen = online->revision();
-            const std::function<bool()> changed = [online, seen] {
-                return online->revision() != seen;
+            const std::function<bool()> changed = [online, lobby, seen] {
+                return online->revision() != seen ||
+                       (lobby && lobby->launch_pending());
             };
             const int picked = menu.select_modes(
-                "Online Play", description, cards, "Back", 0, changed);
+                "Account", description, cards, "Back", 0, changed);
             if (picked == launcher_menu::interrupted) continue;
             if (picked < 0 || picked >= static_cast<int>(what.size())) break;
 
@@ -1636,15 +1855,101 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 online->sign_in(*email, *password, remember);
                 break;
             }
+            case act_friends:
+                account_wants_friends = true;
+                online->set_foreground(false);
+                return;
             case act_signout: online->sign_out(); break;
             case act_forget:  online->forget_machine(); break;
             case act_host: {
+                // What to play is decided here, before anybody is asked to
+                // join. A lobby is an invitation to play something, and one
+                // with no game in it is not something a person reading the
+                // join list can choose between.
+                std::vector<std::size_t> playable;
+                for (std::size_t index = 0; index < choices.size(); ++index) {
+                    const auto identity =
+                        identify_arcade_game(choices[index].path);
+                    const rom_set_manifest* manifest = identity ?
+                        find_supported_rom_set(identity->short_name) : nullptr;
+                    if (manifest &&
+                        (supports_network_two_player(*manifest) ||
+                         supports_native_system_link(*manifest)))
+                        playable.push_back(index);
+                }
+                if (playable.empty()) {
+                    menu.show_text(
+                        "Nothing to host",
+                        "None of the games in this library can be played "
+                        "across two machines yet.");
+                    break;
+                }
+                std::vector<card> game_cards;
+                for (const std::size_t index : playable) {
+                    const auto identity =
+                        identify_arcade_game(choices[index].path);
+                    const rom_set_manifest* manifest =
+                        find_supported_rom_set(identity->short_name);
+                    game_cards.push_back(card(
+                        choices[index].label,
+                        supports_native_system_link(*manifest)
+                            ? "Linked cabinets"
+                            : (manifest->multiplayer ==
+                                       arcade_multiplayer_mode::alternating
+                                   ? "Take turns"
+                                   : "Play together"),
+                        icon::network));
+                }
+                const int chosen_game = menu.select_modes(
+                    "What are you playing?",
+                    "Whoever joins this lobby is joining this game.",
+                    game_cards, "Back", 0, {});
+                if (chosen_game < 0 ||
+                    static_cast<std::size_t>(chosen_game) >= playable.size())
+                    break;
+                const rom_choice& hosting_choice =
+                    choices[playable[static_cast<std::size_t>(chosen_game)]];
+                const auto hosting_identity =
+                    identify_arcade_game(hosting_choice.path);
+                if (!hosting_identity) break;
+                const rom_set_manifest* hosting_manifest =
+                    find_supported_rom_set(hosting_identity->short_name);
+                if (!hosting_manifest) break;
+
+                // Two-player games have nothing to ask: two is what they
+                // are. A linked-cabinet game can take a row of them, so it
+                // asks - and that answer is also what decides whether this
+                // lobby starts by itself or waits for its host.
+                int places = 2;
+                std::string mode = "simultaneous";
+                if (hosting_manifest->multiplayer ==
+                        arcade_multiplayer_mode::alternating)
+                    mode = "alternating";
+                if (supports_native_system_link(*hosting_manifest)) {
+                    mode = "native_link";
+                    const int how_many = menu.select_modes(
+                        "How many machines?",
+                        "Two starts as soon as somebody joins. More than "
+                        "two waits for you to say go.",
+                        {card("2 Machines", "Starts the moment one joins",
+                              icon::local_players),
+                         card("3 Machines", "You decide when to start",
+                              icon::cabinet_count),
+                         card("4 Machines", "You decide when to start",
+                              icon::cabinet_count)},
+                        "Back", 0, {});
+                    if (how_many < 0) break;
+                    places = 2 + how_many;
+                }
+
                 const bool open_to_anyone = ask_yes_no(
                     "Who can join?",
                     "An open lobby is listed for anyone signed in. A friends "
                     "only one is listed for your friends and nobody else.",
                     "Open to anyone", "Friends only");
-                online->create_lobby(open_to_anyone);
+                online->create_lobby(open_to_anyone,
+                                     hosting_identity->short_name,
+                                     hosting_choice.label, places, mode);
                 break;
             }
             case act_join: {
@@ -1704,6 +2009,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 }
                 break;
             }
+            case act_start:   online->start_lobby(); break;
             case act_leave:   online->leave_lobby(); break;
             default: break;
             }
@@ -1720,49 +2026,91 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         using card = launcher_menu::mode_card;
         using icon = launcher_menu::mode_icon;
         online->set_foreground(true);
+        online->refresh_friends();
+        int cursor = 0;
         for (;;) {
             std::vector<card> cards;
+            // What each row is. A friends list is four kinds of thing in one
+            // column - somebody to play with, somebody waiting on an answer,
+            // a cabinet in the lobby, a machine on this network - and the
+            // difference has to survive the trip back from the grid.
+            enum class row { add, person, member, local };
+            std::vector<std::pair<row, std::size_t>> rows;
             const std::vector<online_wire::member> members = online->members();
+            const std::vector<online_friend> people = online->friends();
             const std::string joined = online->joined_lobby();
 
             std::string description;
             if (!online->signed_in()) {
                 description =
-                    "This cabinet is not signed in yet. Add it to your "
-                    "account from the MANX website and your friends appear "
-                    "here.";
+                    "This cabinet is not signed in. Press the account button "
+                    "in the corner to sign in, and your friends appear here.";
                 cards.push_back(card("Not Signed In", online->status_text(),
                                      icon::audit, 0, true));
-            } else if (members.empty()) {
-                description = joined.empty()
-                    ? "Signed in. Create a lobby on the MANX website and "
-                      "invite somebody, and they show up here."
-                    : "In lobby " + joined + ". Nobody else has joined yet.";
-                cards.push_back(card("Nobody Here Yet", description,
-                                     icon::network, 0, true));
             } else {
-                description = "Lobby " + joined;
-                for (const online_wire::member& member : members) {
+                // The status line carries the answer to whatever was last
+                // asked here - "nobody is called that", "Sam has been asked"
+                // - which is the only place those answers can land.
+                description = online->status_text();
+                cards.push_back(card("Add A Friend",
+                                     "Find somebody by the name they signed "
+                                     "up with", icon::local_players));
+                rows.emplace_back(row::add, 0);
+
+                for (std::size_t index = 0; index < people.size(); ++index) {
+                    const online_friend& person = people[index];
+                    const std::string name =
+                        person.name.empty() ? std::string("Somebody")
+                                            : person.name;
+                    std::string detail;
+                    std::string badge;
+                    if (person.incoming) {
+                        detail = "Wants to be friends - press to answer";
+                        badge = "ASKED YOU";
+                    } else if (!person.accepted) {
+                        detail = "Waiting for them to answer";
+                        badge = "ASKED";
+                    } else {
+                        detail = person.online ? "Online now"
+                                               : "Not online just now";
+                        badge = person.online ? "ONLINE" : "OFFLINE";
+                    }
+                    cards.push_back(card(name, detail, icon::network, 0, false,
+                                         badge));
+                    rows.emplace_back(row::person, index);
+                }
+            }
+
+            // Whoever is in the lobby with this machine right now, which is
+            // a different question from who this account is friends with.
+            if (!joined.empty()) {
+                for (std::size_t index = 0; index < members.size(); ++index) {
+                    const online_wire::member& member = members[index];
                     const bool up = member.link == "connected";
                     cards.push_back(card(
                         member.name.empty() ? std::string("Cabinet")
                                             : member.name,
-                        up ? (member.has_game ? "Connected - has the game"
-                                              : "Connected - does not have "
-                                                "the game")
+                        up ? (member.has_game ? "In lobby " + joined +
+                                                " - has the game"
+                                              : "In lobby " + joined +
+                                                " - does not have the game")
                            : (member.link.empty() ? "Waiting" : member.link),
-                        icon::network, 0, !up, up ? "READY" : "CONNECTING"));
+                        icon::network, 0, !up, up ? "IN LOBBY" : "CONNECTING"));
+                    rows.emplace_back(row::member, index);
                 }
             }
 
             // Local machines are friends too, in the sense that matters:
             // somebody to play with right now.
-            const std::size_t local_from = cards.size();
             if (lobby) {
-                for (const lobby_machine& machine : lobby->machines())
-                    cards.push_back(card(machine.label(),
-                                         "On this network - " + machine.address,
-                                         icon::network, 0, false, "LOCAL"));
+                const std::vector<lobby_machine> machines = lobby->machines();
+                for (std::size_t index = 0; index < machines.size(); ++index) {
+                    cards.push_back(
+                        card(machines[index].label(),
+                             "On this network - " + machines[index].address,
+                             icon::network, 0, false, "LOCAL"));
+                    rows.emplace_back(row::local, index);
+                }
             }
 
             const uint64_t seen = online->revision();
@@ -1771,13 +2119,46 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                        (lobby && lobby->connected());
             };
             const int picked = menu.select_modes(
-                "Friends", description, cards, "Back", 0, changed);
+                "Friends", description, cards, "Back", cursor, changed);
             if (picked == launcher_menu::interrupted) continue;
+            if (picked < 0 || static_cast<std::size_t>(picked) >= rows.size())
+                break;
+            cursor = picked;
+            const auto& chosen = rows[static_cast<std::size_t>(picked)];
+            if (chosen.first == row::add) {
+                // Exact match, and it has to be: the handles collection
+                // cannot be listed, which is what stops a cabinet reading
+                // out the whole membership one keystroke at a time.
+                const auto name = menu.prompt_text(
+                    "Add a friend",
+                    "Their name, exactly as they signed up with it.", {},
+                    false, 32);
+                if (name && !name->empty()) online->add_friend(*name);
+                continue;
+            }
+            if (chosen.first == row::person) {
+                const online_friend& person = people[chosen.second];
+                if (!person.incoming) continue;
+                // Three answers, not two: backing out of this leaves the
+                // request where it was, because "I will decide later" is not
+                // the same as "no" and should not be recorded as one.
+                const int answer = menu.select_modes(
+                    (person.name.empty() ? std::string("Somebody")
+                                         : person.name) +
+                        " wants to be friends",
+                    "Friends can see when you are online, and can join the "
+                    "lobbies you make for them.",
+                    {card("Yes, we are friends", {}, icon::local_players),
+                     card("No thanks", {}, icon::exit)},
+                    "Ask me later", 0, {});
+                if (answer == 0 || answer == 1)
+                    online->answer_friend(person.uid, answer == 0);
+                continue;
+            }
             // Choosing a machine on this network goes where inviting it and
             // agreeing a game already lives, rather than duplicating that
             // negotiation on a second screen.
-            if (picked >= 0 && static_cast<std::size_t>(picked) >= local_from)
-                friends_wants_lobby = true;
+            if (chosen.first == row::local) friends_wants_lobby = true;
             break;
         }
         online->set_foreground(false);
@@ -1927,6 +2308,11 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             online->set_installed_games(std::move(installed));
         }
         const bool lobby_connected_at_draw = lobby && lobby->connected();
+        // Whether this cabinet is looking for the others on this network at
+        // all. Off by default: it and Online Play sat side by side, one of
+        // them searching from the moment the launcher opened, and they read
+        // as one confusing feature rather than two clear ones.
+        const bool lan_on = lobby && lobby->lan_discovery();
         // The grid re-enters this loop whenever the connection changes, so
         // setting it here is enough to keep it honest.
         const int machines_here = lobby ?
@@ -1945,6 +2331,16 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                                        : (signed_in ? "ONLINE" : "OFFLINE");
             if (signed_in && !online->display_name().empty())
                 state += "  " + online->display_name();
+            // A friend request nobody has answered belongs on the corner
+            // itself. It is the one thing here that is waiting on the person
+            // standing in front of the cabinet.
+            int waiting = 0;
+            if (signed_in)
+                for (const online_friend& person : online->friends())
+                    if (person.incoming) ++waiting;
+            if (waiting)
+                state += "  -  " + std::to_string(waiting) +
+                         (waiting == 1 ? " friend request" : " friend requests");
             const std::size_t away = online ? online->members().size() : 0;
             if (machines_here || away) {
                 state += "  -  " + std::to_string(machines_here + away) +
@@ -1970,8 +2366,14 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         // Someone on the other machine has asked for a game. Whatever this
         // machine was browsing, the question gets asked here rather than
         // waiting for the player to find the network page by themselves.
+        // Not asked when it comes from an internet lobby this machine has
+        // already joined: joining was the answer, and asking again is the
+        // double confirmation this whole path exists to remove.
+        const bool already_agreed_online =
+            online && !online->joined_lobby().empty();
         const std::optional<lobby_machine> incoming_invitation =
-            lobby ? lobby->pending_invitation() : std::nullopt;
+            lobby && !already_agreed_online ? lobby->pending_invitation()
+                                            : std::nullopt;
         if (incoming_invitation) {
             const int answer = menu.select_modes(
                 "Multiplayer - Invitation",
@@ -1998,6 +2400,47 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 return exit_result;
             }
             continue;
+        }
+        // An internet lobby that has filled up, or whose host has said go.
+        // Driven here rather than from the lobby screen, so somebody who
+        // opened a lobby and went back to browsing is still pulled into the
+        // game when the other machine arrives.
+        if (rom_selection_result online_launch = drive_online_session();
+            online_launch.action == rom_selection_action::selected)
+            return online_launch;
+
+        // A lobby that has just appeared. Asked here, over whatever is on
+        // screen, for the same reason an invitation is: a game somebody else
+        // has opened is only worth knowing about while it is still open, and
+        // a notification that waits in a screen nobody opens is no
+        // notification at all. Each lobby is offered once - take_new_lobby
+        // takes it - so saying no is not a question that comes back.
+        if (online) {
+            if (const std::optional<online_lobby> fresh =
+                    online->take_new_lobby()) {
+                const std::string who =
+                    fresh->host.empty() ? std::string("Somebody") : fresh->host;
+                std::string detail = who + " has just opened a lobby";
+                if (!fresh->game.empty()) detail += " to play " + fresh->game;
+                detail += ". Joining puts this cabinet in it, and you can "
+                          "leave again whenever you like.";
+                const int answer = menu.select_modes(
+                    "A lobby has just opened", detail,
+                    {{"Join " + who,
+                      fresh->open_to_anyone ? "Open to anyone"
+                                            : "They named you",
+                      launcher_menu::mode_icon::network},
+                     {"Not now", "Stay where you are",
+                      launcher_menu::mode_icon::exit}},
+                    "Not now", 0, {});
+                if (answer == launcher_menu::exit_requested) {
+                    rom_selection_result exit_result;
+                    exit_result.action = rom_selection_action::exit_requested;
+                    return exit_result;
+                }
+                if (answer == 0) online->join_lobby(fresh->id);
+                continue;
+            }
         }
         bool system_menu_requested = false;
         if (!selected_platform) {
@@ -2058,10 +2501,26 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 exit_result.action = rom_selection_action::exit_requested;
                 return exit_result;
             }
-            // The status corner, pressed. Online and lobbies open over the
-            // shelf instead of being a trip through the system pages.
+            // The account button, pressed. Signing in, signing out, friends
+            // and lobbies open over the shelf instead of being a trip
+            // through the system pages.
             if (platform_choice == launcher_menu::shortcut) {
+                if (!online) {
+                    // A button that does nothing when pressed is worse than
+                    // no button, so say why rather than blinking.
+                    menu.show_text("Account",
+                                   "This copy of MANX was started without "
+                                   "online support, so there is no account "
+                                   "to sign in to.");
+                    continue;
+                }
                 show_online_screen();
+                if (online_started.action == rom_selection_action::selected)
+                    return online_started;
+                if (account_wants_friends) {
+                    account_wants_friends = false;
+                    show_friends_screen();
+                }
                 continue;
             }
             if (platform_choice == launcher_menu::interrupted) {
@@ -2116,8 +2575,17 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 while (wanted < 0) {
                     const auto identity = identify_arcade_game(choice.path);
                     const bool peer_connected = lobby && lobby->connected();
+                    // Nobody has been invited yet here, so the question is
+                    // whether a machine that is answering has the game - not
+                    // whether every machine that accepted an invitation has
+                    // it, which is a question with no machines in it and
+                    // answered NOT ON THE OTHERS every single time.
                     const bool peer_ready = peer_connected && identity &&
-                        lobby->everyone_has_game(identity->short_name, 2);
+                        lobby->somebody_has_game(identity->short_name);
+                    // A game that cannot be played across two machines is
+                    // not a game the others are missing. Saying so where it
+                    // is true keeps NOT ON THE OTHERS meaning one thing.
+                    const bool game_can_network = caps.network_two_player;
                     std::vector<launcher_menu::mode_card> how;
                     std::vector<int> how_style;
                     how.push_back({"Single Player", "One player, one cabinet",
@@ -2142,13 +2610,19 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                                        launcher_menu::mode_icon::split_screen});
                         how_style.push_back(3);
                     }
-                    if (lobby && peer_connected) {
+                    // Only when this cabinet is looking for the others. With
+                    // network play switched off there is nothing here to
+                    // offer and nothing to explain.
+                    if (lobby && lobby->lan_discovery() && peer_connected) {
                         how.push_back({"Network Play",
                                        "Play across the network",
                                        launcher_menu::mode_icon::network, 0,
-                                       !peer_ready,
-                                       peer_ready ? "READY" :
-                                                    "NOT ON THE OTHERS"});
+                                       !peer_ready || !game_can_network,
+                                       !game_can_network
+                                           ? "NOT THIS GAME"
+                                           : (peer_ready
+                                                  ? "READY"
+                                                  : "NOT ON THE OTHERS")});
                         how_style.push_back(5);
                     }
                     const int how_chosen = menu.select_modes(
@@ -2217,15 +2691,21 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                   : std::string("Sign this cabinet in to see friends"),
               launcher_menu::mode_icon::local_players, 0, !online},
              {"Network Play",
-              lobby_connected_at_draw ?
-                  std::to_string(machines_here) + " machine" +
-                      (machines_here == 1 ? "" : "s") + " found" :
-                  "No other machine on the network yet",
+              !lan_on
+                  ? std::string("Off - press to look for cabinets on this "
+                                "network")
+                  : (lobby_connected_at_draw ?
+                        std::to_string(machines_here) + " machine" +
+                            (machines_here == 1 ? "" : "s") + " found" :
+                        "No other machine on the network yet"),
               launcher_menu::mode_icon::network, 0,
               // Nothing to do in here on your own: the lobby needs somebody
-              // to ask. It lights up by itself the moment one appears.
-              !lobby_connected_at_draw,
-              lobby_connected_at_draw ? "READY" : "SEARCHING"},
+              // to ask. It lights up by itself the moment one appears. When
+              // the whole thing is switched off it stays pressable, because
+              // what it does then is switch it on.
+              lan_on && !lobby_connected_at_draw,
+              !lan_on ? "OFF"
+                      : (lobby_connected_at_draw ? "READY" : "SEARCHING")},
              {"Arcade Wall", "Several games side by side",
               launcher_menu::mode_icon::display_wall},
              {"Settings", "Libraries, media and system help",
@@ -2245,16 +2725,52 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             exit_result.action = rom_selection_action::exit_requested;
             return exit_result;
         }
-        if (selected_page < 0) continue;
-        if (selected_page == 0) {
+        // The account chip is drawn on this page too, so pressing it has to
+        // land somewhere: the same place the first card goes.
+        if (selected_page == launcher_menu::shortcut || selected_page == 0) {
             show_online_screen();
+            if (online_started.action == rom_selection_action::selected)
+                return online_started;
+            if (account_wants_friends) {
+                account_wants_friends = false;
+                show_friends_screen();
+            }
             continue;
         }
+        if (selected_page < 0) continue;
         if (selected_page == 1) {
             show_friends_screen();
             continue;
         }
         if (selected_page == 2) {
+            // The switch lives on the thing it switches. Somebody who wants
+            // cabinets on this network found presses Network Play and turns
+            // it on; somebody who does not never sees it searching.
+            if (lobby && !lobby->lan_discovery()) {
+                const int answer = menu.select_modes(
+                    "Network Play is off",
+                    "This cabinet is not looking for the others on your "
+                    "network, and they cannot see it. Online Play is "
+                    "separate and works either way - it reaches machines "
+                    "anywhere, including one in the next room.",
+                    {{"Turn It On", "Find cabinets on this network",
+                      launcher_menu::mode_icon::network},
+                     {"Leave It Off", "Online Play only",
+                      launcher_menu::mode_icon::exit}},
+                    "Back", 0, {});
+                if (answer == launcher_menu::exit_requested) {
+                    rom_selection_result exit_result;
+                    exit_result.action = rom_selection_action::exit_requested;
+                    return exit_result;
+                }
+                if (answer != 0) continue;
+                emulator_settings settings = load_settings();
+                settings.network_play = true;
+                save_settings(settings);
+                lobby->set_lan_discovery(true);
+                lobby->set_installed_games(choices);
+                continue;
+            }
             if (!lobby) {
                 menu.show_text(
                     "Multiplayer Lobby",
@@ -2314,7 +2830,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     act_nothing, act_invite_one, act_invite_all, act_allow,
                     act_deny, act_withdraw, act_logs, act_alternating,
                     act_simultaneous, act_system_link, act_presence,
-                    act_online,
+                    act_online, act_lan_off,
                 };
                 const auto add = [&](card entry, int what,
                                      uint64_t target = 0) {
@@ -2480,6 +2996,13 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                                               : "Nothing relayed yet",
                          icon::audit, 0, !lobby->has_any_log()), act_logs);
 
+                // The way back out of the feature, beside the feature. A
+                // cabinet that has no others to find should be able to stop
+                // looking without going hunting through Settings for it.
+                add(card("Stop Looking",
+                         "Turn network play off - Online Play is unaffected",
+                         icon::exit), act_lan_off);
+
                 const int picked = menu.select_modes(
                     title, description, cards, "Back", 0,
                     changed);
@@ -2499,6 +3022,20 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 if (picked >= static_cast<int>(actions.size())) continue;
                 const std::size_t slot = static_cast<std::size_t>(picked);
 
+                // Handled here rather than in the switch below, because it
+                // is the one action that leaves this screen: a `break` in a
+                // case breaks the switch, and the lobby would redraw itself
+                // as an empty search for machines it has just stopped
+                // looking for.
+                if (actions[slot] == act_lan_off) {
+                    emulator_settings off = load_settings();
+                    off.network_play = false;
+                    save_settings(off);
+                    lobby->cancel_invite();
+                    lobby->set_lan_discovery(false);
+                    break;
+                }
+
                 bool system_link = false;
                 arcade_multiplayer_mode wanted_mode =
                     arcade_multiplayer_mode::simultaneous;
@@ -2507,6 +3044,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     continue;
                 case act_online:
                     show_online_screen();
+                    if (online_started.action ==
+                        rom_selection_action::selected)
+                        return online_started;
                     continue;
                 case act_logs:
                     choose_machine_log();
