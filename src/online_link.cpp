@@ -1181,9 +1181,17 @@ void online_link::run() {
                 entry.dump(), true);
             if (mine.ok()) {
                 joined_roster = true;
-            } else if (!joined_roster) {
+            } else {
+                // Reported whether joining or hosting. A host's own entry
+                // failing was silently swallowed, so a lobby you were
+                // standing in listed as empty and nothing anywhere said why.
                 publish(online_state::error,
-                        explain_failure(mine, "joining the lobby"));
+                        explain_failure(mine, joined_roster
+                                                  ? "publishing your address"
+                                                  : "joining the lobby"));
+                std::printf("MANX online: member write refused: HTTP %ld %s\n",
+                            mine.status, mine.body.substr(0, 200).c_str());
+                std::fflush(stdout);
             }
 
             const manx_http::response answer =
