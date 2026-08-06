@@ -74,6 +74,8 @@ public:
     void set_foreground(bool foreground);
 
     // --- lobbies ----------------------------------------------------------
+    // Hosting one, or joining somebody else's by the code they read out.
+    void create_lobby();
     void join_lobby(std::string lobby_id);
     void leave_lobby();
     std::string joined_lobby() const;
@@ -89,7 +91,7 @@ public:
 private:
     struct command {
         enum class kind {
-            register_account, sign_in, sign_out, forget, join, leave
+            register_account, sign_in, sign_out, forget, host, join, leave
         };
         kind what;
         std::string argument;   // email, or the lobby id

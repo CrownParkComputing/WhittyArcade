@@ -1527,7 +1527,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             std::vector<card> cards;
             std::vector<int> what;
             enum { act_none, act_register, act_signin, act_signout,
-                   act_forget, act_leave };
+                   act_forget, act_host, act_join, act_leave };
             const auto add = [&](card entry, int action) {
                 cards.push_back(std::move(entry));
                 what.push_back(action);
@@ -1537,9 +1537,20 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 add(card("Not Available", online->status_text(), icon::audit,
                          0, true), act_none);
             } else if (online->signed_in()) {
-                if (!online->joined_lobby().empty())
+                if (online->joined_lobby().empty()) {
+                    add(card("Host A Lobby",
+                             "Get a code to read out to a friend",
+                             icon::network), act_host);
+                    add(card("Join A Lobby",
+                             "Type the code somebody gave you",
+                             icon::local_players), act_join);
+                } else {
+                    add(card("Lobby " + online->joined_lobby(),
+                             online->status_text(), icon::network, 0, true,
+                             "CODE"), act_none);
                     add(card("Leave Lobby", "Stop connecting to these machines",
                              icon::controls), act_leave);
+                }
                 add(card("Sign Out", online->account_email(), icon::controls),
                     act_signout);
                 add(card("Forget This Machine",
@@ -1589,6 +1600,14 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             }
             case act_signout: online->sign_out(); break;
             case act_forget:  online->forget_machine(); break;
+            case act_host:    online->create_lobby(); break;
+            case act_join: {
+                const auto code = menu.prompt_text(
+                    "Lobby code", "The six characters the host read out.",
+                    {}, false, 6);
+                if (code && code->size() >= 4) online->join_lobby(*code);
+                break;
+            }
             case act_leave:   online->leave_lobby(); break;
             default: break;
             }

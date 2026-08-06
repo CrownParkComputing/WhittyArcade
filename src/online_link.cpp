@@ -323,6 +323,12 @@ void online_link::forget_machine() {
     m_wake.notify_all();
 }
 
+void online_link::create_lobby() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_commands.push_back({command::kind::host, {}, {}, {}});
+    m_wake.notify_all();
+}
+
 void online_link::join_lobby(std::string lobby_id) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::join, std::move(lobby_id), {}, {}});
@@ -402,6 +408,7 @@ void online_link::run() {
     std::string pending_name;
     bool profile_ready = false;
     bool machine_ready = false;
+    bool pending_host = false;
     std::string published_games_hash;
     std::string current_lobby;
     int64_t next_machine_poll = 0;
@@ -540,6 +547,9 @@ void online_link::run() {
                 publish(online_state::signed_out,
                         "This machine has forgotten everything.");
                 break;
+            case command::kind::host:
+                pending_host = true;
+                break;
             case command::kind::join:
                 current_lobby = entry.argument;
                 next_lobby_poll = 0;
@@ -652,6 +662,57 @@ void online_link::run() {
                 continue;
             }
             backoff_seconds = 5;
+        }
+
+        // --- this machine's own document ---------------------------------
+        // Written in full the first time, because the rules validate a
+        // creation as a whole: a heartbeat's handful of fields is an update,
+        // and an update of a document that does not exist yet is refused.
+        if (!machine_ready) {
+            std::vector<std::string> mine;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                mine = m_games;
+            }
+            json document;
+            auto& fields = document["fields"];
+            fields["ownerUid"] = online_wire::value_string(credential.uid);
+            fields["machineUid"] = online_wire::value_string(credential.machine_id);
+            fields["name"] = online_wire::value_string(host_name());
+            fields["hostName"] = online_wire::value_string(host_name());
+            fields["platform"] = online_wire::value_string(platform_name());
+            fields["buildHash"] = online_wire::value_string(build_hash());
+            fields["presence"] = online_wire::value_string(
+                presence_name(m_lobby.presence()));
+            fields["lastSeen"] = online_wire::value_time(now);
+            fields["games"] = online_wire::value_strings(mine);
+            fields["gamesHash"] = online_wire::value_string(hash_of(mine));
+            fields["lanIp"] = online_wire::value_string(std::string());
+            fields["lanPort"] = online_wire::value_int(0);
+            fields["publicIp"] = online_wire::value_string(std::string());
+            fields["publicPort"] = online_wire::value_int(0);
+            fields["natKind"] = online_wire::value_string("unknown");
+            fields["stunAt"] = online_wire::value_time(now);
+            fields["diagnostics"] = online_wire::value_map(json::object());
+            fields["readerUids"] = online_wire::value_strings({credential.uid});
+            fields["commandAck"] = online_wire::value_int(0);
+            fields["currentLobbyId"] = online_wire::value_string(std::string());
+            const manx_http::response written = call(
+                manx_http::method::patch,
+                document_url("machines/" + credential.machine_id),
+                document.dump(), true);
+            if (written.ok()) {
+                machine_ready = true;
+                published_games_hash.clear();   // force a first heartbeat
+                std::printf("MANX online: this machine is registered as %s\n",
+                            credential.machine_id.c_str());
+            } else {
+                publish(online_state::error,
+                        explain_failure(written, "registering this machine"));
+                backoff_until = now + backoff_seconds;
+                backoff_seconds = std::min<int64_t>(backoff_seconds * 2, 60);
+                continue;
+            }
         }
 
         // --- publish what this machine is --------------------------------
@@ -782,6 +843,50 @@ void online_link::run() {
             // online screen is open. The slow rate is most of what keeps a
             // cabinet inside the free tier.
             next_machine_poll = now + (m_foreground.load() ? 5 : 120);
+        }
+
+        // --- hosting one ---------------------------------------------------
+        if (pending_host && machine_ready) {
+            pending_host = false;
+            // Six characters, short enough to read out over a phone.
+            const std::string code = random_code(6);
+            json document;
+            auto& fields = document["fields"];
+            fields["hostUid"] = online_wire::value_string(credential.uid);
+            fields["hostOwnerUid"] = online_wire::value_string(credential.uid);
+            fields["gameShortName"] = online_wire::value_string(std::string());
+            fields["gameDisplayName"] = online_wire::value_string(std::string());
+            fields["mode"] = online_wire::value_string("simultaneous");
+            fields["places"] = online_wire::value_int(2);
+            fields["state"] = online_wire::value_string("open");
+            fields["visibility"] = online_wire::value_string("friends");
+            fields["memberUids"] = online_wire::value_strings({credential.uid});
+            fields["readerUids"] = online_wire::value_strings({credential.uid});
+            fields["startAtMs"] = online_wire::value_int(0);
+            fields["seed"] = online_wire::value_int(1);
+            fields["delayFrames"] = online_wire::value_int(3);
+            fields["buildHash"] = online_wire::value_string(build_hash());
+            fields["createdAt"] = online_wire::value_time(now);
+            fields["updatedAt"] = online_wire::value_time(now);
+            fields["members"] = online_wire::value_map(json::object());
+            const manx_http::response made = call(
+                manx_http::method::patch, document_url("lobbies/" + code),
+                document.dump(), true);
+            if (made.ok()) {
+                current_lobby = code;
+                next_lobby_poll = 0;
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_lobby_id = code;
+                }
+                std::printf("MANX online: hosting lobby %s\n", code.c_str());
+                publish(online_state::in_lobby,
+                        "Lobby " + code + " - read this code out to whoever "
+                        "is joining.");
+            } else {
+                publish(online_state::error,
+                        explain_failure(made, "creating the lobby"));
+            }
         }
 
         // --- the lobby ----------------------------------------------------
