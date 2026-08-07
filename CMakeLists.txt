@@ -574,6 +574,9 @@ target_include_directories(vulkan_presenter_harness PRIVATE
     ${WHITTY_SHADER_HEADER_DIR})
 target_link_libraries(vulkan_presenter_harness PRIVATE SDL3::SDL3
     Vulkan::Vulkan PkgConfig::MINIZIP ZLIB::ZLIB)
+if(WIN32)
+    target_link_libraries(vulkan_presenter_harness PRIVATE ws2_32)
+endif()
 target_compile_options(vulkan_presenter_harness PRIVATE -Wall -Wextra)
 
 add_executable(igdb_artwork_test
