@@ -144,18 +144,25 @@ struct stick_step {
     int vertical{};
 };
 
-// Maps SDL's axes onto the latch. Both sticks drive the menu, because which
-// one a cabinet's controller reports as is not something a player should have
-// to know.
+// Maps SDL's axes onto the latch: the left stick and nothing else.
+//
+// The right stick used to drive the menu too, on the reasoning that which
+// stick a cabinet's panel reports as is not something a player should have
+// to know. On a pad with no SDL mapping - which is most arcade panels and
+// plenty of wheels - the pedal axes arrive as the right stick, and a pedal
+// at rest reads -32767. That is a stick held hard up, for ever: the menu
+// changed category on its own, several times a second, and no amount of
+// latching helps because the axis never comes back to centre.
+//
+// A device that genuinely has a right stick still has a left one and a
+// d-pad, so nothing is lost by only listening to those.
 stick_step stick_movement(menu_stick& latch, const SDL_Event& event) {
     if (event.type != SDL_EVENT_GAMEPAD_AXIS_MOTION) return {};
     const int value = static_cast<int>(event.gaxis.value);
     switch (event.gaxis.axis) {
     case SDL_GAMEPAD_AXIS_LEFTX:
-    case SDL_GAMEPAD_AXIS_RIGHTX:
         return {latch.step(menu_stick::horizontal, value), 0};
     case SDL_GAMEPAD_AXIS_LEFTY:
-    case SDL_GAMEPAD_AXIS_RIGHTY:
         return {0, latch.step(menu_stick::vertical, value)};
     default:
         return {};
@@ -272,6 +279,7 @@ struct launcher_menu::implementation {
     // Survives a trip out of the browse loop and back - see the note where
     // it is used.
     menu_stick browse_sticks;
+    int last_browse_selection{};
 
     cf_element* cf_elements[4] = {&cf_layout.box, &cf_layout.snap,
                                   &cf_layout.marquee, &cf_layout.text};
@@ -909,6 +917,8 @@ struct launcher_menu::implementation {
             cf_target = initial_selection;
             cf_position = static_cast<float>(initial_selection);
             cf_anim_start = 0;
+            // Not cf_video: whether the clip should still be playing is
+            // decided by which game is selected, below.
             cf_video_index = -1;
             cf_dragging = false;
             load_cf_layout();
@@ -916,9 +926,6 @@ struct launcher_menu::implementation {
             // one page only: leaving and coming back is browsing again.
             cf_design = cf_design_pending;
             cf_design_pending = false;
-#ifdef MANX_HAVE_FFMPEG
-            cf_video.close();
-#endif
         }
         for (;;) {
             const grid_metrics metrics = measure_grid(grid_top, list);
@@ -933,6 +940,7 @@ struct launcher_menu::implementation {
                 first_row, 0, std::max(0, total_rows - metrics.rows_visible));
             }
 
+            last_browse_selection = selected;
             if (redraw) {
                 if (coverflow) {
                     // Smooth lerp toward current selection
@@ -947,13 +955,24 @@ struct launcher_menu::implementation {
                     if (selected != cf_video_index) {
                         description_started = SDL_GetTicks();
 #ifdef MANX_HAVE_FFMPEG
-                        cf_video.close();
-                        if (video_for) {
-                            const std::string path = video_for(selected);
+                        // Keyed on the file, not on the index. The browser
+                        // is left and re-entered for every interrupt, and
+                        // closing and reopening the clip each time is what
+                        // made the snap restart every couple of seconds.
+                        const std::string path =
+                            video_for ? video_for(selected) : std::string();
+                        if (path != cf_video.path) {
+                            cf_video.close();
                             if (!path.empty()) open_coverflow_video(path);
                         }
 #endif
                         cf_video_index = selected;
+                        if (std::getenv("MANX_TRACE_CF"))
+                            std::fprintf(stderr,
+                                         "[cf] selection now %d of %d (%s)\n",
+                                         selected, total,
+                                         items[static_cast<std::size_t>(
+                                             selected)].c_str());
                     }
                     draw_coverflow(title, description, items, selected,
                                    textures, cover_for, back_label, chosen,
@@ -1075,6 +1094,8 @@ struct launcher_menu::implementation {
                 break;
             }
             if (page != 0) {
+                if (std::getenv("MANX_TRACE_CF"))
+                    std::fprintf(stderr, "[cf] page %+d\n", page);
                 chosen.assign(1, page < 0 ? launcher_menu::page_back
                                           : launcher_menu::page_forward);
                 break;
@@ -1117,6 +1138,8 @@ struct launcher_menu::implementation {
                 // whole library, and neither direction is the other's
                 // overflow. On the grid, down is still the next row.
                 if (coverflow && paging) {
+                    if (std::getenv("MANX_TRACE_CF"))
+                        std::fprintf(stderr, "[cf] category %+d\n", vertical);
                     chosen.assign(1, vertical < 0 ?
                                       launcher_menu::page_back :
                                       launcher_menu::page_forward);
@@ -1583,148 +1606,117 @@ struct launcher_menu::implementation {
         load_cf_layout();
         const cf_layout_t& lay = cf_layout;
         const float centre_x_pct = lay.text.x;
-        const int box_max_h = static_cast<int>(
-            (logical_height - 220) * lay.box.scale);
-        const int snap_max_h = static_cast<int>(
-            (logical_height - 280) * lay.snap.scale);
-        const int marquee_max_w = static_cast<int>(
-            logical_width * 0.38f * lay.marquee.scale);
-        const int marquee_max_h = static_cast<int>(80 * lay.marquee.scale);
-
-        // ---- Box art on the left ---------------------------------------
-        {
-            int box_w = box_max_h > 0 ?
-                std::min(static_cast<int>(box_max_h * box_aspect),
-                         static_cast<int>(logical_width * 0.32f *
-                                          lay.box.scale)) :
-                static_cast<int>(logical_width * 0.28f * lay.box.scale);
-            int box_h = box_w > 0 ?
-                static_cast<int>(box_w / box_aspect) : box_max_h;
-            int box_x = static_cast<int>(
-                logical_width * lay.box.x - box_w / 2 + slide_offset);
-            int box_y = static_cast<int>(
-                logical_height * lay.box.y - box_h / 2);
-            cf_rects[0] = frect(box_x, box_y, box_w, box_h);
-        }
-        if (box_tex) {
-            const int box_w = static_cast<int>(cf_rects[0].w);
-            const int box_h = static_cast<int>(cf_rects[0].h);
-            const int box_x = static_cast<int>(cf_rects[0].x);
-            const int box_y = static_cast<int>(cf_rects[0].y);
-
-            // Drop shadow
-            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
-            const SDL_FRect box_shadow{
-                static_cast<float>(box_x + 4),
-                static_cast<float>(box_y + 4),
-                static_cast<float>(box_w),
-                static_cast<float>(box_h)};
-            SDL_RenderFillRect(renderer, &box_shadow);
-
-            // Box art
-            SDL_SetTextureAlphaMod(box_tex, 255);
-            const SDL_FRect box_dest{
-                static_cast<float>(box_x), static_cast<float>(box_y),
-                static_cast<float>(box_w), static_cast<float>(box_h)};
-            SDL_RenderTexture(renderer, box_tex, nullptr, &box_dest);
-
-            // Subtle border
-            SDL_SetRenderDrawColor(renderer, 40, 50, 65, 180);
-            SDL_RenderRect(renderer, &box_dest);
-        }
-
-        // ---- Screenshot/fan art on the right ----------------------------
-        {
-            const float snap_aspect = media.snap_w > 0 && media.snap_h > 0 ?
-                static_cast<float>(media.snap_w) /
-                    static_cast<float>(media.snap_h) :
-                4.0f / 3.0f;
-            int snap_w = snap_max_h > 0 ?
-                static_cast<int>(snap_max_h * snap_aspect) :
-                static_cast<int>(logical_width * 0.30f * lay.snap.scale);
-            snap_w = std::min(snap_w,
-                              static_cast<int>(logical_width * 0.35f *
-                                               lay.snap.scale));
-            const int snap_h = snap_w > 0 ?
-                static_cast<int>(snap_w / snap_aspect) : snap_max_h;
-            const int snap_x = static_cast<int>(
-                logical_width * lay.snap.x - snap_w / 2 + slide_offset);
-            const int snap_y = static_cast<int>(
-                logical_height * lay.snap.y - snap_h / 2);
-            cf_rects[1] = frect(snap_x, snap_y, snap_w, snap_h);
-        }
-        if (snap_tex && media.snap_w > 0) {
-            const int snap_w = static_cast<int>(cf_rects[1].w);
-            const int snap_h = static_cast<int>(cf_rects[1].h);
-            const int snap_x = static_cast<int>(cf_rects[1].x);
-            const int snap_y = static_cast<int>(cf_rects[1].y);
-
-            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
-            const SDL_FRect snap_shadow{
-                static_cast<float>(snap_x + 4),
-                static_cast<float>(snap_y + 4),
-                static_cast<float>(snap_w),
-                static_cast<float>(snap_h)};
-            SDL_RenderFillRect(renderer, &snap_shadow);
-
-            const SDL_FRect snap_dest{
-                static_cast<float>(snap_x), static_cast<float>(snap_y),
-                static_cast<float>(snap_w), static_cast<float>(snap_h)};
-
-            // The video plays here, in the screenshot's pane, and the
-            // screenshot is what is shown until it has a frame to play. One
-            // place on the page moves; everything else holds still.
-            bool playing = false;
+        // ---- Every picture the pack has, evenly across the screen -------
+        //
+        // Three fixed slots meant a pack with a 3D box, a title screen, a
+        // cabinet photo and a flyer showed the same three pictures as a pack
+        // with nothing but a cover. However many there are, they share the
+        // width equally and sit on one line.
+        struct pane {
+            SDL_Texture* texture;
+            float aspect;
+            const char* label;
+            bool is_snap;
+        };
+        std::vector<pane> panes;
+        if (box_tex) panes.push_back({box_tex, box_aspect, "BOX", false});
+        if (marquee_tex && media.marquee_h > 0)
+            panes.push_back({marquee_tex,
+                             static_cast<float>(media.marquee_w) /
+                                 static_cast<float>(media.marquee_h),
+                             "MARQUEE", false});
+        const bool have_video =
 #ifdef MANX_HAVE_FFMPEG
-            if (cf_video.texture) {
-                SDL_SetTextureAlphaMod(cf_video.texture, 255);
-                SDL_RenderTexture(renderer, cf_video.texture, nullptr,
-                                  &snap_dest);
-                playing = true;
-            }
+            cf_video.texture != nullptr;
+#else
+            false;
 #endif
-            if (!playing) {
-                SDL_SetTextureAlphaMod(snap_tex, 230);
-                SDL_RenderTexture(renderer, snap_tex, nullptr, &snap_dest);
-            }
-
-            SDL_SetRenderDrawColor(renderer, 40, 50, 65, 180);
-            SDL_RenderRect(renderer, &snap_dest);
+        if (snap_tex || have_video)
+            panes.push_back({snap_tex,
+                             media.snap_w > 0 && media.snap_h > 0 ?
+                                 static_cast<float>(media.snap_w) /
+                                     static_cast<float>(media.snap_h) :
+                                 4.0f / 3.0f,
+                             "SCREEN", true});
+        for (std::size_t slot = 0; slot < media.extras.size(); ++slot) {
+            const auto& extra = media.extras[slot];
+            if (!extra.pixels || extra.width <= 0 || extra.height <= 0)
+                continue;
+            SDL_Texture* texture = grid_texture_for(
+                textures, selected + 30000 + static_cast<int>(slot) * 1000,
+                launcher_menu::cover{extra.pixels, extra.width,
+                                     extra.height});
+            if (!texture) continue;
+            panes.push_back({texture,
+                             static_cast<float>(extra.width) /
+                                 static_cast<float>(extra.height),
+                             extra.label, false});
         }
+
+        const int pane_count = static_cast<int>(panes.size());
+        const int row_centre_y =
+            static_cast<int>(logical_height * lay.box.y);
+        const int row_max_h = std::max(
+            60, static_cast<int>(logical_height * 0.46f * lay.box.scale));
+        if (pane_count > 0) {
+            const int outer = horizontal_margin;
+            const int gap = 18;
+            const int cell = (logical_width - outer * 2 -
+                              gap * (pane_count - 1)) / pane_count;
+            TTF_Font* small = hint_font ? hint_font : font;
+            for (int index = 0; index < pane_count; ++index) {
+                const pane& item = panes[static_cast<std::size_t>(index)];
+                const float aspect = item.aspect > 0.01f ? item.aspect : 1.0f;
+                int width = cell;
+                int height = static_cast<int>(width / aspect);
+                if (height > row_max_h) {
+                    height = row_max_h;
+                    width = static_cast<int>(height * aspect);
+                }
+                const int cell_x = outer + index * (cell + gap);
+                const int x = static_cast<int>(cell_x + (cell - width) / 2 +
+                                               slide_offset);
+                const int y = row_centre_y - height / 2;
+                const SDL_FRect dest = frect(x, y, width, height);
+                if (index < 3) cf_rects[index] = dest;
+
+                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
+                const SDL_FRect shadow = frect(x + 4, y + 4, width, height);
+                SDL_RenderFillRect(renderer, &shadow);
+
+                bool drawn = false;
 #ifdef MANX_HAVE_FFMPEG
-        else if (cf_video.texture) {
-            // A game with a video and no screenshot still gets the pane.
-            const SDL_FRect only{cf_rects[1].x, cf_rects[1].y,
-                                 cf_rects[1].w, cf_rects[1].h};
-            SDL_SetTextureAlphaMod(cf_video.texture, 255);
-            SDL_RenderTexture(renderer, cf_video.texture, nullptr, &only);
-            SDL_SetRenderDrawColor(renderer, 40, 50, 65, 180);
-            SDL_RenderRect(renderer, &only);
-        }
+                // The video plays in the screenshot's pane, and the
+                // screenshot holds that place until there is a frame to
+                // play. One thing on the page moves.
+                if (item.is_snap && cf_video.texture) {
+                    SDL_SetTextureAlphaMod(cf_video.texture, 255);
+                    SDL_RenderTexture(renderer, cf_video.texture, nullptr,
+                                      &dest);
+                    drawn = true;
+                }
 #endif
+                if (!drawn && item.texture) {
+                    SDL_SetTextureAlphaMod(item.texture, 245);
+                    SDL_RenderTexture(renderer, item.texture, nullptr, &dest);
+                }
+                SDL_SetRenderDrawColor(renderer, 40, 50, 65, 180);
+                SDL_RenderRect(renderer, &dest);
 
-        // ---- Marquee/logo centred above title --------------------------
-        {
-            const float mq_aspect = media.marquee_w > 0 &&
-                    media.marquee_h > 0 ?
-                static_cast<float>(media.marquee_w) /
-                    static_cast<float>(media.marquee_h) :
-                4.0f;
-            int mq_w = marquee_max_w;
-            int mq_h = static_cast<int>(mq_w / mq_aspect);
-            if (mq_h > marquee_max_h) {
-                mq_h = marquee_max_h;
-                mq_w = static_cast<int>(mq_h * mq_aspect);
+                if (small && item.label && *item.label) {
+                    rendered_text tag = make_text(renderer, small, item.label,
+                                                  SDL_Color{130, 146, 166,
+                                                            255});
+                    draw_text(renderer, tag,
+                              x + width / 2 - tag.width / 2, y + height + 6);
+                    destroy_text(tag);
+                }
             }
-            const int mq_x = static_cast<int>(
-                logical_width * lay.marquee.x - mq_w / 2 + slide_offset);
-            const int mq_y = static_cast<int>(
-                logical_height * lay.marquee.y - mq_h / 2);
-            cf_rects[2] = frect(mq_x, mq_y, mq_w, mq_h);
-        }
-        if (marquee_tex && media.marquee_w > 0) {
-            SDL_SetTextureAlphaMod(marquee_tex, 240);
-            SDL_RenderTexture(renderer, marquee_tex, nullptr, &cf_rects[2]);
+            // Slots the designer knows about that no longer exist on this
+            // game: keep them out of its way rather than leaving last
+            // game's rectangle behind.
+            for (int index = pane_count; index < 3; ++index)
+                cf_rects[index] = frect(0, 0, 0, 0);
         }
 
         // ---- Title (large, centred) ------------------------------------
@@ -1800,7 +1792,13 @@ struct launcher_menu::implementation {
             destroy_text(meta_text);
         }
 
-        // ---- Description text ------------------------------------------
+        // ---- Description: one line, across the top ----------------------
+        //
+        // A wrapped block of three lines under the artwork is a paragraph to
+        // stop and read; a single line travelling right to left is something
+        // you catch while looking at the pictures, which is what a synopsis
+        // on a game-select screen is for. It runs the full width at the top
+        // of the screen, clear of the art and the legend both, and repeats.
         std::string selected_description;
         if (item_descriptions && selected >= 0 &&
             selected < static_cast<int>(item_descriptions->size())) {
@@ -1816,58 +1814,48 @@ struct launcher_menu::implementation {
                 selected_description.push_back(static_cast<char>(character));
             }
         }
-        const int desc_y = title_y + heading_h + 8;
-        int desc_bottom = desc_y;
+        int desc_bottom = title_y + heading_h;
         if (!selected_description.empty()) {
-            // Wide, because it now sits under the artwork rather than in the
-            // gap between two panels, and there is the whole screen to use.
-            const int desc_width = static_cast<int>(
-                logical_width * 0.72f * text_scale);
-            rendered_text line = make_text(
-                renderer, desc_font ? desc_font : font, selected_description,
-                muted, static_cast<int>(desc_width / text_scale));
+            TTF_Font* desc = desc_font ? desc_font : font;
+            // Wrapping is what stopped the old one moving: text wrapped to a
+            // width can never be wider than that width, so there was never
+            // anything to travel. Zero means one line, however long it is.
+            rendered_text line = make_text(renderer, desc,
+                                           selected_description, muted, 0);
+            const int line_w = static_cast<int>(line.width * text_scale);
             const int line_h = static_cast<int>(line.height * text_scale);
+            const int band_x = horizontal_margin;
+            const int band_w = logical_width - horizontal_margin * 2;
+            const int band_y = 56;
 
-            // The synopsis is wrapped, so it is never wider than the space it
-            // is given - it is *taller*. Sliding it sideways, which is what
-            // this used to do, therefore moved it not one pixel, while the
-            // full wrapped block drew straight down over the button legend.
-            // So: show a few lines, and walk down through the rest.
-            // The font's own line pitch, not the height of a rendered
-            // sample: a band that is not a whole number of lines slices the
-            // last one in half and looks like a rendering fault.
-            const int row_h = std::max(
-                static_cast<int>(TTF_GetFontLineSkip(
-                    desc_font ? desc_font : font) * text_scale), 12);
-            const int band_h = std::min(line_h, row_h * 3);
-
-            int offset = 0;
-            const int travel = std::max(0, line_h - band_h);
-            if (travel > 0 && description_elapsed_ms > 0) {
-                constexpr Uint64 hold_ms = 2600;
-                constexpr Uint64 end_hold_ms = 1800;
-                constexpr Uint64 pixels_per_second = 22;
-                const Uint64 travel_ms =
-                    static_cast<Uint64>(travel) * 1000 / pixels_per_second;
-                const Uint64 cycle = hold_ms + travel_ms + end_hold_ms;
-                const Uint64 phase = description_elapsed_ms % cycle;
-                if (phase > hold_ms)
-                    offset = static_cast<int>(std::min<Uint64>(
-                        travel,
-                        (phase - hold_ms) * pixels_per_second / 1000));
-                // Land on a line rather than between two, so the band always
-                // holds whole lines of text once it stops moving.
-                if (offset >= travel) offset = travel - travel % row_h;
+            // Right to left, all the way off, then round again - with a gap
+            // so the end of the sentence is never touching its own start.
+            constexpr Uint64 pixels_per_second = 90;
+            const int gap = std::max(band_w / 3, 160);
+            const int cycle_px = line_w + gap;
+            const Uint64 travelled =
+                description_elapsed_ms * pixels_per_second / 1000;
+            const int phase = cycle_px > 0 ?
+                static_cast<int>(travelled % static_cast<Uint64>(cycle_px)) :
+                0;
+            const SDL_Rect clip{band_x, band_y - 2, band_w, line_h + 6};
+            if (line_w <= band_w) {
+                // It fits: leave it still rather than sliding a short line
+                // about for no reason.
+                draw_text_scaled(renderer, line,
+                                 band_x + (band_w - line_w) / 2, band_y,
+                                 text_scale, &clip);
+            } else {
+                const int x = band_x + band_w - phase;
+                draw_text_scaled(renderer, line, x, band_y, text_scale,
+                                 &clip);
+                // The next lap, drawn behind the first, so the line comes
+                // round without a blank sweep between repeats.
+                if (x + line_w < band_x + band_w)
+                    draw_text_scaled(renderer, line, x + cycle_px, band_y,
+                                     text_scale, &clip);
             }
-            const int desc_x = static_cast<int>(
-                logical_width * centre_x_pct - desc_width / 2 + slide_offset);
-            const SDL_Rect clip{desc_x, desc_y, desc_width, band_h};
-            draw_text_scaled(renderer, line, desc_x, desc_y - offset,
-                             text_scale, &clip);
             destroy_text(line);
-            desc_bottom = desc_y + band_h;
-            text_left = std::min(text_left, desc_x);
-            text_right = std::max(text_right, desc_x + desc_width);
         }
         cf_rects[3] = frect(text_left, title_y,
                             std::max(text_right - text_left, 40),
@@ -3749,6 +3737,10 @@ int launcher_menu::select_grid(
 void launcher_menu::arrange_coverflow_next() {
     if (!m_impl->ready()) return;
     m_impl->cf_design_pending = true;
+}
+
+int launcher_menu::last_browse_selection() const {
+    return m_impl ? m_impl->last_browse_selection : 0;
 }
 
 std::vector<int> launcher_menu::select_grid_multiple(

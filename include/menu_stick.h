@@ -26,12 +26,21 @@ public:
 
     int step(axis which, int value) {
         int& held = which == horizontal ? m_horizontal : m_vertical;
+        bool& armed = which == horizontal ? m_horizontal_armed
+                                          : m_vertical_armed;
         const int direction =
             value >= engage ? 1 : (value <= -engage ? -1 : 0);
         if (direction == 0) {
-            if (std::abs(value) <= release) held = 0;
+            if (std::abs(value) <= release) { held = 0; armed = true; }
             return 0;
         }
+        // An axis that has never been near centre is not a stick somebody
+        // is pushing - it is a pedal, a trigger or a wheel at rest, which
+        // reads -32767 and stays there. Believing it means the menu moves
+        // on its own for ever, and no amount of latching helps because the
+        // axis never comes back. A real stick passes through centre on its
+        // way to anywhere, so this costs a genuine push nothing.
+        if (!armed) return 0;
         // Already stepped this way; the stick must return before it can step
         // again, or one push would scroll the whole list.
         if (held == direction) return 0;
@@ -42,4 +51,6 @@ public:
 private:
     int m_horizontal{};
     int m_vertical{};
+    bool m_horizontal_armed{};
+    bool m_vertical_armed{};
 };

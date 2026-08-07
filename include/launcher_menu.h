@@ -173,6 +173,17 @@ public:
         // is there before the decoder has produced a frame.
         const uint8_t* fanart_pixels{};
         int fanart_w{}, fanart_h{};
+        // Everything else the pack has for this game: the 3D box, the back
+        // of the box, the title screen, the cartridge, the cabinet, the
+        // flyer. The cover-flow page lays every one it is given out across
+        // the screen, so a pack with more art shows more art rather than
+        // three slots' worth of it.
+        struct extra_art {
+            const uint8_t* pixels{};
+            int width{}, height{};
+            const char* label{""};
+        };
+        std::vector<extra_art> extras;
         std::string publisher;
         std::string year;
         std::string players;
@@ -234,6 +245,12 @@ public:
     // so arranging the page can be reached from the View menu rather than
     // only from the F2 key. Ignored by every other view.
     void arrange_coverflow_next();
+
+    // Where the browser was standing when it last returned. A trip out to
+    // handle an interrupt, an info page or a view change comes straight back
+    // in, and without this the caller has no way to come back to the game
+    // that was on screen - so it re-entered at the first one, every time.
+    int last_browse_selection() const;
 
     // Picks several games from one grid rather than asking repeatedly. Cards
     // already chosen are numbered in the order they were taken, and the grid

@@ -1214,7 +1214,11 @@ int browse_library_grid(
     const std::function<bool(const rom_choice&)>& filter,
     int* play_style = nullptr,
     const std::function<bool()>& interrupt = {},
-    const std::string& back_label = "Back") {
+    const std::string& back_label = "Back",
+    // Called once per frame while the browser is on screen, for anything
+    // the caller wants kept current without the page being torn down and
+    // rebuilt around it - the online chip in the corner, chiefly.
+    const std::function<void()>& on_frame = {}) {
 
         // The whole (filtered) library, straight onto the cover grid. The
         // view - sort order or a board/publisher narrowing - is changed from
@@ -1260,6 +1264,9 @@ int browse_library_grid(
     std::map<std::size_t, banner::banner_image> flow_marquee;
     std::map<std::size_t, banner::banner_image> flow_snap;
     std::map<std::size_t, banner::banner_image> flow_fanart;
+    // One cache per kind of art, because a game that has no cartridge photo
+    // must not be re-searched for one on every frame.
+    std::array<std::map<std::size_t, banner::banner_image>, 5> flow_extras;
     // Media names resolved once per game: media_names_for_choice hashes the
     // ROM archive to identify it, far too expensive for a per-frame call.
     std::map<std::size_t, std::vector<std::string>> flow_names;
@@ -1559,6 +1566,7 @@ int browse_library_grid(
                     return art;
                 },
                 [&] {
+                    if (on_frame) on_frame();
                     bool arrived = false;
                     for (banner::ready_banner& ready : banners.take_ready()) {
                         if (!ready.image.valid()) continue;
@@ -1658,8 +1666,7 @@ int browse_library_grid(
                     // nothing to show.
                     const banner::banner_image& snap = flow_art(
                         flow_snap,
-                        {"images", "titles", "title", "snaps", "snap",
-                         "thumbnails"});
+                        {"images", "snaps", "snap", "thumbnails"});
                     if (snap.valid()) {
                         media.snap_pixels = snap.rgba.data();
                         media.snap_w = snap.width;
@@ -1672,6 +1679,29 @@ int browse_library_grid(
                         media.fanart_pixels = fanart.rgba.data();
                         media.fanart_w = fanart.width;
                         media.fanart_h = fanart.height;
+                    }
+
+                    // Everything else the pack happens to have. Each is
+                    // one category only - no falling back - so a picture
+                    // never appears twice on the page under two names.
+                    static constexpr struct {
+                        const char* directory;
+                        const char* label;
+                    } other_art[] = {
+                        {"box3d",      "3D BOX"},
+                        {"titles",     "TITLE"},
+                        {"boxback",    "BACK"},
+                        {"cartridges", "CART"},
+                        {"cabinets",   "CABINET"},
+                    };
+                    for (std::size_t slot = 0;
+                         slot < flow_extras.size(); ++slot) {
+                        const banner::banner_image& art = flow_art(
+                            flow_extras[slot], {other_art[slot].directory});
+                        if (!art.valid()) continue;
+                        media.extras.push_back({art.rgba.data(), art.width,
+                                                art.height,
+                                                other_art[slot].label});
                     }
 
                     const rom_choice& choice = choices[entry];
@@ -1688,6 +1718,10 @@ int browse_library_grid(
                 return launcher_menu::exit_requested;
             if (selected_game == launcher_menu::interrupted)
                 return launcher_menu::interrupted;
+            // Anything that leaves the browser and comes straight back -
+            // an info page, a view change - comes back to the game that was
+            // on screen rather than to the top of the list.
+            remembered = menu.last_browse_selection();
             if (selected_game == launcher_menu::info_request) {
                 menu.show_text(page_title, board_info, "Back to Games");
                 continue;
@@ -2821,7 +2855,15 @@ rom_selection_result show_rom_selector(const std::string& current_path,
         // ONLINE or OFFLINE first, because that is the question, then who
         // is about. One line in the corner of the frame rather than two
         // tiles in the shelf.
-        {
+        //
+        // Written as something that can be called again while the browser is
+        // still on screen. It used to be built once per lap of this loop,
+        // which meant the only way to keep it honest was to leave the
+        // browser and come back every time the online layer breathed - and
+        // the online layer breathes every few seconds. That rebuilt the
+        // page, restarted the snap video and put the selection back on the
+        // first game in the first category, over and over.
+        const auto refresh_status = [&] {
             const bool signed_in = online && online->signed_in();
             const bool broken = online &&
                                 online->state() == online_state::error;
@@ -2852,16 +2894,18 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 else                       state += " on this network";
             }
             menu.set_status(state, !broken &&
-                                   (signed_in || lobby_connected_at_draw));
-        }
-        const uint64_t online_at_draw = online ? online->revision() : 0;
+                                   (signed_in || (lobby && lobby->connected())));
+        };
+        refresh_status();
+        // Only the things that genuinely need the browser to stop: a game
+        // starting elsewhere, and an invitation that has to be answered.
+        // Everything else the online layer reports - a heartbeat, a machine
+        // appearing, the connection coming back - is a change to one chip in
+        // the corner, and is drawn in place by the tick below.
         const std::function<bool()> interrupt = lobby ?
-            std::function<bool()>([lobby, online, lobby_connected_at_draw,
-                                   online_at_draw] {
+            std::function<bool()>([lobby] {
                 return lobby->launch_pending() ||
-                       lobby->connected() != lobby_connected_at_draw ||
-                       lobby->pending_invitation().has_value() ||
-                       (online && online->revision() != online_at_draw);
+                       lobby->pending_invitation().has_value();
             }) :
             std::function<bool()>{};
         // Someone on the other machine has asked for a game. Whatever this
@@ -3060,7 +3104,8 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     return everything ||
                            publisher_of(choice) == *selected_platform;
                 }, &play_style, interrupt,
-                everything ? "System Menu" : "Platforms");
+                everything ? "System Menu" : "Platforms",
+                refresh_status);
         }
         if (picked == launcher_menu::exit_requested) {
             rom_selection_result exit_result;
