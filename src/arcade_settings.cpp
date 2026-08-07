@@ -95,6 +95,12 @@ emulator_settings load_settings() {
             settings.chd_directory = std::string(value);
         else if (key == "media_directory")
             settings.media_directory = std::string(value);
+        else if (key == "browse_group") {
+            const std::string wanted(value);
+            if (wanted == "none" || wanted == "board" ||
+                wanted == "publisher" || wanted == "letter")
+                settings.browse_group = wanted;
+        }
         else if (key == "media_artwork_category") {
             // Still-image categories plus the two view modes stored in the
             // same key; "coverflow" missing here silently reverted the
@@ -151,6 +157,7 @@ bool save_settings(const emulator_settings& settings) {
            << "rom_directory=" << settings.rom_directory << '\n'
            << "chd_directory=" << settings.chd_directory << '\n'
            << "media_directory=" << settings.media_directory << '\n'
+           << "browse_group=" << settings.browse_group << '\n'
            << "media_artwork_category="
            << settings.media_artwork_category << '\n'
            << "library_setup_complete="

@@ -42,6 +42,10 @@ struct emulator_settings {
     // Artwork category shown in the game grid. It is strict: a missing file
     // draws the game's name rather than silently substituting old artwork.
     std::string media_artwork_category{"box2d"};
+    // How the library is grouped into the categories up and down move
+    // between: "none", "board", "publisher" or "letter". Kept because it is
+    // a way of looking at a shelf, not a thing you choose once per session.
+    std::string browse_group{"publisher"};
     bool library_setup_complete{false};
     // Cabinets on this network find each other by themselves, which is
     // lovely when that is what somebody wants and confusing when it is not:

@@ -269,6 +269,10 @@ struct launcher_menu::implementation {
     // text - the designer's outlines and mouse hit-testing read these.
     SDL_FRect cf_rects[4]{};
 
+    // Survives a trip out of the browse loop and back - see the note where
+    // it is used.
+    menu_stick browse_sticks;
+
     cf_element* cf_elements[4] = {&cf_layout.box, &cf_layout.snap,
                                   &cf_layout.marquee, &cf_layout.text};
 
@@ -891,9 +895,13 @@ struct launcher_menu::implementation {
 
         std::map<int, grid_texture> textures;
         int first_row = 0;
-        // Lives across events: an analogue stick's position only means
-        // something relative to where it was.
-        menu_stick sticks;
+        // Lives across events *and* across re-entry: an analogue stick's
+        // position only means something relative to where it was, and
+        // changing category leaves this loop and comes straight back into
+        // it. A tracker built fresh each time believes a stick still held
+        // down has just been pushed, so one nudge raced through every
+        // category and came round to the first game again.
+        menu_stick& sticks = browse_sticks;
         bool redraw = true;
         // Cover-flow initialisation
         Uint64 description_started = 0;
@@ -951,7 +959,7 @@ struct launcher_menu::implementation {
                                    textures, cover_for, back_label, chosen,
                                    wanted, item_descriptions,
                                    SDL_GetTicks() - description_started,
-                                   media_for);
+                                   media_for, paging);
                 } else {
                 draw_grid(title, description, items, selected, first_row,
                           metrics, textures, cover_for, back_label, chosen,
@@ -1085,22 +1093,35 @@ struct launcher_menu::implementation {
                 redraw = true;
             }
             if (horizontal) {
-                // On a paged view, pushing past the end turns the page - the
-                // way you would expect a book of boards to work. Shoulders
-                // and PgUp/PgDn still jump directly, but a stick and two
-                // buttons is all an arcade panel has, and this needs no
-                // instructions.
                 const int moved = selected + horizontal;
-                if (paging && (moved < 0 || moved >= total)) {
+                if (coverflow) {
+                    // A carousel that stops dead at Z is a carousel that is
+                    // hiding the rest of the shelf: the run of games in this
+                    // category comes round again rather than ending.
+                    selected = total <= 0 ? 0 : (moved % total + total) % total;
+                } else if (paging && (moved < 0 || moved >= total)) {
+                    // On a paged grid, pushing past the end turns the page -
+                    // the way you would expect a book of boards to work.
                     chosen.assign(1, horizontal < 0 ?
                                       launcher_menu::page_back :
                                       launcher_menu::page_forward);
                     break;
+                } else {
+                    selected = std::clamp(moved, 0, total - 1);
                 }
-                selected = std::clamp(moved, 0, total - 1);
                 redraw = true;
             }
             if (vertical) {
+                // Two axes, two questions. Across is "which game", down is
+                // "which category" - so a stick and nothing else walks the
+                // whole library, and neither direction is the other's
+                // overflow. On the grid, down is still the next row.
+                if (coverflow && paging) {
+                    chosen.assign(1, vertical < 0 ?
+                                      launcher_menu::page_back :
+                                      launcher_menu::page_forward);
+                    break;
+                }
                 const int moved = selected + vertical * metrics.columns;
                 if (moved >= 0 && moved < total) selected = moved;
                 redraw = true;
@@ -1410,7 +1431,7 @@ struct launcher_menu::implementation {
     // on one page with full-screen video background. Left/right slides the
     // entire view horizontally to the next/previous game with a smooth lerp.
     void draw_coverflow(
-            const std::string&, const std::string&,
+            const std::string& page_title, const std::string&,
             const std::vector<std::string>& items, int selected,
             std::map<int, grid_texture>& textures,
             const std::function<launcher_menu::cover(int)>& cover_for,
@@ -1418,7 +1439,8 @@ struct launcher_menu::implementation {
             const std::vector<int>& chosen, int wanted,
             const std::vector<std::string>* item_descriptions,
             Uint64 description_elapsed_ms,
-            const std::function<launcher_menu::game_media(int)>& media_for) {
+            const std::function<launcher_menu::game_media(int)>& media_for,
+            bool paging) {
 
         const int total = static_cast<int>(items.size());
 
@@ -1720,8 +1742,13 @@ struct launcher_menu::implementation {
         // the large type is what pushed the button legend off the bottom of
         // the screen. So it appears when the artwork cannot speak for the
         // game, and gets out of the way when it can.
-        const std::string& game_name =
-            items[static_cast<std::size_t>(selected)];
+        // The browse list marks each entry's state - "[ready]", "[missing
+        // files]" - which belongs on a list you are auditing, not under the
+        // box art of the game you are about to play.
+        std::string game_name = items[static_cast<std::size_t>(selected)];
+        const std::size_t state_mark = game_name.rfind("  [");
+        if (state_mark != std::string::npos && game_name.back() == ']')
+            game_name.erase(state_mark);
         int title_y = static_cast<int>(logical_height * lay.text.y);
         int heading_h = 0;
         const bool artwork_names_it = box_tex || marquee_tex;
@@ -1890,8 +1917,31 @@ struct launcher_menu::implementation {
             }
         }
 
+        // ---- Which category, and where in it ----------------------------
+        //
+        // Up and down move between categories, and a move you cannot see the
+        // result of is a move that feels broken. So the category is named on
+        // screen, with the position within it beside the name.
+        if (paging && !page_title.empty() && font) {
+            const std::string where = page_title + "   " +
+                std::to_string(selected + 1) + " / " + std::to_string(total);
+            rendered_text label = make_text(renderer, hint_font ? hint_font
+                                                                : font,
+                                            where, accent, 0);
+            const int pad = 10;
+            SDL_SetRenderDrawColor(renderer, 10, 16, 24, 200);
+            const SDL_FRect plate = frect(horizontal_margin - pad, 18 - 6,
+                                          label.width + pad * 2,
+                                          label.height + 12);
+            SDL_RenderFillRect(renderer, &plate);
+            draw_text(renderer, label, horizontal_margin, 18);
+            destroy_text(label);
+        }
+
         // ---- Hints -----------------------------------------------------
-        std::vector<hint> hints{{"", "Browse"}};
+        // The two axes do two different jobs now, and a d-pad labelled
+        // "Browse" says neither of them.
+        std::vector<hint> hints{{"", paging ? "Games / Category" : "Games"}};
         hints.push_back({"A", wanted > 0 ?
             "Hold (" + std::to_string(chosen.size()) + " of " +
                 std::to_string(wanted) + ")" : std::string("Play")});

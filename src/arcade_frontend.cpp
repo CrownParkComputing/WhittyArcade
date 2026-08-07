@@ -21,6 +21,8 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <array>
 #include <thread>
 #include <cstdio>
@@ -1159,6 +1161,38 @@ fs::path source_media_root() {
     return {};
 }
 
+// The letter a game files under. Leading articles are skipped, because a
+// shelf where a third of the titles are under T is not a shelf anybody can
+// use, and everything that is not a letter files together under #.
+std::string initial_of(const rom_choice& choice) {
+    std::string name = choice.label;
+    for (const char* article : {"The ", "A ", "An "}) {
+        const std::size_t length = std::strlen(article);
+        if (name.size() > length &&
+            std::equal(article, article + length, name.begin(),
+                       [](char a, char b) {
+                           return std::tolower(static_cast<unsigned char>(a)) ==
+                                  std::tolower(static_cast<unsigned char>(b));
+                       })) {
+            name = name.substr(length);
+            break;
+        }
+    }
+    if (name.empty()) return "#";
+    const unsigned char first = static_cast<unsigned char>(name[0]);
+    if (!std::isalpha(first)) return "#";
+    return std::string(1, static_cast<char>(std::toupper(first)));
+}
+
+// One publisher per page, not one credit line per page. "Armenia / Food
+// and Fun" is two names on a cabinet, and paging by the pair puts a
+// category of one game between Atari and Capcom.
+std::string publisher_group_of(const rom_choice& choice) {
+    const std::size_t split = choice.publisher.find(" / ");
+    return split == std::string::npos ? choice.publisher
+                                      : choice.publisher.substr(0, split);
+}
+
 bool matches_play_style(const rom_choice& choice, int style) {
     if (style <= 0) return true;
     const launch_capabilities caps = probe_choice(choice);
@@ -1250,8 +1284,22 @@ int browse_library_grid(
         // Paging: By Board / By Publisher turn the grid into a carousel - one
         // page per board or publisher, flipped with PgUp/PgDn or the shoulder
         // buttons, each page showing every game that belongs to it.
-        int page_mode = 0;         // 0 none, 1 boards, 2 publishers
+        // 0 none, 1 boards, 2 publishers, 3 first letter. This is the
+        // thing up and down move between, so it starts from the saved
+        // choice rather than at "no grouping" - a carousel where one axis
+        // does nothing is a carousel with half its library out of reach.
+        const auto group_mode_of = [](const std::string& name) {
+            if (name == "board") return 1;
+            if (name == "publisher") return 2;
+            if (name == "letter") return 3;
+            return 0;
+        };
+        int page_mode = group_mode_of(load_settings().browse_group);
         int page_index = 0;
+        // The first category shown is the fullest one, not whichever name
+        // sorts first. Opening on a publisher with a single game reads as a
+        // library with one game in it.
+        bool page_picked = false;
         int remembered = 0;
         for (;;) {
             // The pages that exist under the current style filter, rebuilt every
@@ -1272,17 +1320,44 @@ int browse_library_grid(
                     if (page_counts[slot] > 0)
                         board_pages.push_back(static_cast<int>(slot));
                 if (board_pages.empty()) page_mode = 0;
-            } else if (page_mode == 2) {
+                else if (!page_picked) {
+                    page_picked = true;
+                    int best = 0;
+                    for (std::size_t index = 0; index < board_pages.size();
+                         ++index) {
+                        const std::size_t slot = static_cast<std::size_t>(
+                            board_pages[index]);
+                        if (page_counts[slot] > page_counts[
+                                static_cast<std::size_t>(board_pages[
+                                    static_cast<std::size_t>(best)])])
+                            best = static_cast<int>(index);
+                    }
+                    page_index = best;
+                }
+            } else if (page_mode == 2 || page_mode == 3) {
                 std::map<std::string, int> counted;
                 for (const browse_entry& entry : entries) {
                     const rom_choice& choice = choices[entry.index];
                     if (play_style && !matches_play_style(choice, *play_style))
                         continue;
-                    if (!choice.publisher.empty()) ++counted[choice.publisher];
+                    const std::string key = page_mode == 3 ?
+                        initial_of(choice) : publisher_group_of(choice);
+                    if (!key.empty()) ++counted[key];
                 }
-                for (const auto& publisher : counted)
-                    publisher_pages.push_back(publisher.first);
+                for (const auto& page : counted)
+                    publisher_pages.push_back(page.first);
                 if (publisher_pages.empty()) page_mode = 0;
+                else if (!page_picked) {
+                    page_picked = true;
+                    int best = 0;
+                    for (std::size_t index = 0; index < publisher_pages.size();
+                         ++index)
+                        if (counted[publisher_pages[index]] >
+                            counted[publisher_pages[
+                                static_cast<std::size_t>(best)]])
+                            best = static_cast<int>(index);
+                    page_index = best;
+                }
             }
             const int page_count = page_mode == 1 ?
                 static_cast<int>(board_pages.size()) :
@@ -1324,7 +1399,9 @@ int browse_library_grid(
                     board_slot(choice.board) != board_narrow)
                     continue;
                 if (!publisher_narrow.empty() &&
-                    choice.publisher != publisher_narrow)
+                    (page_mode == 3 ? initial_of(choice)
+                                    : publisher_group_of(choice)) !=
+                        publisher_narrow)
                     continue;
                 visible.push_back(entry);
             }
@@ -1631,8 +1708,8 @@ int browse_library_grid(
                     "box2d", "box3d", "marquee", "coverflow",
                 }};
                 constexpr int first_sort = 4;   // cards 4..7 pick the order
-                constexpr int first_group = 8;  // cards 8..9 pick the paging
-                constexpr int arrange = 10;     // card 10 opens the designer
+                constexpr int first_group = 8;  // cards 8..11 pick the filter
+                constexpr int arrange = 12;     // card 12 opens the designer
                 int current = 0;
                 for (std::size_t index = 0; index < categories.size(); ++index)
                     if (media_category == categories[index])
@@ -1655,10 +1732,14 @@ int browse_library_grid(
                       launcher_menu::mode_icon::refresh},
                      {"Last Played", "Pick up where you left off",
                       launcher_menu::mode_icon::solo},
-                     {"By Board", "One page per board",
+                     {"Filter: Board", "Up and down move between boards",
                       launcher_menu::mode_icon::storage},
-                     {"By Publisher", "One page per publisher",
+                     {"Filter: Publisher", "Up and down move between makers",
                       launcher_menu::mode_icon::folder},
+                     {"Filter: Letter", "Up and down move A to Z",
+                      launcher_menu::mode_icon::audit},
+                     {"Filter: Off", "One long run of every game",
+                      launcher_menu::mode_icon::refresh},
                      {"Arrange Page", "Move and resize the cover-flow art",
                       launcher_menu::mode_icon::cover_3d}},
                     "Back to Games", current);
@@ -1675,9 +1756,17 @@ int browse_library_grid(
                 } else if (picked >= first_sort && picked < first_group) {
                     sort_mode = picked - first_sort;
                     page_mode = 0;
-                } else if (picked == first_group || picked == first_group + 1) {
-                    page_mode = picked - first_group + 1;
+                } else if (picked >= first_group &&
+                           picked < first_group + 4) {
+                    // Board, publisher, letter, off - in that order.
+                    static const char* const names[] = {
+                        "board", "publisher", "letter", "none"};
+                    const int wanted = picked - first_group;
+                    page_mode = wanted == 3 ? 0 : wanted + 1;
                     page_index = 0;
+                    emulator_settings settings = load_settings();
+                    settings.browse_group = names[wanted];
+                    save_settings(settings);
                 } else if (picked == arrange) {
                     // Arranging is only meaningful over the cover-flow page,
                     // so asking for it from any other view switches to it
