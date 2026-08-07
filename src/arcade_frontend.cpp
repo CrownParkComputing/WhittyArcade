@@ -789,7 +789,9 @@ void show_library_folder_settings(launcher_menu& menu) {
              {"Disconnect NAS", "Keep the local copied media",
               launcher_menu::mode_icon::exit},
              {"Restore Defaults", "Use MANX's recommended folders",
-              launcher_menu::mode_icon::settings}},
+              launcher_menu::mode_icon::settings},
+             {"Run Setup Again", "Walk through first-time setup",
+              launcher_menu::mode_icon::refresh}},
             "Back to Settings");
         if (selected < 0) return;
         if (selected == 0) {
@@ -822,6 +824,23 @@ void show_library_folder_settings(launcher_menu& menu) {
         } else if (selected == 7) {
             settings.rom_directory.clear();
             settings.chd_directory.clear();
+        } else if (selected == 8) {
+            // The wizard only ever ran on a machine that had never been set
+            // up, so on every other machine there was no way to see it again
+            // - not to change a folder, not to fetch the link settings it
+            // offers, not to read what it says about any of them. Clearing
+            // the flag is all it takes: the launcher runs it on the way back
+            // in, and everything it asks defaults to what is already set.
+            settings.library_setup_complete = false;
+            save_settings(settings);
+            menu.show_text(
+                "Setup will run next time MANX starts",
+                "The flag it checks is read once, when the launcher opens, "
+                "so this takes effect the next time you start MANX - or when "
+                "you come back to the shelf after a game.\n\nEvery question "
+                "already knows your current answer, so it is confirming "
+                "rather than choosing again.");
+            continue;
         }
         save_library_folders(menu, settings);
     }
