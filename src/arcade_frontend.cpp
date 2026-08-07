@@ -3154,45 +3154,78 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                     // not a game the others are missing. Saying so where it
                     // is true keeps NOT ON THE OTHERS meaning one thing.
                     const bool game_can_network = caps.network_two_player;
+                    // Three ways to play, always the same three, in the
+                    // same order. Which one is missing used to depend on
+                    // the game's metadata, whether the LAN was switched on
+                    // and whether another cabinet happened to be answering
+                    // at that moment - so the menu changed shape under
+                    // somebody who had learnt it. They are all here every
+                    // time; the one you cannot use says why.
                     std::vector<launcher_menu::mode_card> how;
                     std::vector<int> how_style;
-                    how.push_back({"Single Player", "One player, one cabinet",
+                    how.push_back({"Single Player", "One player, this cabinet",
                                    launcher_menu::mode_icon::solo});
                     how_style.push_back(0);
+
+                    // Two people, one cabinet - however this particular
+                    // board did it.
+                    int local_style = -1;
+                    const char* local_detail = "";
                     if (caps.multiplayer ==
                             arcade_multiplayer_mode::alternating) {
-                        how.push_back({"Local Multiplayer",
-                                       "Take turns on this cabinet",
-                                       launcher_menu::mode_icon::local_players});
-                        how_style.push_back(1);
+                        local_style = 1;
+                        local_detail = "Take turns on this cabinet";
                     } else if (caps.multiplayer ==
                                    arcade_multiplayer_mode::simultaneous) {
-                        how.push_back({"Local Multiplayer",
-                                       "Play together on this cabinet",
-                                       launcher_menu::mode_icon::local_players});
-                        how_style.push_back(2);
+                        local_style = 2;
+                        local_detail = "Play together on this cabinet";
+                    } else if (caps.network_two_player) {
+                        local_style = 3;
+                        local_detail = "A separate view for each player";
                     }
-                    if (caps.network_two_player) {
-                        how.push_back({"Split Screen",
-                                       "A separate view for each player",
-                                       launcher_menu::mode_icon::split_screen});
-                        how_style.push_back(3);
-                    }
-                    // Only when this cabinet is looking for the others. With
-                    // network play switched off there is nothing here to
-                    // offer and nothing to explain.
-                    if (lobby && lobby->lan_discovery() && peer_connected) {
-                        how.push_back({"Network Play",
-                                       "Play across the network",
-                                       launcher_menu::mode_icon::network, 0,
-                                       !peer_ready || !game_can_network,
-                                       !game_can_network
-                                           ? "NOT THIS GAME"
-                                           : (peer_ready
-                                                  ? "READY"
-                                                  : "NOT ON THE OTHERS")});
-                        how_style.push_back(5);
-                    }
+                    how.push_back({"Local Two Player",
+                                   local_style >= 0 ? local_detail
+                                                    : "This game is one "
+                                                      "player only",
+                                   launcher_menu::mode_icon::local_players,
+                                   0, local_style < 0,
+                                   local_style < 0 ? "ONE PLAYER" : ""});
+                    how_style.push_back(local_style);
+
+                    // One entry for playing somebody else, wherever they
+                    // are. Nothing is hosted, joined or created by hand:
+                    // picking this opens a lobby for this game - or steps
+                    // into one that is already open for it - and waits.
+                    // Another cabinet on this network that already has the
+                    // game and is answering skips all of that and goes
+                    // straight across.
+                    const bool signed_in = online && online->signed_in();
+                    const bool direct_now = peer_connected && peer_ready &&
+                                            game_can_network;
+                    const int online_style =
+                        !game_can_network ? -1 :
+                        direct_now        ?  5 :
+                        signed_in         ?  6 : -1;
+                    const char* online_badge =
+                        !game_can_network ? "NOT THIS GAME" :
+                        direct_now        ? "READY" :
+                        signed_in         ? "" : "SIGN IN FIRST";
+                    how.push_back({"Head to Head",
+                                   !game_can_network
+                                       ? "This game cannot be played across "
+                                         "two machines"
+                                       : direct_now
+                                             ? "The other cabinet here is "
+                                               "ready"
+                                             : signed_in
+                                                   ? "Waits here until "
+                                                     "somebody joins you"
+                                                   : "Sign in from the "
+                                                     "corner to play online",
+                                   launcher_menu::mode_icon::network,
+                                   0, online_style < 0, online_badge});
+                    how_style.push_back(online_style);
+
                     const int how_chosen = menu.select_modes(
                         choice.label,
                         "Choose how this game should launch.", how,
@@ -3213,8 +3246,95 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                         how_chosen >= static_cast<int>(how_style.size()))
                         break;
                     wanted = how_style[static_cast<std::size_t>(how_chosen)];
+                    if (wanted < 0) {
+                        // A card that says why it cannot be used, chosen
+                        // anyway. Asking again is the honest response.
+                        wanted = -1;
+                        continue;
+                    }
                 }
                 if (wanted < 0) continue;   // backed out
+                if (wanted == 6) {
+                    // Head to head with nobody here yet. There is no lobby
+                    // to make and none to find by hand: if somebody already
+                    // has one open for this game, this steps into it, and
+                    // otherwise it opens one and waits. Either way the
+                    // game was chosen first and everything else follows
+                    // from it.
+                    const auto identity = identify_arcade_game(choice.path);
+                    const rom_set_manifest* manifest = identity ?
+                        find_supported_rom_set(identity->short_name) :
+                        nullptr;
+                    if (!identity || !manifest) continue;
+                    std::string mode = "simultaneous";
+                    if (manifest->multiplayer ==
+                            arcade_multiplayer_mode::alternating)
+                        mode = "alternating";
+                    if (supports_native_system_link(*manifest))
+                        mode = "native_link";
+
+                    online->refresh_lobbies();
+                    std::string joining;
+                    for (const online_lobby& open : online->lobbies()) {
+                        if (open.stale || open.game != identity->short_name)
+                            continue;
+                        if (open.members >= std::max(open.places, 2)) continue;
+                        joining = open.id;
+                        break;
+                    }
+                    if (joining.empty())
+                        online->create_lobby(true, identity->short_name,
+                                             choice.label, 2, mode);
+                    else
+                        online->join_lobby(joining);
+
+                    // Waiting, and nothing else. The only thing to decide
+                    // here is whether to keep waiting.
+                    online->set_foreground(true);
+                    rom_selection_result started;
+                    for (;;) {
+                        if (rom_selection_result go = drive_online_session();
+                            go.action == rom_selection_action::selected) {
+                            started = go;
+                            break;
+                        }
+                        const std::size_t here =
+                            std::max<std::size_t>(online->members().size(), 1);
+                        const std::string standing =
+                            std::to_string(here) + " of 2 machines here";
+                        const int said = menu.select_modes(
+                            "Waiting for another player",
+                            choice.label + "  -  " + standing +
+                                ".\nIt starts by itself the moment somebody "
+                                "joins.",
+                            {launcher_menu::mode_card{
+                                "Keep Waiting", standing,
+                                launcher_menu::mode_icon::network}},
+                            "Stop Waiting", 0,
+                            [&, here] {
+                                return online->members().size() != here ||
+                                       online->lobby_starting() ||
+                                       lobby->launch_pending();
+                            });
+                        if (said == launcher_menu::interrupted) continue;
+                        if (said == launcher_menu::exit_requested) {
+                            online->leave_lobby();
+                            online->set_foreground(false);
+                            rom_selection_result exit_result;
+                            exit_result.action =
+                                rom_selection_action::exit_requested;
+                            return exit_result;
+                        }
+                        if (said < 0) {          // Stop Waiting
+                            online->leave_lobby();
+                            break;
+                        }
+                    }
+                    online->set_foreground(false);
+                    if (started.action == rom_selection_action::selected)
+                        return started;
+                    continue;               // gave up; back to the games
+                }
                 if (wanted == 5) {
                     // Across two computers: the partner launches itself.
                     const auto identity = identify_arcade_game(choice.path);
