@@ -2692,6 +2692,10 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // carousel short and coherent instead of mixing every board generation.
     int play_style = 0;
     std::optional<std::string> selected_platform;
+    // True from the moment the launcher opens: the games are what somebody
+    // came to see. Cleared only if they deliberately go to the publisher
+    // shelf, which is now a filter rather than a doorway.
+    bool browse_everything = true;
     int platform_cursor = 0;
     // Set when this machine has just agreed to a game: the network page is
     // opened for them rather than left to be found.
@@ -2851,7 +2855,14 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             }
         }
         bool system_menu_requested = false;
-        if (!selected_platform) {
+        // The front door is the games.
+        //
+        // It used to be a shelf of publishers: a screen you had to get past
+        // before seeing a single game, answering a question - "whose?" -
+        // that most people do not have when they sit down. The browser
+        // already pages by publisher, so that choice is still there, one
+        // button away, inside the thing you actually came for.
+        if (!selected_platform && !browse_everything) {
             std::vector<launcher_menu::mode_card> platform_cards;
             std::vector<std::string> platform_logo_keys;
             platform_cards.reserve(platforms.size());
@@ -2952,12 +2963,15 @@ rom_selection_result show_rom_selector(const std::string& current_path,
 
         int picked = -1;
         if (!system_menu_requested) {
-            const std::string title = *selected_platform;
+            const bool everything = !selected_platform;
+            const std::string title = everything ? "MANX" : *selected_platform;
             picked = browse_library_grid(
                 menu, choices, banners, banner_pixels, title,
                 [&](const rom_choice& choice) {
-                    return publisher_of(choice) == *selected_platform;
-                }, &play_style, interrupt, "Platforms");
+                    return everything ||
+                           publisher_of(choice) == *selected_platform;
+                }, &play_style, interrupt,
+                everything ? "System Menu" : "Platforms");
         }
         if (picked == launcher_menu::exit_requested) {
             rom_selection_result exit_result;
@@ -2970,9 +2984,17 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             continue;
         }
         if (!system_menu_requested && picked < 0) {
-            selected_platform.reset();
-            play_style = 0;
-            continue;
+            // Back out of the whole library goes to the system menu, because
+            // there is nothing above it any more. Back out of one publisher
+            // returns to the whole library, which is where it came from.
+            if (!selected_platform) {
+                system_menu_requested = true;
+            } else {
+                selected_platform.reset();
+                browse_everything = true;
+                play_style = 0;
+                continue;
+            }
         }
         if (picked >= 0) {
             const rom_choice& choice =
