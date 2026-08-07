@@ -240,12 +240,23 @@ struct launcher_menu::implementation {
     struct cf_layout_t {
         cf_element box, snap, marquee, text;
     };
+    // Evenly across the screen, and the words underneath all of it.
+    //
+    // The old arrangement put the box hard left, the screenshot hard right
+    // and everything else in the gap between them, where the marquee, the
+    // synopsis and the button legend fought over the same few rows. Three
+    // panels at thirds, one height, and the text below them - so nothing is
+    // drawn over anything else and the page reads top to bottom.
     static constexpr cf_layout_t cf_layout_defaults{
-        {0.16f, 0.46f, 1.0f},   // box art, left
-        {0.74f, 0.44f, 1.0f},   // screenshot, right
-        {0.50f, 0.84f, 1.0f},   // marquee above the title
-        {0.50f, 0.905f, 1.0f},  // title + metadata + synopsis block
+        {0.18f, 0.40f, 1.0f},   // box art
+        {0.82f, 0.40f, 1.0f},   // screenshot / video
+        {0.50f, 0.40f, 1.0f},   // marquee, between them
+        {0.50f, 0.72f, 1.0f},   // synopsis, under the lot
     };
+    // Bumped when the arrangement above changes shape. A layout saved under
+    // an older one describes positions that no longer make sense together,
+    // and silently keeping it means nobody ever sees the new design.
+    static constexpr int cf_layout_version = 2;
     cf_layout_t cf_layout{cf_layout_defaults};
     bool cf_layout_loaded{};
     bool cf_design{};
@@ -273,10 +284,16 @@ struct launcher_menu::implementation {
         std::ifstream input(cf_layout_path());
         if (!input) return;
         std::string line;
+        int version = 1;   // files written before the marker existed
+        std::vector<std::pair<std::string, cf_element>> saved;
         while (std::getline(input, line)) {
             const std::size_t equals = line.find('=');
             if (equals == std::string::npos) continue;
             const std::string key = line.substr(0, equals);
+            if (key == "version") {
+                version = std::atoi(line.c_str() + equals + 1);
+                continue;
+            }
             cf_element value{};
             if (std::sscanf(line.c_str() + equals + 1, "%f,%f,%f",
                             &value.x, &value.y, &value.scale) != 3)
@@ -284,6 +301,12 @@ struct launcher_menu::implementation {
             value.x = std::clamp(value.x, 0.0f, 1.0f);
             value.y = std::clamp(value.y, 0.0f, 1.0f);
             value.scale = std::clamp(value.scale, 0.3f, 2.5f);
+            saved.emplace_back(key, value);
+        }
+        // An older file is read and then discarded: its numbers were chosen
+        // against a layout that no longer exists.
+        if (version != cf_layout_version) return;
+        for (const auto& [key, value] : saved) {
             if (key == "box") cf_layout.box = value;
             else if (key == "snap") cf_layout.snap = value;
             else if (key == "marquee") cf_layout.marquee = value;
@@ -303,6 +326,7 @@ struct launcher_menu::implementation {
                           value.x, value.y, value.scale);
             output << line;
         };
+        output << "version=" << cf_layout_version << "\n";
         write("box", cf_layout.box);
         write("snap", cf_layout.snap);
         write("marquee", cf_layout.marquee);
@@ -1768,19 +1792,34 @@ struct launcher_menu::implementation {
         const int desc_y = title_y + heading_h + 8;
         int desc_bottom = desc_y;
         if (!selected_description.empty()) {
+            // Wide, because it now sits under the artwork rather than in the
+            // gap between two panels, and there is the whole screen to use.
             const int desc_width = static_cast<int>(
-                logical_width * 0.45f * text_scale);
+                logical_width * 0.72f * text_scale);
             rendered_text line = make_text(
                 renderer, desc_font ? desc_font : font, selected_description,
                 muted, static_cast<int>(desc_width / text_scale));
-            const int line_w = static_cast<int>(line.width * text_scale);
             const int line_h = static_cast<int>(line.height * text_scale);
+
+            // The synopsis is wrapped, so it is never wider than the space it
+            // is given - it is *taller*. Sliding it sideways, which is what
+            // this used to do, therefore moved it not one pixel, while the
+            // full wrapped block drew straight down over the button legend.
+            // So: show a few lines, and walk down through the rest.
+            // The font's own line pitch, not the height of a rendered
+            // sample: a band that is not a whole number of lines slices the
+            // last one in half and looks like a rendering fault.
+            const int row_h = std::max(
+                static_cast<int>(TTF_GetFontLineSkip(
+                    desc_font ? desc_font : font) * text_scale), 12);
+            const int band_h = std::min(line_h, row_h * 3);
+
             int offset = 0;
-            const int travel = std::max(0, line_w - desc_width);
+            const int travel = std::max(0, line_h - band_h);
             if (travel > 0 && description_elapsed_ms > 0) {
-                constexpr Uint64 hold_ms = 2200;
-                constexpr Uint64 end_hold_ms = 1100;
-                constexpr Uint64 pixels_per_second = 36;
+                constexpr Uint64 hold_ms = 2600;
+                constexpr Uint64 end_hold_ms = 1800;
+                constexpr Uint64 pixels_per_second = 22;
                 const Uint64 travel_ms =
                     static_cast<Uint64>(travel) * 1000 / pixels_per_second;
                 const Uint64 cycle = hold_ms + travel_ms + end_hold_ms;
@@ -1789,82 +1828,23 @@ struct launcher_menu::implementation {
                     offset = static_cast<int>(std::min<Uint64>(
                         travel,
                         (phase - hold_ms) * pixels_per_second / 1000));
+                // Land on a line rather than between two, so the band always
+                // holds whole lines of text once it stops moving.
+                if (offset >= travel) offset = travel - travel % row_h;
             }
             const int desc_x = static_cast<int>(
                 logical_width * centre_x_pct - desc_width / 2 + slide_offset);
-            const SDL_Rect clip{desc_x, desc_y, desc_width,
-                                std::max(line_h + 2, 24)};
-            draw_text_scaled(renderer, line, desc_x - offset, desc_y,
+            const SDL_Rect clip{desc_x, desc_y, desc_width, band_h};
+            draw_text_scaled(renderer, line, desc_x, desc_y - offset,
                              text_scale, &clip);
             destroy_text(line);
-            desc_bottom = desc_y + std::max(line_h, 24);
+            desc_bottom = desc_y + band_h;
             text_left = std::min(text_left, desc_x);
             text_right = std::max(text_right, desc_x + desc_width);
         }
         cf_rects[3] = frect(text_left, title_y,
                             std::max(text_right - text_left, 40),
                             std::max(desc_bottom - title_y, 40));
-
-        // ---- Everything the pack has for this game ----------------------
-        //
-        // A strip of small boxes under the text, one per kind of artwork
-        // that actually exists. It is the honest answer to "what media does
-        // this game have?" - a gap in the strip is a gap in the pack, which
-        // is worth seeing rather than guessing at from a page that silently
-        // draws whatever it found.
-        //
-        // Deliberately small and deliberately last: the big picture above is
-        // the one being chosen from, and these are its supporting cast.
-        {
-            struct thumb { SDL_Texture* texture; const char* label; };
-            const thumb strip[] = {
-                {box_tex, "BOX"},
-                {marquee_tex, "MARQUEE"},
-                {snap_tex, "SCREEN"},
-            };
-            int shown = 0;
-            for (const thumb& entry : strip) if (entry.texture) ++shown;
-            if (shown > 0) {
-                const int box_w = 108;
-                const int box_h = 76;
-                const int gap = 12;
-                const int band = shown * box_w + (shown - 1) * gap;
-                int x = static_cast<int>(logical_width * centre_x_pct -
-                                         band / 2 + slide_offset);
-                const int y = std::min(desc_bottom + 18,
-                                       logical_height - box_h - 74);
-                for (const thumb& entry : strip) {
-                    if (!entry.texture) continue;
-                    const SDL_FRect frame = frect(x, y, box_w, box_h);
-                    SDL_SetRenderDrawColor(renderer, 12, 18, 26, 220);
-                    SDL_RenderFillRect(renderer, &frame);
-                    // Fitted inside its box, never stretched: a squashed
-                    // marquee is worse than a smaller one.
-                    float pw = 0, ph = 0;
-                    SDL_GetTextureSize(entry.texture, &pw, &ph);
-                    const float scale = std::min(
-                        (box_w - 8) / std::max(pw, 1.0f),
-                        (box_h - 8) / std::max(ph, 1.0f));
-                    const SDL_FRect where = frect(
-                        x + (box_w - static_cast<int>(pw * scale)) / 2,
-                        y + (box_h - static_cast<int>(ph * scale)) / 2,
-                        static_cast<int>(pw * scale),
-                        static_cast<int>(ph * scale));
-                    SDL_SetTextureAlphaMod(entry.texture, 255);
-                    SDL_RenderTexture(renderer, entry.texture, nullptr, &where);
-                    SDL_SetRenderDrawColor(renderer, 46, 62, 78, 255);
-                    SDL_RenderRect(renderer, &frame);
-                    if (TTF_Font* small = hint_font ? hint_font : font) {
-                        rendered_text tag = make_text(renderer, small,
-                                                      entry.label, muted);
-                        draw_text(renderer, tag,
-                                  x + (box_w - tag.width) / 2, y + box_h + 2);
-                        destroy_text(tag);
-                    }
-                    x += box_w + gap;
-                }
-            }
-        }
 
         // ---- Navigation arrows (subtle, at sides) -----------------------
         SDL_SetRenderDrawColor(renderer, 70, 208, 255, 80);
