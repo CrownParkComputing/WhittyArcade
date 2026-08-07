@@ -1688,22 +1688,34 @@ struct launcher_menu::implementation {
         const float text_scale = lay.text.scale;
         int text_left = logical_width;
         int text_right = 0;
+        // The game's name is drawn only when there is no artwork carrying
+        // it.
+        //
+        // On a page whose whole point is the box art and the marquee, the
+        // name is written twice - once in pictures, once in large type - and
+        // the large type is what pushed the button legend off the bottom of
+        // the screen. So it appears when the artwork cannot speak for the
+        // game, and gets out of the way when it can.
         const std::string& game_name =
             items[static_cast<std::size_t>(selected)];
-        rendered_text heading = make_text(
-            renderer, title_font ? title_font : font,
-            game_name, accent,
-            static_cast<int>((logical_width - horizontal_margin * 2) /
-                             text_scale));
         int title_y = static_cast<int>(logical_height * lay.text.y);
-        const int heading_w = static_cast<int>(heading.width * text_scale);
-        const int heading_x = static_cast<int>(
-            logical_width * centre_x_pct - heading_w / 2 + slide_offset);
-        draw_text_scaled(renderer, heading, heading_x, title_y, text_scale);
-        int heading_h = static_cast<int>(heading.height * text_scale);
-        text_left = std::min(text_left, heading_x);
-        text_right = std::max(text_right, heading_x + heading_w);
-        destroy_text(heading);
+        int heading_h = 0;
+        const bool artwork_names_it = box_tex || marquee_tex;
+        if (!artwork_names_it) {
+            rendered_text heading = make_text(
+                renderer, title_font ? title_font : font,
+                game_name, accent,
+                static_cast<int>((logical_width - horizontal_margin * 2) /
+                                 text_scale));
+            const int heading_w = static_cast<int>(heading.width * text_scale);
+            const int heading_x = static_cast<int>(
+                logical_width * centre_x_pct - heading_w / 2 + slide_offset);
+            draw_text_scaled(renderer, heading, heading_x, title_y, text_scale);
+            heading_h = static_cast<int>(heading.height * text_scale);
+            text_left = std::min(text_left, heading_x);
+            text_right = std::max(text_right, heading_x + heading_w);
+            destroy_text(heading);
+        }
 
         // ---- Metadata row ----------------------------------------------
         std::string meta;
@@ -1792,6 +1804,67 @@ struct launcher_menu::implementation {
         cf_rects[3] = frect(text_left, title_y,
                             std::max(text_right - text_left, 40),
                             std::max(desc_bottom - title_y, 40));
+
+        // ---- Everything the pack has for this game ----------------------
+        //
+        // A strip of small boxes under the text, one per kind of artwork
+        // that actually exists. It is the honest answer to "what media does
+        // this game have?" - a gap in the strip is a gap in the pack, which
+        // is worth seeing rather than guessing at from a page that silently
+        // draws whatever it found.
+        //
+        // Deliberately small and deliberately last: the big picture above is
+        // the one being chosen from, and these are its supporting cast.
+        {
+            struct thumb { SDL_Texture* texture; const char* label; };
+            const thumb strip[] = {
+                {box_tex, "BOX"},
+                {marquee_tex, "MARQUEE"},
+                {snap_tex, "SCREEN"},
+            };
+            int shown = 0;
+            for (const thumb& entry : strip) if (entry.texture) ++shown;
+            if (shown > 0) {
+                const int box_w = 108;
+                const int box_h = 76;
+                const int gap = 12;
+                const int band = shown * box_w + (shown - 1) * gap;
+                int x = static_cast<int>(logical_width * centre_x_pct -
+                                         band / 2 + slide_offset);
+                const int y = std::min(desc_bottom + 18,
+                                       logical_height - box_h - 74);
+                for (const thumb& entry : strip) {
+                    if (!entry.texture) continue;
+                    const SDL_FRect frame = frect(x, y, box_w, box_h);
+                    SDL_SetRenderDrawColor(renderer, 12, 18, 26, 220);
+                    SDL_RenderFillRect(renderer, &frame);
+                    // Fitted inside its box, never stretched: a squashed
+                    // marquee is worse than a smaller one.
+                    float pw = 0, ph = 0;
+                    SDL_GetTextureSize(entry.texture, &pw, &ph);
+                    const float scale = std::min(
+                        (box_w - 8) / std::max(pw, 1.0f),
+                        (box_h - 8) / std::max(ph, 1.0f));
+                    const SDL_FRect where = frect(
+                        x + (box_w - static_cast<int>(pw * scale)) / 2,
+                        y + (box_h - static_cast<int>(ph * scale)) / 2,
+                        static_cast<int>(pw * scale),
+                        static_cast<int>(ph * scale));
+                    SDL_SetTextureAlphaMod(entry.texture, 255);
+                    SDL_RenderTexture(renderer, entry.texture, nullptr, &where);
+                    SDL_SetRenderDrawColor(renderer, 46, 62, 78, 255);
+                    SDL_RenderRect(renderer, &frame);
+                    if (TTF_Font* small = hint_font ? hint_font : font) {
+                        rendered_text tag = make_text(renderer, small,
+                                                      entry.label, muted);
+                        draw_text(renderer, tag,
+                                  x + (box_w - tag.width) / 2, y + box_h + 2);
+                        destroy_text(tag);
+                    }
+                    x += box_w + gap;
+                }
+            }
+        }
 
         // ---- Navigation arrows (subtle, at sides) -----------------------
         SDL_SetRenderDrawColor(renderer, 70, 208, 255, 80);
