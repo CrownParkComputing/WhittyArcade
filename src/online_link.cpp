@@ -670,8 +670,12 @@ void online_link::apply_lobby(const json& detail, bool going) {
             members.push_back(member_from_service(entry));
 
     std::string me;
+    std::size_t was = 0;
+    bool was_starting = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        was = m_members.size();
+        was_starting = m_lobby_starting;
         me = m_uid;
         m_lobby_id = summary.id;
         m_lobby_game = detail.value("game", std::string());
@@ -685,6 +689,15 @@ void online_link::apply_lobby(const json& detail, bool going) {
         m_seed = detail.value("seed", 0);
         m_delay_frames = detail.value("delayFrames", 3);
     }
+
+    // Said out loud, because "two machines are here and nothing is
+    // happening" is otherwise indistinguishable from "one machine is here".
+    if (members.size() != was)
+        std::printf("MANX online: lobby %s has %zu machine(s) of %d\n",
+                    summary.id.c_str(), members.size(), summary.places);
+    if (going && !was_starting)
+        std::printf("MANX online: the service says go - %zu machine(s)\n",
+                    members.size());
 
     // The handover. Every address the service knows about, both candidates
     // for each machine, handed to the lobby thread - which from here treats
@@ -1787,7 +1800,19 @@ void online_link::run() {
         // their next poll happened to fall.
         if (pending_start && !current_lobby.empty()) {
             pending_start = false;
-            service("/api/lobby/start", json::object());
+            const json answer = service("/api/lobby/start", json::object());
+            // The service refusing to start is the one thing that has to be
+            // said out loud. Swallowed, it looks exactly like a lobby that
+            // is still waiting - two machines on screen, nothing happening,
+            // and nothing anywhere saying why.
+            const auto problem = answer.find("error");
+            if (problem != answer.end() && problem->is_string())
+                std::printf("MANX online: the service would not start the "
+                            "game: %s\n",
+                            problem->get<std::string>().c_str());
+            else
+                std::printf("MANX online: asked the service to start %s\n",
+                            current_lobby.c_str());
         }
 
         // --- joining and leaving ---------------------------------------------
