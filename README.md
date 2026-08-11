@@ -120,8 +120,9 @@ Implemented and tested (most relevant items; full list in `docs/`):
 
 - System 246 main board path with PCSX2 reimplementation in progress
   (`system246-pcsx2-rewrite` branch)
-- Geometry Wars 1, 2 and 3 recomp products as plugins hosted by the same
-  launcher shim, with title-validated MANX Online leaderboard submissions
+- Geometry Wars 1, 2 and 3, Sonic 4 Episode I, SoulCalibur and Hydro Thunder
+  recomp products as plugins hosted by the same launcher shim; the Geometry
+  Wars titles have title-validated MANX Online leaderboard submissions
 
 ## ROM requirements
 

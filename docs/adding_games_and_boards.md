@@ -98,6 +98,12 @@ simulation. Their Xbox Live feature is persistent leaderboards; setting
 `supports_network` would incorrectly offer deterministic cabinet netplay that
 the recompiled cores do not yet guarantee.
 
+Sonic 4 Episode I, SoulCalibur and Hydro Thunder Hurricane are also promoted
+two-product plugins. Their manifests keep online leaderboards disabled until
+MANX Online can preserve each signed SPA view's ranked-property and
+min/max/overwrite semantics; an offline plugin does not register the runtime
+score callback.
+
 ## Local ROM-backed test configuration
 
 ROM paths stay in the local CMake cache and are never embedded in source:
