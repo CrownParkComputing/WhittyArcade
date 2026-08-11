@@ -93,7 +93,7 @@ value for the signed-in MANX account. Firestore rules and title catalogues live
 in `CrownParkComputing/MANXOnline`; they must be deployed before results leave
 the cabinet.
 
-Geometry Wars 1 and 2 deliberately advertise local players but not network
+Geometry Wars 1, 2 and 3 deliberately advertise local players but not network
 simulation. Their Xbox Live feature is persistent leaderboards; setting
 `supports_network` would incorrectly offer deterministic cabinet netplay that
 the recompiled cores do not yet guarantee.
