@@ -24,6 +24,19 @@ struct arcade_cabinet_state {
     uint8_t system1_dip_switches{0xff};
 };
 
+struct arcade_online_score {
+    struct property {
+        uint32_t property_id{};
+        uint64_t value{};
+    };
+    uint32_t title_id{};
+    uint32_t leaderboard_id{};
+    uint32_t property_id{};
+    uint64_t value{};
+    bool lower_is_better{};
+    std::vector<property> metadata;
+};
+
 class emulator_session {
 public:
     virtual ~emulator_session() = default;
@@ -69,6 +82,10 @@ public:
     // True when run_frame waits for the emulated display producer. Such a
     // session must not also be throttled by main()'s independent host timer.
     virtual bool producer_paced() const { return false; }
+    // Drains a title-validated stat submission.  Only plugins with the
+    // optional stats extension produce these; every emulated board and older
+    // plugin inherits the empty implementation.
+    virtual bool take_online_score(arcade_online_score&) { return false; }
 };
 
 // The sole board-to-runtime registration point. A new hardware platform adds

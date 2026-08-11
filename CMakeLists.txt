@@ -280,6 +280,7 @@ set(SOURCES
     src/manx_http.cpp
     src/manx_stun.cpp
     src/online_link.cpp
+    src/rr6_cloud_save.cpp
     src/banner_library.cpp
     src/system16_data.cpp
     src/bezel_artwork.cpp
@@ -665,6 +666,16 @@ target_include_directories(online_wire_test PRIVATE
 target_compile_options(online_wire_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME online_wire_test COMMAND online_wire_test)
 
+add_executable(rr6_cloud_save_test
+    tests/rr6_cloud_save_test.cpp
+    src/rr6_cloud_save.cpp
+)
+target_include_directories(rr6_cloud_save_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/json)
+target_compile_options(rr6_cloud_save_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME rr6_cloud_save_test COMMAND rr6_cloud_save_test)
+
 add_executable(menu_stick_test
     tests/menu_stick_test.cpp
 )
@@ -736,6 +747,11 @@ add_executable(plugin_audio_test
 target_include_directories(plugin_audio_test PRIVATE include)
 target_link_libraries(plugin_audio_test PRIVATE OpenAL::OpenAL arcade_feedback)
 add_test(NAME plugin_audio_test COMMAND plugin_audio_test)
+
+add_executable(plugin_pcm_queue_test tests/plugin_pcm_queue_test.cpp)
+target_include_directories(plugin_pcm_queue_test PRIVATE include)
+target_compile_options(plugin_pcm_queue_test PRIVATE -Wall -Wextra -UNDEBUG)
+add_test(NAME plugin_pcm_queue_test COMMAND plugin_pcm_queue_test)
 
 add_executable(game_plugin_test
     tests/game_plugin_test.cpp

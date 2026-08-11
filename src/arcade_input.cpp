@@ -750,6 +750,14 @@ void arcade_input::exchange_network_input(const input_state& local_state) {
         combined.coin2 = true;
     combined.p2_stick_x = player2.left_stick_x;
     combined.p2_stick_y = player2.left_stick_y;
+    combined.p2_right_stick_x = player2.right_stick_x;
+    combined.p2_right_stick_y = player2.right_stick_y;
+    combined.p2_steering = player2.steering;
+    combined.p2_gas = player2.gas;
+    combined.p2_brake = player2.brake;
+    combined.p2_shift_down = player2.shift_down;
+    combined.p2_shift_up = player2.shift_up;
+    combined.p2_view = player2.view;
     for (std::size_t button = 0; button < std::size(combined.p2_buttons);
          ++button) {
         combined.p2_buttons[button] =

@@ -5,10 +5,12 @@
 #include "platform_paths.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
 #include <fstream>
+#include <limits>
 #include <random>
 #include <set>
 #include <utility>
@@ -106,6 +108,14 @@ std::string build_hash() {
     char text[17]{};
     std::snprintf(text, sizeof(text), "%016llx",
                   static_cast<unsigned long long>(mixed));
+    return text;
+}
+
+std::string leaderboard_key(const online_leaderboard_id& board) {
+    if (board.title_id == 0 || board.property_id == 0) return {};
+    char text[27]{};
+    std::snprintf(text, sizeof(text), "%08X-%08X-%08X", board.title_id,
+                  board.leaderboard_id, board.property_id);
     return text;
 }
 
@@ -261,6 +271,13 @@ online_link::online_link(multiplayer_lobby& lobby) : m_lobby(lobby) {
     }
     m_state.store(online_state::signed_out);
     m_status = "Not signed in.";
+    // Make remembered identity visible before the worker starts. Direct game
+    // launches can ask for a cloud save immediately after construction; if
+    // only the worker populated this flag, that request raced startup and was
+    // incorrectly treated as a genuinely signed-out cabinet.
+    const stored_credential credential = load_credential();
+    m_remembered.store(!credential.refresh_token.empty());
+    m_email = credential.email;
     m_thread = std::thread(&online_link::run, this);
     m_events = std::thread(&online_link::watch_events, this);
 }
@@ -318,7 +335,7 @@ void online_link::register_account(std::string display_name,
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::register_account, std::move(email),
                           std::move(password), std::move(display_name), 0,
-                          remember});
+                          remember, {}});
     m_wake.notify_all();
 }
 
@@ -326,7 +343,7 @@ void online_link::sign_in(std::string email, std::string password,
                           bool remember) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::sign_in, std::move(email),
-                          std::move(password), {}, 0, remember});
+                          std::move(password), {}, 0, remember, {}});
     m_wake.notify_all();
 }
 
@@ -337,13 +354,13 @@ std::string online_link::display_name() const {
 
 void online_link::sign_out() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::sign_out, {}, {}, {}, 0, false});
+    m_commands.push_back({command::kind::sign_out, {}, {}, {}, 0, false, {}});
     m_wake.notify_all();
 }
 
 void online_link::forget_machine() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::forget, {}, {}, {}, 0, false});
+    m_commands.push_back({command::kind::forget, {}, {}, {}, 0, false, {}});
     m_wake.notify_all();
 }
 
@@ -354,19 +371,19 @@ void online_link::create_lobby(bool open_to_anyone,
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::host, std::move(game_short_name),
                           std::move(mode), std::move(game_display_name),
-                          places, open_to_anyone});
+                          places, open_to_anyone, {}});
     m_wake.notify_all();
 }
 
 void online_link::start_lobby() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::start, {}, {}, {}, 0, false});
+    m_commands.push_back({command::kind::start, {}, {}, {}, 0, false, {}});
     m_wake.notify_all();
 }
 
 void online_link::refresh_lobbies() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::browse, {}, {}, {}, 0, false});
+    m_commands.push_back({command::kind::browse, {}, {}, {}, 0, false, {}});
     m_wake.notify_all();
 }
 
@@ -384,7 +401,7 @@ std::optional<online_lobby> online_link::take_new_lobby() {
 
 void online_link::refresh_friends() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::friends, {}, {}, {}, 0, false});
+    m_commands.push_back({command::kind::friends, {}, {}, {}, 0, false, {}});
     m_wake.notify_all();
 }
 
@@ -396,27 +413,95 @@ std::vector<online_friend> online_link::friends() const {
 void online_link::add_friend(std::string name) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::befriend, std::move(name), {}, {},
-                          0, false});
+                          0, false, {}});
     m_wake.notify_all();
 }
 
 void online_link::answer_friend(std::string uid, bool accept) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::answer_friend, std::move(uid), {},
-                          {}, 0, accept});
+                          {}, 0, accept, {}});
     m_wake.notify_all();
+}
+
+void online_link::submit_score(online_leaderboard_submission submission) {
+    command request{};
+    request.what = command::kind::submit_score;
+    request.score = std::move(submission);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_commands.push_back(std::move(request));
+    m_wake.notify_all();
+}
+
+void online_link::refresh_leaderboard(online_leaderboard_id board) {
+    command request{};
+    request.what = command::kind::fetch_leaderboard;
+    request.score.board = board;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_commands.push_back(std::move(request));
+    m_wake.notify_all();
+}
+
+online_cloud_save_result online_link::fetch_cloud_save(uint32_t title_id,
+                                                        int timeout_ms) {
+    online_cloud_save_result unavailable;
+    unavailable.status = online_cloud_save_result::state::unavailable;
+    if (title_id == 0 || timeout_ms <= 0 ||
+        (!signed_in() && !remembered()))
+        return unavailable;
+
+    auto waiter = std::make_shared<cloud_fetch_waiter>();
+    waiter->title_id = title_id;
+    command request{};
+    request.what = command::kind::fetch_cloud_save;
+    request.cloud_fetch = waiter;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_commands.push_back(std::move(request));
+    }
+    m_wake.notify_all();
+
+    std::unique_lock<std::mutex> lock(waiter->mutex);
+    if (!waiter->ready.wait_for(
+            lock, std::chrono::milliseconds(timeout_ms),
+            [&] { return waiter->done; })) {
+        online_cloud_save_result timed_out;
+        timed_out.status = online_cloud_save_result::state::error;
+        timed_out.message = "Cloud save download timed out; local data kept.";
+        return timed_out;
+    }
+    return waiter->result;
+}
+
+void online_link::submit_cloud_save(online_cloud_save save) {
+    command request{};
+    request.what = command::kind::submit_cloud_save;
+    request.cloud_save = std::move(save);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_commands.push_back(std::move(request));
+    m_wake.notify_all();
+}
+
+std::vector<online_leaderboard_entry> online_link::leaderboard() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_leaderboard;
+}
+
+std::string online_link::leaderboard_status() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_leaderboard_status;
 }
 
 void online_link::join_lobby(std::string lobby_id) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_commands.push_back({command::kind::join, std::move(lobby_id), {}, {},
-                          0, false});
+                          0, false, {}});
     m_wake.notify_all();
 }
 
 void online_link::leave_lobby() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_commands.push_back({command::kind::leave, {}, {}, {}, 0, false});
+    m_commands.push_back({command::kind::leave, {}, {}, {}, 0, false, {}});
     m_wake.notify_all();
 }
 
@@ -736,6 +821,8 @@ void online_link::run() {
     std::string pending_name;
     bool profile_ready = false;
     bool machine_ready = false;
+    bool rr6_catalog_ready = false;
+    int64_t next_rr6_catalog_try = 0;
     bool pending_host = false;
     bool pending_host_open = false;
     bool pending_start = false;
@@ -749,6 +836,15 @@ void online_link::run() {
     bool pending_friends = false;
     std::string pending_befriend;
     std::vector<std::pair<std::string, bool>> pending_answers;
+    std::deque<online_leaderboard_submission> pending_scores;
+    std::optional<online_leaderboard_id> pending_leaderboard;
+    std::deque<std::shared_ptr<cloud_fetch_waiter>> pending_cloud_fetches;
+    std::deque<online_cloud_save> pending_cloud_saves;
+    // A rejected upload stays queued. Retrying it immediately would spin
+    // against an outage, so the wait doubles up to a minute and clears on the
+    // next success.
+    int64_t cloud_save_retry_after = 0;
+    int64_t cloud_save_backoff = 5;
     // Lobbies this cabinet has already offered to join. Primed - silently -
     // by the first sweep after signing in, because a lobby that has been
     // sitting there for an hour is something to find in the join list, not
@@ -1062,6 +1158,7 @@ void online_link::run() {
                 token = {};
                 profile_ready = false;
                 machine_ready = false;
+                rr6_catalog_ready = false;
                 current_lobby.clear();
                 m_lobby.set_remote_peers({});
                 announced_lobbies.clear();
@@ -1086,6 +1183,7 @@ void online_link::run() {
                 token = {};
                 profile_ready = false;
                 machine_ready = false;
+                rr6_catalog_ready = false;
                 announced_lobbies.clear();
                 lobby_watch_primed = false;
                 {
@@ -1130,6 +1228,33 @@ void online_link::run() {
                 // of which this cabinet has to reason about any more.
                 pending_leave = true;
                 break;
+            case command::kind::submit_score:
+                if (pending_scores.size() >= 64) pending_scores.pop_front();
+                pending_scores.push_back(entry.score);
+                break;
+            case command::kind::fetch_leaderboard:
+                pending_leaderboard = entry.score.board;
+                break;
+            case command::kind::fetch_cloud_save:
+                if (entry.cloud_fetch)
+                    pending_cloud_fetches.push_back(entry.cloud_fetch);
+                break;
+            case command::kind::submit_cloud_save: {
+                // A save is whole-state, not a delta, so only the newest one
+                // per title is worth sending. Superseding in place also stops
+                // a burst of writes from pushing an unsent save off an
+                // eight-deep queue, which silently lost it.
+                auto same = std::find_if(
+                    pending_cloud_saves.begin(), pending_cloud_saves.end(),
+                    [&](const online_cloud_save& queued) {
+                        return queued.title_id == entry.cloud_save.title_id;
+                    });
+                if (same != pending_cloud_saves.end())
+                    *same = entry.cloud_save;
+                else
+                    pending_cloud_saves.push_back(entry.cloud_save);
+                break;
+            }
             }
         }
 
@@ -1207,6 +1332,7 @@ void online_link::run() {
             }
             profile_ready = false;
             machine_ready = false;
+            rr6_catalog_ready = false;
             publish(online_state::online,
                     creating ? "Account created." : "Signed in.");
         }
@@ -1429,6 +1555,48 @@ void online_link::run() {
             }
         }
 
+        // --- immutable RR6 time-attack catalogue -------------------------
+        // RR6's SPA declares leaderboard ids 2..154 as the time-attack views,
+        // all ranked by its 0x2000000E time property. One compact manifest is
+        // enough for the app to show every global board at zero before the
+        // first result exists; actual account entries remain in each board's
+        // ordinary entries collection. Create-only and constant-validated by
+        // the rules, so whichever signed-in MANX starts first may initialise
+        // it but nobody can redefine the title's board range afterwards.
+        if (profile_ready && !rr6_catalog_ready &&
+            now >= next_rr6_catalog_try) {
+            next_rr6_catalog_try = now + 300;
+            const std::string path = "leaderboardCatalog/4E4D07D3";
+            const manx_http::response existing = call(
+                manx_http::method::get, document_url(path), {}, true);
+            if (existing.ok()) {
+                rr6_catalog_ready = true;
+            } else if (existing.status == 404) {
+                json document;
+                auto& fields = document["fields"];
+                fields["titleId"] = online_wire::value_string("4E4D07D3");
+                fields["displayName"] =
+                    online_wire::value_string("Ridge Racer 6");
+                fields["schemaVersion"] = online_wire::value_int(1);
+                fields["firstLeaderboardId"] = online_wire::value_int(2);
+                fields["lastLeaderboardId"] = online_wire::value_int(154);
+                fields["rankedPropertyId"] =
+                    online_wire::value_int(0x2000000E);
+                fields["defaultValue"] = online_wire::value_int(0);
+                fields["direction"] = online_wire::value_string("asc");
+                fields["boardCount"] = online_wire::value_int(153);
+                fields["createdAt"] = online_wire::value_time(now);
+                const manx_http::response made = call(
+                    manx_http::method::patch,
+                    document_url(path) + "?currentDocument.exists=false",
+                    document.dump(), true);
+                rr6_catalog_ready = made.ok() || made.status == 409;
+                if (made.ok())
+                    std::printf("MANX online: initialized 153 RR6 global "
+                                "time-attack boards at zero\n");
+            }
+        }
+
         // --- a session with the lobby service ------------------------------
         // Opened once the token is good, and reopened whenever the service
         // says the old one has gone - which happens when it is redeployed,
@@ -1595,6 +1763,331 @@ void online_link::run() {
             // online screen is open. The slow rate is most of what keeps a
             // cabinet inside the free tier.
             next_machine_poll = now + pace(5, 30, 180);
+        }
+
+        // --- private cloud saves ------------------------------------------
+        // Fetches happen only at the launch boundary, before the title opens
+        // its local container. Uploads are immutable byte snapshots captured
+        // after a local write has settled; the network thread never reads the
+        // live file and therefore cannot race the game halfway through it.
+        while (!pending_cloud_fetches.empty() && profile_ready &&
+               !credential.uid.empty()) {
+            auto waiter = pending_cloud_fetches.front();
+            pending_cloud_fetches.pop_front();
+            online_cloud_save_result result;
+            char title[9]{};
+            std::snprintf(title, sizeof(title), "%08X", waiter->title_id);
+            const manx_http::response answer = call(
+                manx_http::method::get,
+                document_url("cloudSaves/" + credential.uid + "/titles/" +
+                             title),
+                {}, true);
+            if (answer.status == 404) {
+                result.status = online_cloud_save_result::state::missing;
+            } else if (!answer.ok()) {
+                result.status = online_cloud_save_result::state::error;
+                result.message = explain_failure(answer,
+                                                  "downloading the cloud save");
+            } else {
+                const json document = parse_or_empty(answer.body);
+                result.save.title_id = waiter->title_id;
+                if (const auto* field = online_wire::find_field(
+                        document, "fileName"))
+                    result.save.file_name = online_wire::read_string(*field);
+                if (const auto* field = online_wire::find_field(
+                        document, "checksum"))
+                    result.save.checksum = online_wire::read_string(*field);
+                if (const auto* field = online_wire::find_field(
+                        document, "updatedAt"))
+                    result.save.updated_unix = online_wire::read_time(*field);
+                bool bytes_ok = false;
+                if (const auto* field = online_wire::find_field(
+                        document, "payload"))
+                    bytes_ok = online_wire::read_bytes(
+                        *field, result.save.payload);
+                if (!bytes_ok || result.save.file_name.empty() ||
+                    result.save.checksum.empty()) {
+                    result.status = online_cloud_save_result::state::error;
+                    result.message =
+                        "Cloud save document is incomplete; local data kept.";
+                } else {
+                    result.status = online_cloud_save_result::state::available;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lock(waiter->mutex);
+                waiter->result = std::move(result);
+                waiter->done = true;
+            }
+            waiter->ready.notify_all();
+        }
+
+        while (!pending_cloud_saves.empty() && profile_ready &&
+               !credential.uid.empty() && now >= cloud_save_retry_after) {
+            const online_cloud_save save = pending_cloud_saves.front();
+            if (save.title_id == 0 || save.file_name.empty() ||
+                save.file_name.size() > 42 || save.payload.empty() ||
+                save.payload.size() > 512 * 1024 ||
+                save.checksum.size() != 16) {
+                // Malformed rather than undeliverable: retrying cannot help.
+                pending_cloud_saves.pop_front();
+                continue;
+            }
+            char title[9]{};
+            std::snprintf(title, sizeof(title), "%08X", save.title_id);
+            json document;
+            auto& fields = document["fields"];
+            fields["uid"] = online_wire::value_string(credential.uid);
+            fields["titleId"] = online_wire::value_string(title);
+            fields["schemaVersion"] = online_wire::value_int(1);
+            fields["fileName"] = online_wire::value_string(save.file_name);
+            fields["size"] = online_wire::value_int(
+                static_cast<int64_t>(save.payload.size()));
+            fields["checksum"] = online_wire::value_string(save.checksum);
+            fields["payload"] = online_wire::value_bytes(save.payload);
+            fields["updatedAt"] = online_wire::value_time(now);
+            const manx_http::response written = call(
+                manx_http::method::patch,
+                document_url("cloudSaves/" + credential.uid + "/titles/" +
+                             title),
+                document.dump(), true);
+            if (!written.ok()) {
+                // Keep it queued. Dropping it here was what made a transient
+                // outage look like a completed upload, leaving the marker
+                // stale and the cloud behind for the rest of the session.
+                cloud_save_retry_after = now + cloud_save_backoff;
+                cloud_save_backoff = std::min<int64_t>(cloud_save_backoff * 2, 60);
+                std::fprintf(stderr,
+                             "MANX online: %s; retrying in %llds\n",
+                             explain_failure(written,
+                                             "uploading the cloud save").c_str(),
+                             static_cast<long long>(cloud_save_backoff));
+                break;
+            }
+            pending_cloud_saves.pop_front();
+            cloud_save_backoff = 5;
+            if (!save.sync_marker_path.empty()) {
+                const fs::path marker(save.sync_marker_path);
+                std::error_code error;
+                fs::create_directories(marker.parent_path(), error);
+                const fs::path temporary = fs::path(marker).concat(".part");
+                bool complete = false;
+                {
+                    std::ofstream output(temporary, std::ios::trunc);
+                    output << save.checksum << '\n';
+                    output.flush();
+                    complete = output.good();
+                }
+                if (complete) fs::rename(temporary, marker, error);
+            }
+            std::printf("MANX online: cloud save %s uploaded (%zu bytes)\n",
+                        title, save.payload.size());
+        }
+
+        // --- persistent online leaderboards -------------------------------
+        // A plugin submits the exact ids the title wrote through its stats
+        // API.  Firestore keeps one document per account and its rules accept
+        // only an improvement, so two cabinets signed into the same account
+        // cannot race a good result backwards.
+        while (!pending_scores.empty() && profile_ready &&
+               !credential.uid.empty()) {
+            online_leaderboard_submission score =
+                std::move(pending_scores.front());
+            pending_scores.pop_front();
+            const std::string key = leaderboard_key(score.board);
+            if (key.empty() || score.value == 0 ||
+                score.value >
+                    static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_leaderboard_status = "The game supplied an invalid score.";
+                touch();
+                continue;
+            }
+
+            std::string name;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                name = m_display_name;
+            }
+            if (name.empty()) name = "Player";
+            if (name.size() > 32) name.resize(32);
+
+            json document;
+            auto& fields = document["fields"];
+            fields["uid"] = online_wire::value_string(credential.uid);
+            fields["boardKey"] = online_wire::value_string(key);
+            fields["displayName"] = online_wire::value_string(name);
+            char title[9]{};
+            std::snprintf(title, sizeof(title), "%08X", score.board.title_id);
+            fields["titleId"] = online_wire::value_string(title);
+            fields["leaderboardId"] = online_wire::value_int(
+                static_cast<int64_t>(score.board.leaderboard_id));
+            fields["propertyId"] = online_wire::value_int(
+                static_cast<int64_t>(score.board.property_id));
+            fields["value"] = online_wire::value_int(
+                static_cast<int64_t>(score.value));
+            json metadata = json::object();
+            const std::size_t metadata_count =
+                std::min<std::size_t>(score.metadata.size(), 16);
+            for (std::size_t i = 0; i < metadata_count; ++i) {
+                if (score.metadata[i].property_id == 0 ||
+                    score.metadata[i].value > static_cast<uint64_t>(
+                        std::numeric_limits<int64_t>::max()))
+                    continue;
+                char property[9]{};
+                std::snprintf(property, sizeof(property), "%08X",
+                              score.metadata[i].property_id);
+                metadata[property] = online_wire::value_int(
+                    static_cast<int64_t>(score.metadata[i].value));
+            }
+            fields["metadata"] = online_wire::value_map(std::move(metadata));
+            fields["direction"] = online_wire::value_string(
+                score.board.lower_is_better ? "asc" : "desc");
+            fields["verified"] = online_wire::value_bool(false);
+            fields["buildHash"] = online_wire::value_string(
+                (score.build_hash.empty() ? build_hash() : score.build_hash)
+                    .substr(0, 64));
+            fields["replayHash"] = online_wire::value_string(
+                score.replay_hash.substr(0, 128));
+            fields["submittedAt"] = online_wire::value_time(now);
+
+            const manx_http::response written = call(
+                manx_http::method::patch,
+                document_url("leaderboards/" + key + "/entries/" +
+                             credential.uid),
+                document.dump(), true);
+            std::string result;
+            if (written.ok()) {
+                result = "Online best submitted (unverified).";
+            } else if (written.status == 403) {
+                // A worse value is deliberately refused by the rules. Confirm
+                // that this is what happened before calling it success: an
+                // undeployed rule set is also a 403 and must not be disguised.
+                const manx_http::response existing = call(
+                    manx_http::method::get,
+                    document_url("leaderboards/" + key + "/entries/" +
+                                 credential.uid), {}, true);
+                bool retained_better = false;
+                if (existing.ok()) {
+                    const json held = parse_or_empty(existing.body);
+                    if (const auto* field =
+                            online_wire::find_field(held, "value")) {
+                        const int64_t value = online_wire::read_int(*field, -1);
+                        retained_better = value >= 0 &&
+                            (score.board.lower_is_better
+                                ? static_cast<uint64_t>(value) <= score.value
+                                : static_cast<uint64_t>(value) >= score.value);
+                    }
+                }
+                result = retained_better
+                    ? "Existing online best is better."
+                    : explain_failure(written, "submitting that score");
+            } else {
+                result = explain_failure(written, "submitting that score");
+            }
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_leaderboard_id = score.board;
+                m_leaderboard_status = std::move(result);
+            }
+            pending_leaderboard = score.board;
+            touch();
+        }
+
+        if (pending_leaderboard && profile_ready &&
+            !credential.uid.empty()) {
+            const online_leaderboard_id board = *pending_leaderboard;
+            pending_leaderboard.reset();
+            const std::string key = leaderboard_key(board);
+            if (!key.empty()) {
+                const std::string direction =
+                    board.lower_is_better ? "asc" : "desc";
+                const manx_http::response answer = call(
+                    manx_http::method::get,
+                    document_url("leaderboards/" + key + "/entries") +
+                        "?pageSize=100&orderBy=value%20" + direction,
+                    {}, true);
+                std::vector<online_leaderboard_entry> entries;
+                if (answer.ok()) {
+                    const json page = parse_or_empty(answer.body);
+                    const auto documents = page.find("documents");
+                    if (documents != page.end() && documents->is_array()) {
+                        for (const json& document : *documents) {
+                            online_leaderboard_entry entry;
+                            if (const auto* field = online_wire::find_field(
+                                    document, "uid"))
+                                entry.uid = online_wire::read_string(*field);
+                            if (const auto* field = online_wire::find_field(
+                                    document, "displayName"))
+                                entry.display_name =
+                                    online_wire::read_string(*field);
+                            if (const auto* field = online_wire::find_field(
+                                    document, "value")) {
+                                const int64_t value =
+                                    online_wire::read_int(*field);
+                                if (value >= 0)
+                                    entry.value = static_cast<uint64_t>(value);
+                            }
+                            if (const auto* field = online_wire::find_field(
+                                    document, "verified"))
+                                entry.verified =
+                                    online_wire::read_bool(*field);
+                            if (const auto* field = online_wire::find_field(
+                                    document, "submittedAt"))
+                                entry.submitted_unix =
+                                    online_wire::read_time(*field);
+                            if (const auto* field = online_wire::find_field(
+                                    document, "metadata")) {
+                                const auto map = field->find("mapValue");
+                                if (map != field->end() && map->is_object()) {
+                                    const auto values = map->find("fields");
+                                    if (values != map->end() &&
+                                        values->is_object()) {
+                                        for (auto property = values->begin();
+                                             property != values->end() &&
+                                             entry.metadata.size() < 16;
+                                             ++property) {
+                                            char* end = nullptr;
+                                            const unsigned long id =
+                                                std::strtoul(
+                                                    property.key().c_str(),
+                                                    &end, 16);
+                                            const int64_t value =
+                                                online_wire::read_int(
+                                                    property.value(), -1);
+                                            if (end != nullptr && *end == 0 &&
+                                                id <= std::numeric_limits<
+                                                          uint32_t>::max() &&
+                                                value >= 0)
+                                                entry.metadata.push_back({
+                                                    static_cast<uint32_t>(id),
+                                                    static_cast<uint64_t>(
+                                                        value)});
+                                        }
+                                    }
+                                }
+                            }
+                            if (!entry.uid.empty())
+                                entries.push_back(std::move(entry));
+                        }
+                    }
+                }
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_leaderboard_id = board;
+                    if (answer.ok()) {
+                        m_leaderboard = std::move(entries);
+                        if (m_leaderboard_status.empty())
+                            m_leaderboard_status =
+                                "Online results are client-submitted and "
+                                "unverified.";
+                    } else {
+                        m_leaderboard_status = explain_failure(
+                            answer, "reading that leaderboard");
+                    }
+                }
+                touch();
+            }
         }
 
         // --- what is there to join ------------------------------------------

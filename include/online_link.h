@@ -20,6 +20,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -47,6 +48,60 @@ struct online_friend {
     bool accepted{};       // false while the request is still unanswered
     bool incoming{};       // they asked us, so this is the one to answer
     bool online{};         // their profile says they are about
+};
+
+// The title's own identity for one ranked board.  Xbox 360 recomp plugins
+// obtain these values from XSessionWriteStats and the signed SPA/XDBF table;
+// native plugins may provide their own stable ids.  Keeping the property id
+// in the key matters because two views are allowed to share a board number
+// while ranking different values.
+struct online_leaderboard_id {
+    uint32_t title_id{};
+    uint32_t leaderboard_id{};
+    uint32_t property_id{};
+    bool lower_is_better{};
+};
+
+struct online_leaderboard_submission {
+    struct property {
+        uint32_t property_id{};
+        uint64_t value{};
+    };
+    online_leaderboard_id board;
+    uint64_t value{};
+    std::vector<property> metadata;
+    std::string build_hash;
+    // Empty until deterministic replay capture exists.  It is recorded now so
+    // the storage schema does not have to change when verification arrives.
+    std::string replay_hash;
+};
+
+struct online_leaderboard_entry {
+    std::string uid;
+    std::string display_name;
+    uint64_t value{};
+    bool verified{};
+    int64_t submitted_unix{};
+    std::vector<online_leaderboard_submission::property> metadata;
+};
+
+struct online_cloud_save {
+    uint32_t title_id{};
+    std::string file_name;
+    std::vector<uint8_t> payload;
+    std::string checksum;
+    int64_t updated_unix{};
+    // Written only after Firestore accepts this exact checksum. It lets the
+    // next launch distinguish an unsynced local save from a safely mirrored
+    // one without trusting wall-clock ordering between two cabinets.
+    std::string sync_marker_path;
+};
+
+struct online_cloud_save_result {
+    enum class state { unavailable, missing, available, error } status{
+        state::unavailable};
+    online_cloud_save save;
+    std::string message;
 };
 
 enum class online_state : uint8_t {
@@ -162,6 +217,23 @@ public:
     void add_friend(std::string name);
     void answer_friend(std::string uid, bool accept);
 
+    // --- persistent online leaderboards ---------------------------------
+    // Both operations are asynchronous like every other network operation in
+    // this class.  Firestore rules keep only the account's best value and
+    // force client submissions to remain visibly unverified.
+    void submit_score(online_leaderboard_submission submission);
+    void refresh_leaderboard(online_leaderboard_id board);
+    std::vector<online_leaderboard_entry> leaderboard() const;
+    std::string leaderboard_status() const;
+
+    // Save fetch is the one deliberately synchronous cloud operation: it is
+    // called before a title opens its local container, where downloading in
+    // the background would race the game's first read. It waits only when an
+    // account is already online and is bounded by timeout_ms.
+    online_cloud_save_result fetch_cloud_save(uint32_t title_id,
+                                               int timeout_ms = 8000);
+    void submit_cloud_save(online_cloud_save save);
+
     // --- what the screen draws --------------------------------------------
     online_state state() const;
     std::string status_text() const;
@@ -170,10 +242,20 @@ public:
     uint64_t revision() const;
 
 private:
+    struct cloud_fetch_waiter {
+        std::mutex mutex;
+        std::condition_variable ready;
+        bool done{};
+        uint32_t title_id{};
+        online_cloud_save_result result;
+    };
+
     struct command {
         enum class kind {
             register_account, sign_in, sign_out, forget, host, join, leave,
-            browse, friends, befriend, answer_friend, start
+            browse, friends, befriend, answer_friend, start,
+            submit_score, fetch_leaderboard, fetch_cloud_save,
+            submit_cloud_save
         };
         kind what;
         std::string argument;   // email, the lobby id, or the game
@@ -181,6 +263,9 @@ private:
         std::string extra;      // display name, or the game's title
         int number{};           // places, when hosting
         bool flag{};            // stay signed in, or open to anyone
+        online_leaderboard_submission score;
+        online_cloud_save cloud_save;
+        std::shared_ptr<cloud_fetch_waiter> cloud_fetch;
     };
 
     void run();
@@ -233,6 +318,9 @@ private:
     std::vector<online_wire::member> m_members;
     std::vector<online_lobby> m_lobbies;
     std::vector<online_friend> m_friends;
+    std::vector<online_leaderboard_entry> m_leaderboard;
+    std::string m_leaderboard_status;
+    online_leaderboard_id m_leaderboard_id;
     std::string m_uid;          // this account, as the service knows it
     std::string m_lobby_game;
     std::string m_lobby_game_name;

@@ -44,7 +44,11 @@ namespace {
 using board_counts = std::array<int, arcade_board_count>;
 
 bool hidden_from_launcher(arcade_board_type board) {
-    return board == arcade_board_type::game_plugin;
+    // Native game plugins are installed, playable titles. Hiding this board
+    // type removed every recomp from `choices` after discovery, so startup
+    // reported the plugins while the X360 Recomp shelf remained empty.
+    (void)board;
+    return false;
 }
 
 fs::path source_media_root();
@@ -993,14 +997,17 @@ void show_eeprom_manager(launcher_menu& menu) {
     }
 }
 
-void show_high_score_viewer(launcher_menu& menu) {
+void show_high_score_viewer(launcher_menu& menu, online_link* online) {
     const auto& manifests = supported_rom_sets();
     std::vector<const rom_set_manifest*> score_games;
     for (const auto& manifest : manifests) {
         if (manifest.working && has_high_score_decoder(manifest.short_name))
             score_games.push_back(&manifest);
     }
-    if (score_games.empty()) {
+    const bool has_online = online &&
+        (!online->leaderboard().empty() ||
+         !online->leaderboard_status().empty());
+    if (score_games.empty() && !has_online) {
         menu.show_text(
             "High Scores",
             "No verified high-score decoders are available yet.\n\n"
@@ -1010,10 +1017,30 @@ void show_high_score_viewer(launcher_menu& menu) {
             "Back");
         return;
     }
-    const int total = static_cast<int>(score_games.size());
+    const int total = static_cast<int>(score_games.size()) +
+                      (has_online ? 1 : 0);
     menu.show_scoreboard(
         "Back", "Hall of Fame", total,
         [&](int index) -> launcher_menu::scoreboard_page {
+            if (index >= static_cast<int>(score_games.size())) {
+                launcher_menu::scoreboard_page page;
+                page.title = "Online Leaderboard";
+                page.subtitle = "MANX Online | client-submitted";
+                const std::vector<online_leaderboard_entry> entries =
+                    online->leaderboard();
+                const std::size_t shown =
+                    std::min<std::size_t>(entries.size(), 100);
+                for (std::size_t rank = 0; rank < shown; ++rank) {
+                    launcher_menu::scoreboard_row row;
+                    row.rank = static_cast<int>(rank) + 1;
+                    row.name = entries[rank].display_name;
+                    if (!entries[rank].verified) row.name += "  UNVERIFIED";
+                    row.score = format_high_score(entries[rank].value);
+                    page.rows.push_back(std::move(row));
+                }
+                page.message = online->leaderboard_status();
+                return page;
+            }
             const rom_set_manifest& game =
                 *score_games[static_cast<std::size_t>(index)];
             launcher_menu::scoreboard_page page;
@@ -2703,12 +2730,12 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     };
     std::vector<platform_entry> platforms;
     const auto platform_name = [](arcade_board_type board) {
+        if (board == arcade_board_type::game_plugin)
+            return std::string("X360 Recomp");
         const int slot = board_slot(board);
         if (slot >= 0)
             return std::string(arcade_boards()[
                 static_cast<std::size_t>(slot)].display_name);
-        if (board == arcade_board_type::game_plugin)
-            return std::string("Native Arcade");
         return std::string("Other Arcade");
     };
     const auto platform_icon = [](arcade_board_type board) {
@@ -2757,7 +2784,13 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // - "Sega / Westone", "Midway / Rare" - which split the shelf into tiles
     // nobody is looking for and match no logo anywhere, so every one of them
     // rendered as bare text. Wonder Boy belongs under Sega.
-    const auto publisher_of = [](const rom_choice& choice) {
+    const auto publisher_of = [&](const rom_choice& choice) {
+        // Recompiled Xbox 360 titles arrive through the native game-plugin
+        // boundary.  Their publisher is still useful on the game card, but it
+        // is not their platform: grouping Bubble Bobble under Taito and
+        // Geometry Wars under Bizarre made the Xbox shelf disappear entirely.
+        if (choice.board == arcade_board_type::game_plugin)
+            return platform_name(choice.board);
         if (choice.publisher.empty()) return std::string("Other");
         const std::size_t split = choice.publisher.find(" / ");
         return split == std::string::npos ? choice.publisher
@@ -2815,10 +2848,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
     // carousel short and coherent instead of mixing every board generation.
     int play_style = 0;
     std::optional<std::string> selected_platform;
-    // True from the moment the launcher opens: the games are what somebody
-    // came to see. Cleared only if they deliberately go to the publisher
-    // shelf, which is now a filter rather than a doorway.
-    bool browse_everything = true;
+    // Start on the platform shelf. Recompiled Xbox 360 plugins belong to the
+    // X360 Recomp category; native arcade boards keep their publisher shelf.
+    bool browse_everything = false;
     int platform_cursor = 0;
     // Set when this machine has just agreed to a game: the network page is
     // opened for them rather than left to be found.
@@ -2988,13 +3020,9 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             }
         }
         bool system_menu_requested = false;
-        // The front door is the games.
-        //
-        // It used to be a shelf of publishers: a screen you had to get past
-        // before seeing a single game, answering a question - "whose?" -
-        // that most people do not have when they sit down. The browser
-        // already pages by publisher, so that choice is still there, one
-        // button away, inside the thing you actually came for.
+        // The platform shelf is the front door. It keeps recomp titles under
+        // one explicit X360 category instead of mixing them into arcade-board
+        // publisher pages.
         if (!selected_platform && !browse_everything) {
             std::vector<launcher_menu::mode_card> platform_cards;
             std::vector<std::string> platform_logo_keys;
@@ -3125,7 +3153,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
                 system_menu_requested = true;
             } else {
                 selected_platform.reset();
-                browse_everything = true;
+                browse_everything = false;
                 play_style = 0;
                 continue;
             }
@@ -3960,7 +3988,7 @@ rom_selection_result show_rom_selector(const std::string& current_path,
             continue;
         }
         if (selected_page == 7) {
-            show_high_score_viewer(menu);
+            show_high_score_viewer(menu, online);
             continue;
         }
     }

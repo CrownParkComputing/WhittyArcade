@@ -46,6 +46,8 @@ std::string game_source(const std::string& short_name,
                         const std::string& display_name, unsigned players,
                         unsigned abi_version) {
     return R"(#include "manx_game_plugin.h"
+#include "manx_game_pcm.h"
+#include "manx_game_stats.h"
 #include <cstdlib>
 struct manx_game_instance { int frames; unsigned char pixel[4]; int pending; };
 namespace {
@@ -82,11 +84,41 @@ uint32_t describe_cues(const char** names, uint32_t max) {
     if (max > 0) names[0] = "beep";
     return max > 0 ? 1u : 0u;
 }
+uint32_t take_stats(manx_game_instance* g, manx_game_stat_event* out,
+                    uint32_t max) {
+    if (max == 0 || g->frames != 2) return 0;
+    out[0] = {0x4E4D07D3u, 12u, 0x20000003u,
+              manx_game_stat_lower_is_better, 91234u, 0u};
+    out[0].metadata_count = 2;
+    out[0].metadata[0].property_id = 0x20000003u;
+    out[0].metadata[0].value = 91234u;
+    out[0].metadata[1].property_id = 0x10000005u;
+    out[0].metadata[1].value = 7u;
+    g->frames = 3; // the event drains rather than repeating
+    return 1;
+}
+uint32_t take_pcm(manx_game_instance* g, manx_game_pcm_block* out,
+                  uint32_t max) {
+    static const int16_t samples[4] = {1, -1, 2, -2};
+    if (max == 0 || g->frames != 1) return 0;
+    out[0] = {samples, 2, 48000, 2};
+    return 1;
+}
 const manx_game_api api = { )" + std::to_string(abi_version) +
            R"(, describe, create, destroy, run_frame, reset, set_paused, score, checksum,
              take_cues, describe_cues };
+const manx_game_stats_api stats_api = {
+    MANX_GAME_STATS_ABI_VERSION, take_stats };
+const manx_game_pcm_api pcm_api = {
+    MANX_GAME_PCM_ABI_VERSION, take_pcm };
 }
 extern "C" const manx_game_api* manx_game_entry(void) { return &api; }
+extern "C" const manx_game_stats_api* manx_game_stats_entry(void) {
+    return &stats_api;
+}
+extern "C" const manx_game_pcm_api* manx_game_pcm_entry(void) {
+    return &pcm_api;
+}
 )";
 }
 
@@ -234,6 +266,32 @@ void test_a_loaded_plugin_runs_and_reports(const fs::path& root) {
     plugin->api()->destroy(instance);
 }
 
+void test_loader_failure_paths_are_reported(const fs::path& root) {
+    game_plugin_library missing_root;
+    missing_root.scan((root / "does-not-exist").string());
+    assert(missing_root.games().empty());
+
+    game_plugin_library library;
+    library.scan(root.string());
+    discovered_game missing;
+    missing.library_path = (root / "missing.so").string();
+    std::string error;
+    assert(library.load(missing, error) == nullptr);
+    assert(!error.empty());
+
+    for (const char* fixture : {"nullentry", "noname", "badstats",
+                                "badpcm"}) {
+        assert(library.find(fixture) == nullptr);
+        bool explained = false;
+        for (const rejected_plugin& rejected : library.rejected())
+            if (rejected.library_path.find(fixture) != std::string::npos) {
+                explained = true;
+                assert(!rejected.reason.empty());
+            }
+        assert(explained);
+    }
+}
+
 void test_a_table_missing_the_new_entries_is_refused(const fs::path& root) {
     // The header says every entry must be non-null, and the whole point of
     // checking at load is that a hole would otherwise fault minutes into a
@@ -285,6 +343,56 @@ void test_audio_cues_are_drained_not_repeated(const fs::path& root) {
     plugin->api()->destroy(instance);
 }
 
+void test_continuous_pcm_extension_is_typed(const fs::path& root) {
+    game_plugin_library library;
+    library.scan(root.string());
+    const discovered_game* game = library.find("alpha");
+    assert(game != nullptr);
+    std::string error;
+    std::unique_ptr<loaded_plugin> plugin = library.load(*game, error);
+    assert(plugin && plugin->pcm_api() != nullptr);
+    manx_game_instance* instance =
+        plugin->api()->create(game->bundle_path.c_str());
+    manx_game_input input{};
+    manx_game_frame frame{};
+    plugin->api()->run_frame(instance, &input, 1, &frame);
+    manx_game_pcm_block block{};
+    assert(plugin->pcm_api()->take_blocks(instance, &block, 1) == 1);
+    assert(block.samples != nullptr && block.frames == 2);
+    assert(block.sample_rate == 48000 && block.channels == 2);
+    plugin->api()->destroy(instance);
+}
+
+void test_stat_events_are_optional_typed_and_drained(const fs::path& root) {
+    game_plugin_library library;
+    library.scan(root.string());
+    const discovered_game* game = library.find("alpha");
+    assert(game != nullptr);
+    std::string error;
+    std::unique_ptr<loaded_plugin> plugin = library.load(*game, error);
+    assert(plugin && plugin->stats_api() != nullptr);
+    manx_game_instance* instance = plugin->api()->create(
+        game->bundle_path.c_str());
+    manx_game_input input{};
+    manx_game_frame frame{};
+    plugin->api()->run_frame(instance, &input, 1, &frame);
+    plugin->api()->run_frame(instance, &input, 1, &frame);
+    manx_game_stat_event event{};
+    assert(plugin->stats_api()->take_events(instance, &event, 1) == 1);
+    assert(event.title_id == 0x4E4D07D3u);
+    assert(event.leaderboard_id == 12u);
+    assert(event.property_id == 0x20000003u);
+    assert(event.value == 91234u);
+    assert((event.flags & manx_game_stat_lower_is_better) != 0);
+    assert(event.metadata_count == 2u);
+    assert(event.metadata[0].property_id == 0x20000003u);
+    assert(event.metadata[0].value == 91234u);
+    assert(event.metadata[1].property_id == 0x10000005u);
+    assert(event.metadata[1].value == 7u);
+    assert(plugin->stats_api()->take_events(instance, &event, 1) == 0);
+    plugin->api()->destroy(instance);
+}
+
 void test_discovered_games_reach_the_catalogue(const fs::path& root) {
     game_plugin_library library;
     library.scan(root.string());
@@ -315,6 +423,8 @@ int main() {
         std::printf("no host compiler available; skipping\n");
         return 0;
     }
+    fs::copy_file(root / "alpha" / "alpha.so", root / "bare.so",
+                  fs::copy_options::overwrite_existing);
     // Same short name, different folder: the duplicate case.
     build_plugin(root, "zulu",
                  game_source("alpha", "Alpha Game (stale copy)", 2,
@@ -322,6 +432,26 @@ int main() {
     build_plugin(root, "fromthefuture",
                  game_source("fromthefuture", "Too New", 1, 99));
     build_plugin(root, "notagame", "extern \"C\" int unrelated() { return 0; }\n");
+    build_plugin(root, "nullentry", R"(#include "manx_game_plugin.h"
+extern "C" const manx_game_api* manx_game_entry(void) { return nullptr; }
+)");
+    build_plugin(root, "noname",
+                 game_source("", "No Name", 1, MANX_GAME_ABI_VERSION));
+    std::string bad_stats =
+        game_source("badstats", "Bad Stats", 1, MANX_GAME_ABI_VERSION);
+    const std::string stats_token =
+        "MANX_GAME_STATS_ABI_VERSION, take_stats";
+    bad_stats.replace(bad_stats.find(stats_token), stats_token.size(),
+                      "99, take_stats");
+    build_plugin(root, "badstats", bad_stats);
+    std::string bad_pcm =
+        game_source("badpcm", "Bad PCM", 1, MANX_GAME_ABI_VERSION);
+    const std::string pcm_token = "MANX_GAME_PCM_ABI_VERSION, take_pcm";
+    bad_pcm.replace(bad_pcm.find(pcm_token), pcm_token.size(),
+                    "99, take_pcm");
+    build_plugin(root, "badpcm", bad_pcm);
+    build_plugin(root, "beta",
+                 game_source("beta", "Beta", 1, MANX_GAME_ABI_VERSION));
     // Right ABI number, previous table shape: the two audio entries are left
     // null by the aggregate initialiser.
     build_plugin(root, "shorttable", R"(#include "manx_game_plugin.h"
@@ -352,8 +482,11 @@ extern "C" const manx_game_api* manx_game_entry(void) { return &api; }
     test_a_duplicate_short_name_keeps_one_and_names_the_other(root);
     test_discovery_order_does_not_depend_on_the_file_system(root);
     test_a_loaded_plugin_runs_and_reports(root);
+    test_loader_failure_paths_are_reported(root);
     test_a_table_missing_the_new_entries_is_refused(root);
     test_audio_cues_are_drained_not_repeated(root);
+    test_continuous_pcm_extension_is_typed(root);
+    test_stat_events_are_optional_typed_and_drained(root);
     test_discovered_games_reach_the_catalogue(root);
     test_a_bundle_without_a_library_hides_nothing(root);
 

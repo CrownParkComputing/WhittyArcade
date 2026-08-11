@@ -63,6 +63,41 @@ Time Crisis did, rather than leaking special cases into the application shell.
    - CPU/bus/audio/video unit tests;
    - boot/frame and repeated session-lifecycle integration.
 
+## Add an Xbox recomp plugin
+
+Recompiled Xbox 360 titles are plugins, not built-in hardware boards. Build
+them from an owned matching XEX with
+[`CrownParkComputing/XboxRecompv2`](https://github.com/CrownParkComputing/XboxRecompv2):
+
+```bash
+./convert.sh /path/to/default.xex --install-manx
+```
+
+The installer writes one bundle to the per-user game directory:
+
+```text
+Linux:   ${XDG_DATA_HOME:-$HOME/.local/share}/MANX/games/<slug>/
+Windows: %LOCALAPPDATA%\MANX\games\<slug>\
+```
+
+Each bundle contains `<slug>.so`, `<slug>-core`, `product.json` and a pointer
+to the user's owned data tree. MANX scans bundles at startup, validates plugin
+ABI 2, and places them on the **X360 Recomp** shelf automatically. Do not add a
+title-specific launcher entry.
+
+Recomp plugins may export the optional continuous-PCM and persistent-stat
+tables. The stats table is the online boundary: the runtime validates
+`XSessionWriteStats` against the signed SPA/XDBF embedded in the original XEX,
+the plugin drains those validated events, and `online_link` submits the best
+value for the signed-in MANX account. Firestore rules and title catalogues live
+in `CrownParkComputing/MANXOnline`; they must be deployed before results leave
+the cabinet.
+
+Geometry Wars 1 and 2 deliberately advertise local players but not network
+simulation. Their Xbox Live feature is persistent leaderboards; setting
+`supports_network` would incorrectly offer deterministic cabinet netplay that
+the recompiled cores do not yet guarantee.
+
 ## Local ROM-backed test configuration
 
 ROM paths stay in the local CMake cache and are never embedded in source:

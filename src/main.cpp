@@ -21,6 +21,7 @@
 #include "manx_cloud_config.h"
 #include "manx_http.h"
 #include "online_link.h"
+#include "rr6_cloud_save.h"
 #include "namco/system22/system22_c139_transport.h"
 #include "namco/system22/system22_cpu.h"
 #include "persistent_data.h"
@@ -824,7 +825,9 @@ int main(int argc, char* argv[]) {
     // link only learns their public addresses and hands them over, so it is
     // built beside the lobby and lives exactly as long.
     std::unique_ptr<online_link> online;
-    if (startup_menu) {
+    const bool owns_online_identity =
+        startup_menu || (runtime.wall_count <= 1 && runtime.cabinet_node <= 1);
+    if (owns_online_identity) {
         lobby = std::make_unique<multiplayer_lobby>();
         // Off unless somebody has asked for it. The lobby is still built,
         // because the internet path hands its addresses to exactly this
@@ -1099,6 +1102,118 @@ int main(int argc, char* argv[]) {
         }
 
         emulator_settings session_settings = settings;
+        const bool rr6_save_active =
+            identity->short_name == "ridgeracer6" && cabinet_node <= 1;
+        const fs::path rr6_seed_directory =
+            fs::path(rom_path) / "default_save" / "Game_Data";
+        std::string rr6_confirmed_checksum;
+        std::string rr6_pending_checksum;
+        // Set when startup found local and cloud diverged. The periodic
+        // uploader below publishes whatever the title writes, so without this
+        // it would push the local save over the cloud copy seconds after
+        // startup deliberately declined to - undoing the whole conflict
+        // decision. Publishing stays off until a human resolves it.
+        bool rr6_publish_blocked = false;
+        auto rr6_save_poll = std::chrono::steady_clock::now();
+        if (rr6_save_active) {
+            std::string save_error;
+            auto local = rr6_cloud_save::capture_live(&save_error);
+            online_cloud_save_result cloud;
+            if (online) cloud = online->fetch_cloud_save(
+                rr6_cloud_save::title_id, 12000);
+
+            if (cloud.status == online_cloud_save_result::state::available) {
+                const auto remote =
+                    rr6_cloud_save::from_cloud(cloud.save, save_error);
+                if (remote) {
+                    std::string seed_error;
+                    const auto seed = rr6_cloud_save::capture(
+                        rr6_seed_directory, &seed_error);
+                    const rr6_cloud_save::decision verdict =
+                        rr6_cloud_save::resolve(
+                            local, remote, rr6_cloud_save::read_marker(),
+                            seed ? seed->checksum : std::string());
+                    switch (verdict.what) {
+                    case rr6_cloud_save::resolution::take_cloud:
+                        if (rr6_cloud_save::install(
+                                *remote, rr6_seed_directory, save_error)) {
+                            local = remote;
+                            std::printf("RR6 save: restored %zu bytes from "
+                                        "MANX cloud (%s)\n",
+                                        remote->payload.size(),
+                                        verdict.reason.c_str());
+                        } else {
+                            std::fprintf(stderr, "RR6 save: %s\n",
+                                         save_error.c_str());
+                        }
+                        break;
+                    case rr6_cloud_save::resolution::publish_local:
+                        if (online) {
+                            online->submit_cloud_save(
+                                rr6_cloud_save::upload(*local));
+                            std::printf("RR6 save: PENDING upload, %s\n",
+                                        verdict.reason.c_str());
+                        }
+                        break;
+                    case rr6_cloud_save::resolution::conflict:
+                        // Both machines played from the same base. Neither
+                        // side may be overwritten and an opaque 72,192-byte
+                        // blob cannot be merged, so keep playing the local
+                        // save, park the cloud copy where it can be recovered,
+                        // and publish nothing until a human chooses.
+                        rr6_publish_blocked = true;
+                        if (rr6_cloud_save::preserve_conflict(*remote,
+                                                              save_error)) {
+                            std::fprintf(stderr,
+                                "RR6 save: CONFLICT - %s. Keeping the local "
+                                "save; the cloud copy is retained at %s\n",
+                                verdict.reason.c_str(),
+                                (rr6_cloud_save::conflict_directory() /
+                                 remote->checksum).string().c_str());
+                        } else {
+                            std::fprintf(stderr,
+                                "RR6 save: CONFLICT - %s, and the cloud copy "
+                                "could not be retained: %s\n",
+                                verdict.reason.c_str(), save_error.c_str());
+                        }
+                        break;
+                    case rr6_cloud_save::resolution::already_synced:
+                        // Say so. A silent success is indistinguishable from
+                        // the sync never having run, which makes testing the
+                        // online path guesswork.
+                        std::printf("RR6 save: SYNCED (%s)\n",
+                                    verdict.reason.c_str());
+                        break;
+                    case rr6_cloud_save::resolution::nothing:
+                        break;
+                    }
+                } else {
+                    std::fprintf(stderr, "RR6 save: %s\n", save_error.c_str());
+                }
+            }
+
+            if (!local) {
+                if (rr6_cloud_save::restore_last_good(save_error)) {
+                    local = rr6_cloud_save::capture_live(&save_error);
+                    std::printf("RR6 save: repaired from local last-good copy\n");
+                } else if (rr6_cloud_save::install_seed(
+                               rr6_seed_directory, save_error)) {
+                    local = rr6_cloud_save::capture_live(&save_error);
+                    std::printf("RR6 save: initialized from verified default\n");
+                } else {
+                    std::fprintf(stderr, "RR6 save: cannot initialize: %s\n",
+                                 save_error.c_str());
+                }
+            }
+
+            if (local) {
+                rr6_confirmed_checksum = rr6_cloud_save::read_marker();
+                rr6_cloud_save::preserve_last_good(*local, save_error);
+                if (online && cloud.status ==
+                                  online_cloud_save_result::state::missing)
+                    online->submit_cloud_save(rr6_cloud_save::upload(*local));
+            }
+        }
         // Player 2 contributes controls to Player 1 and presents Player 1's
         // authoritative picture. Silence the hidden local board so two
         // unsynchronised audio timelines can never be heard together.
@@ -1489,6 +1604,61 @@ int main(int argc, char* argv[]) {
                     arcade_audio_output::set_output_muted(false);
                 }
                 emu->run_frame();
+            }
+
+            // A recomp plugin reports the title's real leaderboard ids after
+            // XSessionWriteStats has passed its SPA/XDBF validation.  Drain
+            // even while signed out so a plugin cannot accumulate an
+            // unbounded queue; online_link itself is asynchronous.
+            arcade_online_score reported_score;
+            while (emu->take_online_score(reported_score)) {
+                if (!online) continue;
+                online_leaderboard_submission submission;
+                submission.board.title_id = reported_score.title_id;
+                submission.board.leaderboard_id =
+                    reported_score.leaderboard_id;
+                submission.board.property_id = reported_score.property_id;
+                submission.board.lower_is_better =
+                    reported_score.lower_is_better;
+                submission.value = reported_score.value;
+                submission.metadata.reserve(reported_score.metadata.size());
+                for (const auto& property : reported_score.metadata)
+                    submission.metadata.push_back(
+                        {property.property_id, property.value});
+                online->submit_score(std::move(submission));
+            }
+
+            // RR6 writes its container in place. Observe the same complete
+            // 72,192-byte image twice, two seconds apart, before preserving
+            // or uploading it. A crash or power loss during either write
+            // therefore leaves both the cloud copy and local last-good copy
+            // untouched.
+            if (rr6_save_active && online &&
+                std::chrono::steady_clock::now() >= rr6_save_poll) {
+                rr6_save_poll = std::chrono::steady_clock::now() +
+                                std::chrono::seconds(2);
+                std::string save_error;
+                const auto current = rr6_cloud_save::capture_live(&save_error);
+                const std::string marker = rr6_cloud_save::read_marker();
+                if (!marker.empty()) rr6_confirmed_checksum = marker;
+                if (current && current->checksum != rr6_confirmed_checksum) {
+                    if (current->checksum == rr6_pending_checksum) {
+                        if (rr6_cloud_save::preserve_last_good(*current,
+                                                               save_error)) {
+                            // Local last-good protection continues through an
+                            // unresolved conflict; only publishing is held, so
+                            // the cloud copy we preserved stays intact.
+                            if (!rr6_publish_blocked)
+                                online->submit_cloud_save(
+                                    rr6_cloud_save::upload(*current));
+                            rr6_pending_checksum.clear();
+                        }
+                    } else {
+                        rr6_pending_checksum = current->checksum;
+                    }
+                } else if (!current) {
+                    rr6_pending_checksum.clear();
+                }
             }
 
             // System 246 waits directly on Play!'s completed GS flips. A

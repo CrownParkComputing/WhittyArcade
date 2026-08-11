@@ -84,6 +84,19 @@ struct input_state {
     uint8_t  p2_stick_y{0x7f};
     uint8_t  p2_buttons[8]{};
     bool     p2_start{false};
+
+    // The second cabinet's complete driving controls.  Generic netplay used
+    // to preserve only its stick and action buttons, which was enough for a
+    // two-button platform game and made a racing plugin receive zero throttle
+    // from Player 2 on every frame.
+    uint16_t p2_steering{0x800};
+    uint16_t p2_gas{0};
+    uint16_t p2_brake{0};
+    uint8_t  p2_right_stick_x{0x7f};
+    uint8_t  p2_right_stick_y{0x7f};
+    bool     p2_shift_down{false};
+    bool     p2_shift_up{false};
+    bool     p2_view{false};
 };
 
 struct rgba_color {

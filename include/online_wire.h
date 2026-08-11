@@ -24,6 +24,7 @@
 #include <ctime>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace online_wire {
@@ -112,6 +113,69 @@ inline nlohmann::json value_strings(const std::vector<std::string>& list) {
 
 inline nlohmann::json value_map(nlohmann::json fields) {
     return nlohmann::json{{"mapValue", {{"fields", std::move(fields)}}}};
+}
+
+inline std::string base64_encode(const std::vector<uint8_t>& bytes) {
+    static constexpr char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    result.reserve(((bytes.size() + 2) / 3) * 4);
+    for (std::size_t i = 0; i < bytes.size(); i += 3) {
+        const uint32_t a = bytes[i];
+        const uint32_t b = i + 1 < bytes.size() ? bytes[i + 1] : 0;
+        const uint32_t c = i + 2 < bytes.size() ? bytes[i + 2] : 0;
+        const uint32_t value = (a << 16) | (b << 8) | c;
+        result.push_back(alphabet[(value >> 18) & 63]);
+        result.push_back(alphabet[(value >> 12) & 63]);
+        result.push_back(i + 1 < bytes.size() ? alphabet[(value >> 6) & 63]
+                                              : '=');
+        result.push_back(i + 2 < bytes.size() ? alphabet[value & 63] : '=');
+    }
+    return result;
+}
+
+inline bool base64_decode(std::string_view text, std::vector<uint8_t>& out) {
+    const auto value_of = [](char character) -> int {
+        if (character >= 'A' && character <= 'Z') return character - 'A';
+        if (character >= 'a' && character <= 'z') return character - 'a' + 26;
+        if (character >= '0' && character <= '9') return character - '0' + 52;
+        if (character == '+') return 62;
+        if (character == '/') return 63;
+        return -1;
+    };
+    out.clear();
+    if (text.size() % 4 != 0) return false;
+    out.reserve((text.size() / 4) * 3);
+    for (std::size_t i = 0; i < text.size(); i += 4) {
+        const int a = value_of(text[i]);
+        const int b = value_of(text[i + 1]);
+        const bool pad_c = text[i + 2] == '=';
+        const bool pad_d = text[i + 3] == '=';
+        const int c = pad_c ? 0 : value_of(text[i + 2]);
+        const int d = pad_d ? 0 : value_of(text[i + 3]);
+        if (a < 0 || b < 0 || c < 0 || d < 0 || (pad_c && !pad_d) ||
+            ((pad_c || pad_d) && i + 4 != text.size())) {
+            out.clear();
+            return false;
+        }
+        const uint32_t value = (uint32_t(a) << 18) | (uint32_t(b) << 12) |
+                               (uint32_t(c) << 6) | uint32_t(d);
+        out.push_back(static_cast<uint8_t>(value >> 16));
+        if (!pad_c) out.push_back(static_cast<uint8_t>(value >> 8));
+        if (!pad_d) out.push_back(static_cast<uint8_t>(value));
+    }
+    return true;
+}
+
+inline nlohmann::json value_bytes(const std::vector<uint8_t>& bytes) {
+    return nlohmann::json{{"bytesValue", base64_encode(bytes)}};
+}
+
+inline bool read_bytes(const nlohmann::json& value,
+                       std::vector<uint8_t>& out) {
+    const auto found = value.find("bytesValue");
+    return found != value.end() && found->is_string() &&
+           base64_decode(found->get<std::string>(), out);
 }
 
 // --- reading them back -------------------------------------------------

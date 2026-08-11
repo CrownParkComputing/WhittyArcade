@@ -17,6 +17,8 @@
 #pragma once
 
 #include "manx_game_plugin.h"
+#include "manx_game_pcm.h"
+#include "manx_game_stats.h"
 
 #include <memory>
 #include <string>
@@ -55,11 +57,15 @@ public:
 
     bool open(const std::string& library_path, std::string& error);
     const manx_game_api* api() const noexcept { return m_api; }
+    const manx_game_stats_api* stats_api() const noexcept { return m_stats_api; }
+    const manx_game_pcm_api* pcm_api() const noexcept { return m_pcm_api; }
     bool valid() const noexcept { return m_api != nullptr; }
 
 private:
     void* m_handle{nullptr};
     const manx_game_api* m_api{nullptr};
+    const manx_game_stats_api* m_stats_api{nullptr};
+    const manx_game_pcm_api* m_pcm_api{nullptr};
 };
 
 class game_plugin_library {

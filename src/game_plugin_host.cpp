@@ -123,6 +123,41 @@ bool loaded_plugin::open(const std::string& library_path, std::string& error) {
         m_handle = nullptr;
         return false;
     }
+    // Optional extension: its own symbol and version preserve binary
+    // compatibility with every ABI-2 plugin already installed.  If a plugin
+    // advertises the extension it must be complete; silently ignoring a bad
+    // table would lose scores while claiming online support.
+    auto stats_entry = reinterpret_cast<manx_game_stats_entry_fn>(
+        plugin_symbol(m_handle, MANX_GAME_STATS_ENTRY_SYMBOL));
+    if (stats_entry != nullptr) {
+        const manx_game_stats_api* stats = stats_entry();
+        if (stats == nullptr ||
+            stats->abi_version != MANX_GAME_STATS_ABI_VERSION ||
+            stats->take_events == nullptr) {
+            error = "plugin has an invalid stats extension";
+            plugin_close(m_handle);
+            m_handle = nullptr;
+            return false;
+        }
+        m_stats_api = stats;
+    }
+    // Continuous mixed audio is a separate optional extension. Existing
+    // cue-only plugins remain ABI-2 compatible, while recomp plugins can pass
+    // through the console's real music, speech and effects mix.
+    auto pcm_entry = reinterpret_cast<manx_game_pcm_entry_fn>(
+        plugin_symbol(m_handle, MANX_GAME_PCM_ENTRY_SYMBOL));
+    if (pcm_entry != nullptr) {
+        const manx_game_pcm_api* pcm = pcm_entry();
+        if (pcm == nullptr ||
+            pcm->abi_version != MANX_GAME_PCM_ABI_VERSION ||
+            pcm->take_blocks == nullptr) {
+            error = "plugin has an invalid PCM extension";
+            plugin_close(m_handle);
+            m_handle = nullptr;
+            return false;
+        }
+        m_pcm_api = pcm;
+    }
     m_api = api;
     return true;
 }

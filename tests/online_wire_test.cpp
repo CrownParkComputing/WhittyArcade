@@ -121,6 +121,13 @@ int main() {
         const auto list = value_strings({"galaga", "outrun"});
         check(list.at("arrayValue").at("values").size() == 2,
               "an array of short names encodes as an array value");
+
+        const std::vector<uint8_t> binary{0x00, 0x01, 0xFE, 0xFF, 0x42};
+        std::vector<uint8_t> decoded;
+        check(read_bytes(value_bytes(binary), decoded) && decoded == binary,
+              "Firestore bytes survive base64 round trip");
+        check(!base64_decode("not-valid!", decoded),
+              "malformed cloud-save base64 is rejected");
     }
     {
         check(read_int(nlohmann::json{{"integerValue", "35109"}}) == 35109,
