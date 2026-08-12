@@ -1,6 +1,6 @@
 schema_version = 1
 central_path = "/home/jon/recomp-cookbook"
-central_commit = "5d8966684c86c48c6e0cb2580f2244192f668bd0"
+central_commit = "00765b26df341bbf6a79b07fa00c407a168964ce"
 status_file = "docs/manifests/test-status.toml"
 cookbook_file = "docs/MANX_COOKBOOK.md"
 builders = ["manx"]

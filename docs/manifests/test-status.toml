@@ -31,7 +31,7 @@ duration_seconds = 1.83
 
 [review]
 input_fingerprint = "b0bc3a09ef09b85cc4431d73d7fae213d96309c18793d1c7fe1a7515947c9ad9"
-cookbook_commit = "5d8966684c86c48c6e0cb2580f2244192f668bd0"
+cookbook_commit = "00765b26df341bbf6a79b07fa00c407a168964ce"
 
 [tests]
 central_cookbook_unit = "pass"
