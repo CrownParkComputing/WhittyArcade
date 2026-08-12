@@ -124,6 +124,20 @@ Implemented and tested (most relevant items; full list in `docs/`):
   recomp products as plugins hosted by the same launcher shim; the Geometry
   Wars titles have title-validated MANX Online leaderboard submissions
 
+## Creating a native game plugin
+
+Create a buildable ABI-2 plugin with a persistent achievement example:
+
+```bash
+python3 tools/create_game_plugin.py my_game "My Game"
+```
+
+The generated project uses the optional `manx_game_achievements.h` extension.
+MANX validates each declared achievement, restores prior state at game start,
+and atomically saves absolute progress under the current OS user's data
+directory. The plugin never receives or chooses that path, and older plugins
+without this extension remain compatible.
+
 ## ROM requirements
 
 You must supply any ROMs yourself, and only ones you are legally entitled

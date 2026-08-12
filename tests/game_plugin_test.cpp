@@ -11,6 +11,7 @@
 
 #include "arcade_catalog.h"
 #include "game_plugin_host.h"
+#include "plugin_achievement_store.h"
 
 #include <cassert>
 #include <cstdio>
@@ -48,6 +49,7 @@ std::string game_source(const std::string& short_name,
     return R"(#include "manx_game_plugin.h"
 #include "manx_game_pcm.h"
 #include "manx_game_stats.h"
+#include "manx_game_achievements.h"
 #include <cstdlib>
 struct manx_game_instance { int frames; unsigned char pixel[4]; int pending; };
 namespace {
@@ -104,6 +106,21 @@ uint32_t take_pcm(manx_game_instance* g, manx_game_pcm_block* out,
     out[0] = {samples, 2, 48000, 2};
     return 1;
 }
+uint32_t describe_achievements(manx_game_achievement_definition* out,
+                               uint32_t max) {
+    if (out == nullptr) return 1;
+    if (max > 0) out[0] = {7u, "First Run", "Complete two frames", 10u,
+                           0u, 2u};
+    return max > 0 ? 1u : 0u;
+}
+void restore_achievements(manx_game_instance*,
+                          const manx_game_achievement_state*, uint32_t) {}
+uint32_t take_achievements(manx_game_instance* g,
+                           manx_game_achievement_event* out, uint32_t max) {
+    if (max == 0 || g->frames != 2) return 0;
+    out[0] = {7u, 1u, 2u};
+    return 1;
+}
 const manx_game_api api = { )" + std::to_string(abi_version) +
            R"(, describe, create, destroy, run_frame, reset, set_paused, score, checksum,
              take_cues, describe_cues };
@@ -111,6 +128,9 @@ const manx_game_stats_api stats_api = {
     MANX_GAME_STATS_ABI_VERSION, take_stats };
 const manx_game_pcm_api pcm_api = {
     MANX_GAME_PCM_ABI_VERSION, take_pcm };
+const manx_game_achievements_api achievements_api = {
+    MANX_GAME_ACHIEVEMENTS_ABI_VERSION, describe_achievements,
+    restore_achievements, take_achievements };
 }
 extern "C" const manx_game_api* manx_game_entry(void) { return &api; }
 extern "C" const manx_game_stats_api* manx_game_stats_entry(void) {
@@ -118,6 +138,9 @@ extern "C" const manx_game_stats_api* manx_game_stats_entry(void) {
 }
 extern "C" const manx_game_pcm_api* manx_game_pcm_entry(void) {
     return &pcm_api;
+}
+extern "C" const manx_game_achievements_api* manx_game_achievements_entry(void) {
+    return &achievements_api;
 }
 )";
 }
@@ -280,7 +303,7 @@ void test_loader_failure_paths_are_reported(const fs::path& root) {
     assert(!error.empty());
 
     for (const char* fixture : {"nullentry", "noname", "badstats",
-                                "badpcm"}) {
+                                "badpcm", "badachievements"}) {
         assert(library.find(fixture) == nullptr);
         bool explained = false;
         for (const rejected_plugin& rejected : library.rejected())
@@ -393,6 +416,36 @@ void test_stat_events_are_optional_typed_and_drained(const fs::path& root) {
     plugin->api()->destroy(instance);
 }
 
+void test_achievement_extension_and_per_user_store(const fs::path& root) {
+    game_plugin_library library;
+    library.scan(root.string());
+    const discovered_game* game = library.find("alpha");
+    assert(game != nullptr);
+    std::string error;
+    std::unique_ptr<loaded_plugin> plugin = library.load(*game, error);
+    assert(plugin && plugin->achievements_api() != nullptr);
+    manx_game_achievement_definition definition{};
+    assert(plugin->achievements_api()->describe(nullptr, 0) == 1);
+    assert(plugin->achievements_api()->describe(&definition, 1) == 1);
+    assert(definition.id == 7 && definition.target_progress == 2);
+
+    const fs::path user_data = root / "user-data";
+#if defined(_WIN32)
+    _putenv_s("XDG_DATA_HOME", user_data.string().c_str());
+#else
+    setenv("XDG_DATA_HOME", user_data.string().c_str(), 1);
+#endif
+    std::vector<manx_game_achievement_state> saved{{7u, 1u, 2u}};
+    assert(save_plugin_achievements("alpha", saved, error));
+    std::vector<manx_game_achievement_state> loaded;
+    assert(load_plugin_achievements("alpha", loaded, error));
+    assert(loaded.size() == 1 && loaded[0].id == 7 &&
+           loaded[0].unlocked == 1 && loaded[0].progress == 2);
+    assert(plugin_achievement_path("alpha") ==
+           user_data / "MANX" / "achievements" / "alpha.state");
+    assert(plugin_achievement_path("../escape").empty());
+}
+
 void test_discovered_games_reach_the_catalogue(const fs::path& root) {
     game_plugin_library library;
     library.scan(root.string());
@@ -450,6 +503,15 @@ extern "C" const manx_game_api* manx_game_entry(void) { return nullptr; }
     bad_pcm.replace(bad_pcm.find(pcm_token), pcm_token.size(),
                     "99, take_pcm");
     build_plugin(root, "badpcm", bad_pcm);
+    std::string bad_achievements =
+        game_source("badachievements", "Bad Achievements", 1,
+                    MANX_GAME_ABI_VERSION);
+    const std::string achievements_token =
+        "MANX_GAME_ACHIEVEMENTS_ABI_VERSION, describe_achievements";
+    bad_achievements.replace(
+        bad_achievements.find(achievements_token), achievements_token.size(),
+        "99, describe_achievements");
+    build_plugin(root, "badachievements", bad_achievements);
     build_plugin(root, "beta",
                  game_source("beta", "Beta", 1, MANX_GAME_ABI_VERSION));
     // Right ABI number, previous table shape: the two audio entries are left
@@ -487,6 +549,7 @@ extern "C" const manx_game_api* manx_game_entry(void) { return &api; }
     test_audio_cues_are_drained_not_repeated(root);
     test_continuous_pcm_extension_is_typed(root);
     test_stat_events_are_optional_typed_and_drained(root);
+    test_achievement_extension_and_per_user_store(root);
     test_discovered_games_reach_the_catalogue(root);
     test_a_bundle_without_a_library_hides_nothing(root);
 

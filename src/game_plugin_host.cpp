@@ -141,6 +141,24 @@ bool loaded_plugin::open(const std::string& library_path, std::string& error) {
         }
         m_stats_api = stats;
     }
+    // Persistent achievements are host-owned and optional. The extension is a
+    // separate symbol so installed ABI-2 plugins remain binary-compatible.
+    auto achievements_entry = reinterpret_cast<manx_game_achievements_entry_fn>(
+        plugin_symbol(m_handle, MANX_GAME_ACHIEVEMENTS_ENTRY_SYMBOL));
+    if (achievements_entry != nullptr) {
+        const manx_game_achievements_api* achievements = achievements_entry();
+        if (achievements == nullptr ||
+            achievements->abi_version != MANX_GAME_ACHIEVEMENTS_ABI_VERSION ||
+            achievements->describe == nullptr ||
+            achievements->restore == nullptr ||
+            achievements->take_events == nullptr) {
+            error = "plugin has an invalid achievements extension";
+            plugin_close(m_handle);
+            m_handle = nullptr;
+            return false;
+        }
+        m_achievements_api = achievements;
+    }
     // Continuous mixed audio is a separate optional extension. Existing
     // cue-only plugins remain ABI-2 compatible, while recomp plugins can pass
     // through the console's real music, speech and effects mix.

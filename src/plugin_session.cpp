@@ -17,6 +17,7 @@
 #include "game_plugin_host.h"
 #include "plugin_audio.h"
 #include "plugin_pcm_queue.h"
+#include "plugin_achievement_store.h"
 #include "arcade_input.h"
 #include "arcade_audio_output.h"
 #include "manx_game_pcm.h"
@@ -29,6 +30,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 
 namespace {
 
@@ -112,6 +114,7 @@ public:
                          m_game.display_name.c_str());
             return false;
         }
+        initialize_achievements();
         m_pcm_master_volume = settings.master_volume;
         m_pcm_music_volume = settings.music_volume;
         // Cue names come from the plugin, so the bundle's sound files are
@@ -192,6 +195,7 @@ public:
 
         manx_game_frame frame{};
         m_plugin->api()->run_frame(m_instance, inputs, 4, &frame);
+        drain_achievement_events();
 
         // A plugin can hash the actual simulation state much more cheaply and
         // precisely than the host can infer it from an occasional raster.
@@ -291,6 +295,89 @@ protected:
     }
 
 private:
+    void initialize_achievements() {
+        const manx_game_achievements_api* api = m_plugin->achievements_api();
+        if (!api) return;
+        const uint32_t count = std::min<uint32_t>(
+            api->describe(nullptr, 0), MANX_GAME_ACHIEVEMENT_MAX_COUNT);
+        if (count == 0) return;
+        std::vector<manx_game_achievement_definition> definitions(count);
+        const uint32_t written = std::min<uint32_t>(
+            api->describe(definitions.data(), count), count);
+        for (uint32_t at = 0; at < written; ++at) {
+            const auto& definition = definitions[at];
+            if (definition.id == 0 || !definition.name ||
+                !*definition.name || definition.target_progress == 0 ||
+                m_achievement_targets.count(definition.id) != 0) {
+                std::fprintf(stderr, "%s has an invalid achievement definition\n",
+                             m_game.display_name.c_str());
+                m_achievement_targets.clear();
+                m_achievement_states.clear();
+                return;
+            }
+            m_achievement_targets.emplace(definition.id,
+                                          definition.target_progress);
+        }
+        std::string error;
+        std::vector<manx_game_achievement_state> saved;
+        if (!load_plugin_achievements(m_game.short_name, saved, error)) {
+            std::fprintf(stderr, "%s achievement restore skipped: %s\n",
+                         m_game.display_name.c_str(), error.c_str());
+            return;
+        }
+        for (auto state : saved) {
+            const auto target = m_achievement_targets.find(state.id);
+            if (target == m_achievement_targets.end()) continue;
+            state.progress = std::min(state.progress, target->second);
+            if (state.progress >= target->second) state.unlocked = 1;
+            m_achievement_states.push_back(state);
+        }
+        api->restore(m_instance, m_achievement_states.data(),
+                     static_cast<uint32_t>(m_achievement_states.size()));
+        std::printf("%s achievements: %zu restored for this user\n",
+                    m_game.display_name.c_str(), m_achievement_states.size());
+    }
+
+    void drain_achievement_events() {
+        const manx_game_achievements_api* api = m_plugin->achievements_api();
+        if (!api || m_achievement_targets.empty()) return;
+        manx_game_achievement_event events[32]{};
+        const uint32_t count = std::min<uint32_t>(
+            api->take_events(m_instance, events, 32), 32);
+        bool changed = false;
+        for (uint32_t at = 0; at < count; ++at) {
+            const auto target = m_achievement_targets.find(events[at].id);
+            if (target == m_achievement_targets.end()) continue;
+            auto state = std::find_if(
+                m_achievement_states.begin(), m_achievement_states.end(),
+                [&](const auto& existing) { return existing.id == events[at].id; });
+            if (state == m_achievement_states.end()) {
+                m_achievement_states.push_back({events[at].id, 0, 0});
+                state = std::prev(m_achievement_states.end());
+            }
+            const uint64_t progress = std::min(events[at].progress, target->second);
+            const uint64_t new_progress = std::max(state->progress, progress);
+            const uint32_t new_unlocked =
+                state->unlocked || events[at].unlocked ||
+                new_progress >= target->second;
+            if (new_progress != state->progress || new_unlocked != state->unlocked) {
+                state->progress = new_progress;
+                state->unlocked = new_unlocked;
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        std::sort(m_achievement_states.begin(), m_achievement_states.end(),
+                  [](const auto& left, const auto& right) {
+                      return left.id < right.id;
+                  });
+        std::string error;
+        if (!save_plugin_achievements(m_game.short_name,
+                                      m_achievement_states, error))
+            std::fprintf(stderr, "%s achievements could not be saved: %s\n",
+                         m_game.display_name.c_str(), error.c_str());
+    }
+
     void queue_pcm(const manx_game_pcm_block& block) {
         if (!block.samples || block.frames == 0 || block.sample_rate == 0 ||
             block.channels == 0 || block.channels > 8)
@@ -355,6 +442,8 @@ private:
     int m_pcm_master_volume{100};
     int m_pcm_music_volume{100};
     std::deque<arcade_online_score> m_scores;
+    std::unordered_map<uint32_t, uint64_t> m_achievement_targets;
+    std::vector<manx_game_achievement_state> m_achievement_states;
 };
 
 } // namespace

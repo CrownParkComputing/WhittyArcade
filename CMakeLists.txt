@@ -300,6 +300,7 @@ set(SOURCES
     src/capcom/gng/gng_session.cpp
     src/game_plugin_host.cpp
     src/plugin_session.cpp
+    src/plugin_achievement_store.cpp
     src/plugin_audio.cpp
     src/namco/namco_session.cpp
     src/arcade_renderer.cpp
@@ -756,6 +757,7 @@ add_test(NAME plugin_pcm_queue_test COMMAND plugin_pcm_queue_test)
 add_executable(game_plugin_test
     tests/game_plugin_test.cpp
     src/game_plugin_host.cpp
+    src/plugin_achievement_store.cpp
     src/arcade_catalog.cpp
     src/arcade_game_probe.cpp
     src/midway/midway_rom.cpp
