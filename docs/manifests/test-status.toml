@@ -1,8 +1,27 @@
-date = "2026-08-12"
-project = "MANX"
-classification = "shared-runtime-development-baseline"
+schema_version = 1
+title = "MANX"
+title_id = "MANX"
+platform = "multi-arcade"
+classification = "shared-native-host-platform"
 release_ready = false
-source_commit = "9d222b74f254a64c7ee91e17d8c7d4a9106ad9e4"
+updated = "2026-08-12"
+known_issue_ids = ["MANX-PLATFORM-001"]
+source_commit = "ef0db378e6c167ff0b9bd1b3dccab449562be295"
+
+[coverage]
+translated_instructions = 0
+decoded_instructions = 0
+native_translation_percent = 0.0
+rexglue_functions = 0
+xenonrecomp_functions = 0
+rexglue_vs_xenon_functions_percent = 0.0
+imports_total = 0
+imports_implemented = 0
+imports_stubbed = 0
+imports_missing = 0
+implemented_imports_percent = 0.0
+stubbed_import_names = []
+missing_import_names = []
 
 [no_rom_ctest]
 configured = 60
@@ -10,33 +29,28 @@ passed_with_loopback = 60
 failed_with_loopback = 0
 duration_seconds = 1.83
 
-[environment_notes]
-network_isolated_passed = 57
-network_isolated_failed = 3
-loopback_required = ["c139_link_test", "c139_transport_test", "model2_io_test"]
-loopback_rerun_passed = 3
+[review]
+input_fingerprint = "b0bc3a09ef09b85cc4431d73d7fae213d96309c18793d1c7fe1a7515947c9ad9"
+cookbook_commit = "5d8966684c86c48c6e0cb2580f2244192f668bd0"
 
-[shared_gates]
-session_lifecycle_unit = "pass"
-audio_unit = "pass"
-input_mapping_unit = "pass"
-settings_and_persistence_unit = "pass"
-rom_loader_unit = "pass"
-renderer_unit = "pass"
-plugin_lifecycle_unit = "pass"
-local_link_transport_unit = "pass"
-
-[open_gates]
-clean_checkout_build_linux = true
-clean_checkout_build_windows = true
-gui_normal_close_no_residual_process = true
-per_title_owned_rom_inventory = true
-per_title_deep_boot_gameplay_result = true
-per_title_nonzero_audio_capture = true
-per_title_persistence_reload = true
-per_title_timing_and_one_percent_lows = true
-release_package_boundary_audit = true
+[tests]
+central_cookbook_unit = "pass"
+clean_linux_build_current_tree = "pass"
+no_rom_ctest = "pass"
+session_lifecycle = "pass"
+audio = "pass"
+input_mapping = "pass"
+settings_and_persistence = "pass"
+rom_loader = "pass"
+renderer = "pass"
+plugin_lifecycle = "pass"
+local_link_transport = "pass"
+native_translation = "not-applicable"
+rexglue_import_audit = "not-applicable"
+clean_windows_build = "not-tested"
+gui_normal_close_no_residual_process = "not-tested"
+per_title_owned_rom_routes = "partial"
 
 [working_tree]
 pre_existing_user_changes_present = true
-note = "Cookbook/status added without modifying or committing unrelated renderer/settings/bezel work."
+note = "Central cookbook files are staged independently; renderer/settings/bezel changes remain user-owned and unstaged."

@@ -4,6 +4,13 @@ MANX is a multi-board arcade platform, so readiness is the intersection of
 shared host gates and a separate evidence record for every supported game and
 board. One working title cannot certify another title, even on the same board.
 
+MANX pins the centralized cookbook and generic clean builder in
+`.recomp-cookbook.toml`. Run `scripts/cookbook-build.sh`; after configure,
+compile and CTest it automatically fingerprints the complete shared source and
+test directories and rejects stale review evidence. Native/Xenon/ReXGlue
+percentages are explicitly not applicable to this native host platform and are
+reported as zero-denominator measurements rather than invented completion.
+
 ## 0. Legal, licence and repository boundary
 
 - Users supply only ROMs, firmware and CHDs they are legally entitled to use.

@@ -1,0 +1,21 @@
+schema_version = 1
+central_path = "/home/jon/recomp-cookbook"
+central_commit = "5d8966684c86c48c6e0cb2580f2244192f668bd0"
+status_file = "docs/manifests/test-status.toml"
+cookbook_file = "docs/MANX_COOKBOOK.md"
+builders = ["manx"]
+post_recompile_review = true
+review_inputs = [
+  "CMakeLists.txt",
+  "README.md",
+  "LINUX_README.md",
+  "WINDOWS_README.md",
+  "docs/MANX_COOKBOOK.md",
+  "include",
+  "src",
+  "tests",
+  "resources",
+  "shaders",
+  "scripts",
+  "tools",
+]
