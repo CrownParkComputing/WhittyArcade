@@ -7,12 +7,16 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -333,27 +337,14 @@ const char* system246_rom_loader::set_display_name(system246_rom_set set) {
     return "Unknown Namco System 246 set";
 }
 
-bool system246_rom_loader::acgame_ready(const std::string& path,
-                                        std::string* missing) {
-    const auto report = [missing](const std::string& item) {
-        if (missing) *missing = item;
-        return false;
-    };
-    if (path.empty()) return report("<game>.acgame");
-    const fs::path manifest = resolve_acgame(fs::path(path));
-    if (manifest.empty()) return report("<game>.acgame");
-
+namespace {
+// Parse the [data] fields from a .acgame manifest. Returns false on IO error.
+// elf/dongle/mediasrc/card/subdir are the raw values (card may be key=value).
+bool parse_acgame_data(const fs::path& manifest, std::string& elf,
+                       std::string& dongle, std::string& mediasrc,
+                       std::string& card, std::string& subdir) {
     std::ifstream input(manifest);
-    if (!input) return report(manifest.filename().string());
-
-    // The module reads elf/dongle/mediasrc from the "[data]" section. Confirm
-    // each referenced file exists beside the manifest so a half-copied game is
-    // reported as not ready rather than failing only at boot.
-    std::string elf;
-    std::string dongle;
-    std::string mediasrc;
-    std::string card;
-    std::string subdir;
+    if (!input) return false;
     std::string line;
     while (std::getline(input, line)) {
         const std::size_t comment = line.find(';');
@@ -371,13 +362,36 @@ bool system246_rom_loader::acgame_ready(const std::string& path,
         else if (key == "card") card = value;
         else if (key == "subdir") subdir = value;
     }
+    return true;
+}
 
-    // A manifest may keep its data in a named subdirectory rather than beside
-    // itself; the published arcade collection ships every game that way, with
-    // the manifests gathered in one folder and each game's media under its own
-    // game-id directory. Resolve against that when it is present.
+// The directory the manifest's data files resolve against (its parent, plus
+// the optional subdir). Shared by the readiness checks.
+fs::path acgame_data_dir(const fs::path& manifest, const std::string& subdir) {
     fs::path directory = manifest.parent_path();
     if (!subdir.empty()) directory /= subdir;
+    return directory;
+}
+} // namespace
+
+bool system246_rom_loader::acgame_ready(const std::string& path,
+                                        std::string* missing) {
+    const auto report = [missing](const std::string& item) {
+        if (missing) *missing = item;
+        return false;
+    };
+    if (path.empty()) return report("<game>.acgame");
+    const fs::path manifest = resolve_acgame(fs::path(path));
+    if (manifest.empty()) return report("<game>.acgame");
+
+    // The module reads elf/dongle/mediasrc from the "[data]" section. Confirm
+    // each referenced file exists beside the manifest so a half-copied game is
+    // reported as not ready rather than failing only at boot.
+    std::string elf, dongle, mediasrc, card, subdir;
+    if (!parse_acgame_data(manifest, elf, dongle, mediasrc, card, subdir))
+        return report(manifest.filename().string());
+
+    const fs::path directory = acgame_data_dir(manifest, subdir);
 
     // "card=" may name the file directly or as key=value (a save-card slot);
     // only the file name matters for the readiness check.
@@ -385,6 +399,36 @@ bool system246_rom_loader::acgame_ready(const std::string& path,
         card = card.substr(assign + 1);
 
     for (const std::string& referenced : {elf, dongle, mediasrc, card}) {
+        if (referenced.empty()) continue;
+        std::error_code error;
+        if (!fs::exists(directory / referenced, error))
+            return report(referenced);
+    }
+    return true;
+}
+
+bool system246_rom_loader::acgame_pack_ready(const std::string& path,
+                                             std::string* missing) {
+    const auto report = [missing](const std::string& item) {
+        if (missing) *missing = item;
+        return false;
+    };
+    if (path.empty()) return report("<game>.acgame");
+    const fs::path manifest = resolve_acgame(fs::path(path));
+    if (manifest.empty()) return report("<game>.acgame");
+
+    // A squashfs cache's bootability depends on the in-pack files: the elf and
+    // the media (mediasrc/card). The dongle is centralized in the memcards dir
+    // and never sits beside the manifest, so it is deliberately excluded.
+    std::string elf, dongle, mediasrc, card, subdir;
+    if (!parse_acgame_data(manifest, elf, dongle, mediasrc, card, subdir))
+        return report(manifest.filename().string());
+
+    const fs::path directory = acgame_data_dir(manifest, subdir);
+    if (const std::size_t assign = card.find('='); assign != std::string::npos)
+        card = card.substr(assign + 1);
+
+    for (const std::string& referenced : {elf, mediasrc, card}) {
         if (referenced.empty()) continue;
         std::error_code error;
         if (!fs::exists(directory / referenced, error))
@@ -515,4 +559,269 @@ system246_rom_load_result system246_rom_loader::load(
     result.disc = inspect_disc(result.disc_path);
     if (!result.disc) result.error = result.disc.error;
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// Squashfs (packed collection) support
+// ---------------------------------------------------------------------------
+//
+// The Batocera/Namco System 246/256 packs ship each game as a single
+// .squashfs image whose contents are:
+//
+//   squashfs-root/<Name>.acgame     <- PCSX2 manifest (name/elf/dongle/mediasrc)
+//   squashfs-root/<name>.elf        <- arcade ELF loader
+//   squashfs-root/<...> (HDD|CD-ROM|DVD-ROM).chd   <- the disc image
+//   squashfs-root/sram.bin, title.txt
+//
+// MANX keeps these images squashed and unpacks one to a per-game cache
+// directory only when the game is selected. `unsquashfs` (from squashfs-tools)
+// is used for both the cheap manifest peek (listing + `-cat`) and the full
+// unpack. A game is treated as System 246/256 when its image contains an
+// .acgame manifest.
+
+namespace {
+
+float parse_progress_token(const std::string& token) {
+    const std::size_t slash = token.find('/');
+    if (slash == std::string::npos) return -1.0f;
+    const float current = std::strtof(token.c_str(), nullptr);
+    const float total =
+        std::strtof(token.c_str() + slash + 1, nullptr);
+    if (total <= 0.0f || current < 0.0f) return -1.0f;
+    return current / total;
+}
+
+bool run_command(const std::vector<std::string>& args, std::string* out,
+                 std::string* err_out,
+                 system246_rom_loader::squashfs_progress_fn progress = nullptr,
+                 void* progress_user = nullptr) {
+    // Build argv for fork/exec. C++17 has no portable way to hand a vector to
+    // execv without a contiguous char** that stays alive for the child.
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const std::string& arg : args)
+        argv.push_back(const_cast<char*>(arg.c_str()));
+    argv.push_back(nullptr);
+
+    int pipe_out[2];
+    int pipe_err[2];
+    if (pipe(pipe_out) != 0 || pipe(pipe_err) != 0) return false;
+
+    const pid_t pid = fork();
+    if (pid < 0) {
+        close(pipe_out[0]); close(pipe_out[1]);
+        close(pipe_err[0]); close(pipe_err[1]);
+        return false;
+    }
+    if (pid == 0) {
+        // Child: redirect stdout/stderr to the pipes, exec.
+        dup2(pipe_out[1], STDOUT_FILENO);
+        dup2(pipe_err[1], STDERR_FILENO);
+        close(pipe_out[0]); close(pipe_out[1]);
+        close(pipe_err[0]); close(pipe_err[1]);
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+    // Parent.
+    close(pipe_out[1]); close(pipe_err[1]);
+    std::string collected_out, collected_err;
+    char buffer[4096];
+    ssize_t n;
+    while ((n = ::read(pipe_out[0], buffer, sizeof(buffer))) > 0) {
+        collected_out.append(buffer, static_cast<std::size_t>(n));
+        if (progress) {
+            // unsquashfs overwrites one progress line with \r; find the last
+            // \r-delimited token and report its fraction.
+            const std::size_t last_cr = collected_out.find_last_of('\r');
+            const std::size_t start =
+                last_cr == std::string::npos ? 0 : last_cr + 1;
+            const std::string tail =
+                collected_out.substr(start, collected_out.size() - start);
+            const std::size_t sp = tail.find_last_of(' ');
+            const std::string token =
+                sp == std::string::npos ? tail : tail.substr(sp + 1);
+            const float fraction = parse_progress_token(token);
+            if (fraction >= 0.0f)
+                progress(fraction, progress_user);
+        }
+    }
+    while ((n = ::read(pipe_err[0], buffer, sizeof(buffer))) > 0)
+        collected_err.append(buffer, static_cast<std::size_t>(n));
+    close(pipe_out[0]); close(pipe_err[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    const bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    if (out) *out = std::move(collected_out);
+    if (err_out) *err_out = std::move(collected_err);
+    return ok;
+}
+
+std::string trim_copy(std::string text) {
+    const auto not_space = [](unsigned char character) {
+        return std::isspace(character) == 0;
+    };
+    const auto first = std::find_if(text.begin(), text.end(), not_space);
+    if (first == text.end()) return std::string();
+    const auto last = std::find_if(text.rbegin(), text.rend(), not_space).base();
+    return std::string(first, last);
+}
+
+// The .acgame manifest inside an image, from a `-ll` listing: the last
+// whitespace-separated token of the matching line. Empty when there is none.
+std::string squashfs_acgame_from_listing(const std::string& listing) {
+    std::istringstream stream(listing);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (lower(fs::path(trim_copy(line)).extension().string()) == ".acgame")
+            return fs::path(trim_copy(line)).filename().string();
+    }
+    return {};
+}
+
+} // namespace
+
+bool system246_rom_loader::is_squashfs(const std::string& path) {
+    return lower(fs::path(path).extension().string()) == ".squashfs";
+}
+
+std::string system246_rom_loader::squashfs_game_name(
+        const std::string& squashfs_path) {
+    if (squashfs_path.empty() || !is_squashfs(squashfs_path))
+        return fs::path(squashfs_path).stem().string();
+
+    // Read the <name>.acgame manifest inside the image (no full extraction).
+    std::string listing, error;
+    if (!run_command({"unsquashfs", "-ll", squashfs_path}, &listing, &error))
+        return fs::path(squashfs_path).stem().string();
+    const std::string acgame = squashfs_acgame_from_listing(listing);
+    if (acgame.empty()) return fs::path(squashfs_path).stem().string();
+
+    std::string manifest;
+    if (!run_command({"unsquashfs", "-cat", squashfs_path, acgame},
+                     &manifest, &error))
+        return fs::path(squashfs_path).stem().string();
+
+    // Pull the "name =" line from the [game] section.
+    std::istringstream stream(manifest);
+    std::string line;
+    while (std::getline(stream, line)) {
+        // Strip a trailing \r (the published manifests use CRLF).
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const std::size_t equals = line.find('=');
+        if (equals == std::string::npos) continue;
+        if (lower(trim_copy(line.substr(0, equals))) == "name") {
+            const std::string value = trim_copy(line.substr(equals + 1));
+            if (!value.empty()) return value;
+        }
+    }
+    return fs::path(squashfs_path).stem().string();
+}
+
+bool system246_rom_loader::squashfs_is_system246(
+        const std::string& squashfs_path) {
+    if (squashfs_path.empty() || !is_squashfs(squashfs_path)) return false;
+    std::string listing, error;
+    if (!run_command({"unsquashfs", "-ll", squashfs_path}, &listing, &error))
+        return false;
+    return !squashfs_acgame_from_listing(listing).empty();
+}
+
+std::string system246_rom_loader::squashfs_cache_dir(
+        const std::string& squashfs_path) {
+    if (squashfs_path.empty()) return {};
+    // Sanitise the stem for use as a directory name (keep letters/digits,
+    // spaces, dots, dashes; collapse runs to a single separator-safe form).
+    std::string stem = fs::path(squashfs_path).stem().string();
+    if (stem.empty()) return {};
+    std::string safe;
+    safe.reserve(stem.size());
+    bool last_was_sep = false;
+    for (unsigned char c : stem) {
+        const bool ok = std::isalnum(c) || c == ' ' || c == '.' || c == '-';
+        if (ok) {
+            safe.push_back(static_cast<char>(c));
+            last_was_sep = false;
+        } else if (!last_was_sep && !safe.empty()) {
+            safe.push_back('_');
+            last_was_sep = true;
+        }
+    }
+    if (safe.empty()) return {};
+
+    fs::path root = manx_platform::data_root();
+    if (root.empty()) root = fs::current_path();
+    return (root / "MANX" / "squashfs" / safe).string();
+}
+
+std::string system246_rom_loader::squashfs_cached_acgame(
+        const std::string& squashfs_path) {
+    const std::string dir = squashfs_cache_dir(squashfs_path);
+    if (dir.empty()) return {};
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return {};
+    const fs::path manifest = acgame_in_directory(dir);
+    if (manifest.empty()) return {};
+    // Only treat a cache as "ready to boot" when it is actually complete.
+    // A partial unpack (e.g. interrupted mid-extraction) can leave the .acgame
+    // but drop the large media CHD, which would fail to open at boot. The
+    // in-pack files that determine bootability are the elf and the media
+    // (mediasrc/card); the dongle is centralized in the memcards directory and
+    // is never beside the manifest, so it is excluded here. Returning empty
+    // forces the caller down the unpack path (squashfs_unpack), which re-
+    // verifies and re-extracts.
+    std::string missing;
+    if (!acgame_pack_ready(manifest.string(), &missing)) return {};
+    return manifest.string();
+}
+
+std::string system246_rom_loader::squashfs_unpack(
+        const std::string& squashfs_path, std::string* error,
+        squashfs_progress_fn progress, void* progress_user) {
+    if (error) error->clear();
+    if (squashfs_path.empty() || !is_squashfs(squashfs_path)) {
+        if (error) *error = "Not a .squashfs image.";
+        return {};
+    }
+
+    const std::string dir = squashfs_cache_dir(squashfs_path);
+    if (dir.empty()) {
+        if (error) *error = "Could not resolve the unpack cache directory.";
+        return {};
+    }
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+
+    // Idempotent: reuse an already-unpacked copy. A cache is only complete when
+    // the in-pack files the manifest references (elf, mediasrc/card) exist
+    // beside it -- a partial unpack (e.g. interrupted mid-extraction) can leave
+    // the .acgame but drop the large media CHD, which would boot broken. So the
+    // check re-verifies readiness (the dongle is centralized in memcards and is
+    // deliberately excluded), not just the manifest's presence.
+    const fs::path existing = acgame_in_directory(dir);
+    if (!existing.empty()) {
+        std::string missing;
+        if (acgame_pack_ready(existing.string(), &missing)) {
+            if (progress) progress(1.0f, progress_user);
+            return existing.string();
+        }
+        // Incomplete cache: fall through and re-extract over it (-f overwrites).
+    }
+
+    std::string err;
+    const bool ok = run_command(
+        {"unsquashfs", "-f", "-d", dir, squashfs_path}, nullptr, &err,
+        progress, progress_user);
+    if (!ok) {
+        if (error) *error = err.empty() ? "unsquashfs failed." : err;
+        return {};
+    }
+
+    const fs::path manifest = acgame_in_directory(dir);
+    if (manifest.empty()) {
+        if (error) *error = "Image unpacked but contains no .acgame manifest.";
+        return {};
+    }
+    if (progress) progress(1.0f, progress_user);
+    return manifest.string();
 }

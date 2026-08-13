@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -806,13 +807,28 @@ bool arcade_input::watch_cabinet_button_events(void* userdata,
 bool arcade_input::is_lightgun_game(std::string_view game_short_name) {
     // The System 246/256 gun games arrive from the PCSX2 collection, where a
     // game's short name is its .acgame folder name rather than a MAME set, so
-    // they are listed by the names those folders carry.
+    // they are listed by the names those folders carry. For a squashfs pack the
+    // short name is the pack's file stem (e.g. "Time Crisis 3", "Vampire
+    // Night", "Cobra The Arcade"), so match case-insensitively against both the
+    // MAME set names and the collection's display stems.
     static constexpr std::string_view lightgun_games[] = {
         "vcop", "vcop2",                                       // Model 2
         "timecrisis3", "timecrisis4", "vampirenight", "cobra", // System 246/256
+        "time crisis 3", "time crisis 4", "vampire night",
+        "cobra the arcade",                                    // squashfs stems
     };
-    for (std::string_view game : lightgun_games)
-        if (game_short_name == game) return true;
+    for (std::string_view game : lightgun_games) {
+        if (game_short_name.size() != game.size()) continue;
+        bool match = true;
+        for (std::size_t i = 0; i < game.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(game_short_name[i])) !=
+                std::tolower(static_cast<unsigned char>(game[i]))) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
     return false;
 }
 
@@ -835,7 +851,16 @@ bool arcade_input::initialize(std::string_view game_short_name) {
     // calibration differs. The Model 2 guns use the full 0..255 axis.
     m_lightgun_full_range = is_lightgun_game(m_game_short_name);
     // Time Crisis cabinets have a foot pedal; the other gun games do not.
-    m_lightgun_pedal = m_game_short_name.rfind("timecrisis", 0) == 0;
+    // The short name may be a MAME set ("timecrisis3") or a squashfs pack stem
+    // ("Time Crisis 3"), so match case-insensitively.
+    m_lightgun_pedal = [&]() {
+        std::string lower_name;
+        lower_name.reserve(m_game_short_name.size());
+        for (char c : m_game_short_name)
+            lower_name.push_back(static_cast<char>(std::tolower(
+                static_cast<unsigned char>(c))));
+        return lower_name.rfind("timecrisis", 0) == 0;
+    }();
     m_time_crisis_mouse = m_game_short_name == "timecris" ||
                           m_lightgun_full_range;
     m_lightgun_mouse_active = false;

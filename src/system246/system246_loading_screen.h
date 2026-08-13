@@ -19,9 +19,13 @@ namespace system246_loading {
 
 // Draw the loading picture for `title` at `seconds` into the wait. Fills
 // `pixels` with width * height RGBA values (0xAABBGGRR, as the renderer's
-// present_rgba_frame expects).
+// present_rgba_frame expects). When `progress` is >= 0 it is treated as an
+// unpack fraction in [0,1] and a percentage bar is drawn in place of the
+// sweeping block, so a squashed game's extraction is visible rather than
+// reading as a hang.
 void render(std::vector<std::uint32_t>& pixels, int width, int height,
             const std::string& title, double seconds,
-            const std::string& status, unsigned long long frames);
+            const std::string& status, unsigned long long frames,
+            float progress = -1.0f);
 
 } // namespace system246_loading

@@ -880,6 +880,7 @@ struct launcher_menu::implementation {
             bool paging = false,
             const launcher_menu::cover* banner = nullptr,
             bool info = false,
+            bool board_filter = false,
             bool list = false,
             bool marquee = false,
             bool coverflow = false,
@@ -982,7 +983,7 @@ struct launcher_menu::implementation {
                 } else {
                 draw_grid(title, description, items, selected, first_row,
                           metrics, textures, cover_for, back_label, chosen,
-                          wanted, paging, banner, info);
+                          wanted, paging, banner, info, board_filter);
                 }
                 redraw = false;
             }
@@ -1005,7 +1006,10 @@ struct launcher_menu::implementation {
             }
             if (tick && tick()) redraw = true;
             if (coverflow) redraw = true;
-            if (event.type == SDL_EVENT_QUIT) break;
+            if (event.type == SDL_EVENT_QUIT) {
+                chosen.assign(1, launcher_menu::exit_requested);
+                break;
+            }
             if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
                 open_controller(event.gdevice.which);
                 continue;
@@ -1043,6 +1047,7 @@ struct launcher_menu::implementation {
             bool back = false;
             bool view = false;
             bool want_info = false;
+            bool want_board_filter = false;
             int page = 0;
             if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
                 switch (event.key.key) {
@@ -1059,8 +1064,16 @@ struct launcher_menu::implementation {
                 case SDLK_PAGEUP: page = paging ? -1 : 0; break;
                 case SDLK_PAGEDOWN: page = paging ? 1 : 0; break;
                 case SDLK_I: want_info = info; break;
+                case SDLK_F: want_board_filter = paging; break;
+                case SDLK_Q:
+                    if (event.key.mod & SDL_KMOD_CTRL) {
+                        chosen.assign(1, launcher_menu::exit_requested);
+                        break;
+                    }
+                    break;
                 default: break;
                 }
+                if (!chosen.empty()) break;
             } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
                 switch (event.gbutton.button) {
                 case SDL_GAMEPAD_BUTTON_DPAD_LEFT: horizontal = -1; break;
@@ -1071,11 +1084,14 @@ struct launcher_menu::implementation {
                 case SDL_GAMEPAD_BUTTON_EAST: back = true; break;
                 case SDL_GAMEPAD_BUTTON_NORTH: view = wanted <= 0; break;
                 case SDL_GAMEPAD_BUTTON_WEST: want_info = info; break;
+                case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
+                    page = paging ? 1 : 0;
+                    break;
                 case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
                     page = paging ? -1 : 0;
                     break;
-                case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
-                    page = paging ? 1 : 0;
+                case SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1:
+                    want_board_filter = paging;
                     break;
                 default: break;
                 }
@@ -1089,6 +1105,10 @@ struct launcher_menu::implementation {
                 chosen.assign(1, launcher_menu::info_request);
                 break;
             }
+            if (want_board_filter) {
+                chosen.assign(1, launcher_menu::board_filter_request);
+                break;
+            }
             if (view) {
                 chosen.assign(1, launcher_menu::view_change);
                 break;
@@ -1100,7 +1120,12 @@ struct launcher_menu::implementation {
                                           : launcher_menu::page_forward);
                 break;
             }
-            if (back) { chosen.clear(); break; }
+            if (back) {
+                // On a publisher page, back returns to the publisher shelf
+                // (the board list stays on F / right paddle). Everywhere else
+                // back leaves the grid to the caller.
+                chosen.clear(); break;
+            }
             if (activate) {
                 if (wanted <= 0) { chosen.assign(1, selected); break; }
                 const auto held =
@@ -1137,6 +1162,15 @@ struct launcher_menu::implementation {
                 // "which category" - so a stick and nothing else walks the
                 // whole library, and neither direction is the other's
                 // overflow. On the grid, down is still the next row.
+                // On a publisher page, up/down cycles between the boards of
+                // the current publisher rather than moving through its games
+                // (or, in coverflow, turning the page).
+                if (board_filter) {
+                    chosen.assign(1, vertical < 0 ?
+                                      launcher_menu::board_prev :
+                                      launcher_menu::board_next);
+                    break;
+                }
                 if (coverflow && paging) {
                     if (std::getenv("MANX_TRACE_CF"))
                         std::fprintf(stderr, "[cf] category %+d\n", vertical);
@@ -1166,7 +1200,8 @@ struct launcher_menu::implementation {
                    const std::vector<int>& chosen, int wanted,
                    bool paging = false,
                    const launcher_menu::cover* banner = nullptr,
-                   bool info = false) {
+                   bool info = false,
+                   bool board_filter = false) {
         const int gap = metrics.gap;
         SDL_SetRenderDrawColor(renderer, 8, 13, 20, 255);
         SDL_RenderClear(renderer);
@@ -1441,6 +1476,7 @@ struct launcher_menu::implementation {
                 std::to_string(wanted) + ")" : std::string("Play")});
         if (wanted <= 0) hints.push_back({"Y", "View"});
         if (info) hints.push_back({"X", "Board Info"});
+        if (board_filter) hints.push_back({"F", "Board List"});
         if (paging) hints.push_back({"LB RB", "Turn Page", true});
         hints.push_back({"B", back_label});
         draw_hints(hints, list_bottom + 18);
@@ -2429,6 +2465,10 @@ struct launcher_menu::implementation {
                 case SDLK_KP_ENTER:
                 case SDLK_SPACE: activate = true; break;
                 case SDLK_ESCAPE: back = true; break;
+                case SDLK_Q:
+                    if (event.key.mod & SDL_KMOD_CTRL)
+                        return launcher_menu::exit_requested;
+                    break;
                 default: break;
                 }
             } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
@@ -2956,6 +2996,10 @@ struct launcher_menu::implementation {
                     return finish(launcher_menu::shortcut);
                 case SDL_SCANCODE_HOME:  selected = 0; redraw = true; break;
                 case SDL_SCANCODE_END:   selected = total - 1; redraw = true; break;
+                case SDL_SCANCODE_Q:
+                    if (event.key.mod & SDL_KMOD_CTRL)
+                        return finish(launcher_menu::exit_requested);
+                    break;
                 default: break;
                 }
                 continue;
@@ -3715,7 +3759,7 @@ int launcher_menu::select_grid(
         const std::string& back_label, int initial_selection,
         std::function<cover(int)> cover_for, std::function<bool()> tick,
         std::function<bool()> interrupt, bool paging, const cover* banner,
-        bool info, bool list_view, bool marquee_view,
+        bool info, bool board_filter, bool list_view, bool marquee_view,
         bool coverflow_view,
         std::function<std::string(int)> video_for,
         std::function<game_media(int)> media_for,
@@ -3728,8 +3772,8 @@ int launcher_menu::select_grid(
     const std::vector<int> chosen =
         m_impl->run_grid(title, description, items, back_label,
                          initial_selection, cover_for, tick, 0, interrupt,
-                         paging, banner, info, list_view, marquee_view,
-                         coverflow_view, video_for, media_for,
+                         paging, banner, info, board_filter, list_view,
+                         marquee_view, coverflow_view, video_for, media_for,
                          item_descriptions);
     return chosen.empty() ? -1 : chosen.front();
 }

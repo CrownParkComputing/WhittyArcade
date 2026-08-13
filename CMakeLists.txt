@@ -317,6 +317,7 @@ set(SOURCES
     src/arcade_catalog.cpp
     src/arcade_game_probe.cpp
     src/rom_library.cpp
+    src/rom_library_cache.cpp
     src/persistent_data.cpp
     src/high_scores.cpp
     src/arcade_presenter.cpp
@@ -473,6 +474,7 @@ target_link_libraries(MANX
     PkgConfig::MINIZIP
     PkgConfig::SDL3_TTF
     ZLIB::ZLIB
+    sqlite3
     Vulkan::Vulkan
     ${MANX_MATH_LIB}
     ${CMAKE_DL_LIBS}
@@ -814,6 +816,7 @@ add_executable(rom_library_test
     src/arcade_game_probe.cpp
     src/taito/taitoz/taitoz_rom.cpp
     src/rom_library.cpp
+    src/rom_library_cache.cpp
     src/namco/system22/system22_rom.cpp
     src/system246_rom.cpp
     src/sega/model1/model1_rom.cpp
@@ -824,7 +827,7 @@ add_executable(rom_library_test
     src/namco/namco_rom.cpp
 )
 target_include_directories(rom_library_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(rom_library_test PRIVATE PkgConfig::MINIZIP ZLIB::ZLIB)
+target_link_libraries(rom_library_test PRIVATE PkgConfig::MINIZIP ZLIB::ZLIB sqlite3)
 target_compile_options(rom_library_test PRIVATE
     -Wall -Wextra -Wpedantic -UNDEBUG)
 add_test(NAME rom_library_test COMMAND rom_library_test)

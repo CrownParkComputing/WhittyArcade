@@ -17,12 +17,17 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <mutex>
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <thread>
+#include <vector>
 
 #include <unistd.h>
 
@@ -31,9 +36,6 @@
 #include "arcade_session_internal.h"
 #include "system246_rom.h" // System 246/256 game identification (host side)
 #include "system246/system246_loading_screen.h"
-
-#include <chrono>
-#include <vector>
 
 #include "pcsx2_module.h" // flat C ABI exported by libsystem246_pcsx2.so
 
@@ -59,8 +61,9 @@ constexpr const char* kMotogpAcgame =
 // it to a concrete title. Unknown selections default to RRV.
 struct system246_game {
     std::string short_name;
-    std::string acgame;
+    std::string acgame;        // path to boot (empty until unpacked)
     std::string display_name;
+    std::string squashfs_path; // non-empty when the game ships as a .squashfs
 };
 
 system246_game resolve_game(const std::string& rom_path) {
@@ -74,7 +77,23 @@ system246_game resolve_game(const std::string& rom_path) {
         std::filesystem::is_regular_file(rom_path, ec)) {
         const std::string base =
             std::filesystem::path(rom_path).stem().string();
-        return {base, rom_path, base};
+        return {base, rom_path, base, {}};
+    }
+    // A System 246/256 squashfs pack: keep the image squashed on disk and
+    // unpack it to a per-game cache directory only once the player launches
+    // the game, showing progress on the loading screen. Here we only resolve
+    // identity (short name + display name from the manifest inside) and note
+    // that the game must be unpacked before it can boot; the actual extract
+    // runs on a worker thread so the loading screen can show it advancing.
+    if (system246_rom_loader::is_squashfs(rom_path) &&
+        system246_rom_loader::squashfs_is_system246(rom_path)) {
+        const std::string stem =
+            std::filesystem::path(rom_path).stem().string();
+        // If a cached unpack already exists, resolve straight to it.
+        const std::string cached =
+            system246_rom_loader::squashfs_cached_acgame(rom_path);
+        return {stem, cached, system246_rom_loader::squashfs_game_name(rom_path),
+                rom_path};
     }
     // Fallback for library-scanned sets that arrive as a MAME zip/dir (RRV).
     system246_rom_set set = system246_rom_loader::identify_set(rom_path);
@@ -83,7 +102,7 @@ system246_game resolve_game(const std::string& rom_path) {
     const std::string acgame =
         (set == system246_rom_set::motogp) ? kMotogpAcgame : kRrvAcgame;
     return {system246_rom_loader::set_short_name(set), acgame,
-            system246_rom_loader::set_display_name(set)};
+            system246_rom_loader::set_display_name(set), {}};
 }
 
 // Shared-object name; dlopen tries an absolute path next to the executable
@@ -136,6 +155,8 @@ public:
         // static destructors on unload can hang/crash teardown; keeping it
         // resident lets ESC return to the loader cleanly and lets the next
         // game reuse it. (wa_pcsx2_stop already tore the VM down.)
+        join_unpack();
+        diag("dtor: unpack joined");
         if (m_gpu_renderer) m_gpu_renderer->reset_session();
         diag("dtor: renderer reset");
         if (m_input) m_input->shutdown();
@@ -185,19 +206,55 @@ public:
             return false;
         }
 
-        if (m_start(game.acgame.c_str(), kPcsx2BiosDir, kPcsx2BinDir) != 1) {
-            std::fprintf(stderr, "System 246: PCSX2 module failed to start\n");
-            return false;
+        // A squashed game unpacks on a worker thread (with progress shown on
+        // the loading screen); once it finishes we hand the extracted acgame
+        // to the module. A cached copy resolves immediately so no unpack runs.
+        m_pending_game = game;
+        if (!game.acgame.empty()) {
+            if (m_start(game.acgame.c_str(), kPcsx2BiosDir, kPcsx2BinDir) != 1) {
+                std::fprintf(stderr,
+                             "System 246: PCSX2 module failed to start\n");
+                return false;
+            }
+            std::printf("System 246: %s booting via isolated PCSX2 module "
+                        "(surfaceless): %s\n",
+                        game.display_name.c_str(), game.acgame.c_str());
+        } else {
+            // No cached unpack: show an unpacking loading screen first.
+            m_pending_game = game;
+            m_loading_title = game.display_name;
+            m_game_short_name = game.short_name;
+            m_started = std::chrono::steady_clock::now();
+            begin_unpack();
         }
-
-        std::printf("System 246: %s booting via isolated PCSX2 module "
-                    "(surfaceless): %s\n",
-                    game.display_name.c_str(), game.acgame.c_str());
         return true;
     }
 
     void run_frame() override {
         update_input();
+
+        // A squashed game is unpacking on a worker thread: keep drawing the
+        // loading screen with the real unpack percentage until it finishes,
+        // then hand the extracted manifest to the module and boot it.
+        if (!m_boot_started && m_unpack_thread.joinable()) {
+            const float progress =
+                m_unpack_progress.load(std::memory_order_relaxed);
+            const double waited = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - m_started).count();
+            system246_loading::render(m_loading_pixels, kDisplayWidth,
+                                      kDisplayHeight, m_loading_title, waited,
+                                      "UNPACKING GAME", 0, progress);
+            m_gpu_renderer->present_rgba_frame(
+                reinterpret_cast<const std::uint8_t*>(m_loading_pixels.data()),
+                kDisplayWidth, kDisplayHeight, kDisplayWidth, kDisplayHeight);
+
+            // Once extraction is done, boot the machine and let the normal
+            // loading screen take over below.
+            if (m_unpack_done.load(std::memory_order_acquire))
+                start_module();
+            ++m_frames_polled;
+            return;
+        }
 
         const unsigned int* pixels = nullptr;
         int width = 0;
@@ -436,6 +493,89 @@ private:
     float m_gun_scale_y{1.0f};
     float m_gun_offset_x{0.0f};
     float m_gun_offset_y{0.0f};
+
+    // The game being launched. For a squashed pack this starts empty (unpack
+    // pending) and is populated on the worker thread.
+    system246_game m_pending_game;
+    // The unpack thread's ready acgame path and error, published on completion.
+    std::atomic<float> m_unpack_progress{-1.0f};
+    std::atomic<bool> m_unpack_done{false};
+    std::thread m_unpack_thread;
+    std::mutex mutable m_unpack_result_mutex;
+    std::string m_unpack_acgame;
+    std::string m_unpack_error;
+    bool m_boot_started{false};
+
+    // Static trampoline for the loader's C progress callback.
+    static void unpack_progress_cb(float fraction, void* user) {
+        auto* self = static_cast<system246_pcsx2_emulator*>(user);
+        self->m_unpack_progress.store(fraction, std::memory_order_relaxed);
+    }
+
+    // Begin unpacking a squashed game on a worker thread. No-op for a cached
+    // (already-unpacked) game or if an unpack is already running.
+    void begin_unpack() {
+        if (m_pending_game.squashfs_path.empty()) return;
+        if (m_unpack_thread.joinable()) return;
+        const std::string image = m_pending_game.squashfs_path;
+        m_unpack_progress.store(0.0f, std::memory_order_relaxed);
+        m_unpack_done.store(false, std::memory_order_relaxed);
+        m_unpack_thread = std::thread([this, image]() {
+            std::string error;
+            const std::string acgame =
+                system246_rom_loader::squashfs_unpack(
+                    image, &error, &system246_pcsx2_emulator::unpack_progress_cb,
+                    this);
+            {
+                std::lock_guard<std::mutex> lock(m_unpack_result_mutex);
+                m_unpack_acgame = acgame;
+                m_unpack_error = error;
+            }
+            m_unpack_progress.store(1.0f, std::memory_order_relaxed);
+            m_unpack_done.store(true, std::memory_order_release);
+        });
+    }
+
+    // Boot the emulated machine with the unpacked (or directly-resolved)
+    // acgame manifest. Returns false only when the module fails to start.
+    bool start_module() {
+        if (m_boot_started) return true;
+        std::string error;
+        const std::string acgame = unpack_result(&error);
+        if (acgame.empty()) {
+            std::fprintf(stderr, "System 246: unpack produced no acgame: %s\n",
+                         error.c_str());
+            return false;
+        }
+        m_pending_game.acgame = acgame;
+        if (m_start(acgame.c_str(), kPcsx2BiosDir, kPcsx2BinDir) != 1) {
+            std::fprintf(stderr, "System 246: PCSX2 module failed to start\n");
+            return false;
+        }
+        m_boot_started = true;
+        m_game_short_name = m_pending_game.short_name;
+        m_loading_title = m_pending_game.display_name;
+        m_started = std::chrono::steady_clock::now();
+        std::printf("System 246: %s booting via isolated PCSX2 module "
+                    "(surfaceless): %s\n",
+                    m_pending_game.display_name.c_str(), acgame.c_str());
+        return true;
+    }
+
+    // The unpacked acgame path once the worker has finished. Empty (with the
+    // error set) when unpack is still running or failed.
+    std::string unpack_result(std::string* error_out) const {
+        if (error_out) error_out->clear();
+        if (!m_unpack_done.load(std::memory_order_acquire)) return {};
+        std::lock_guard<std::mutex> lock(m_unpack_result_mutex);
+        if (error_out) *error_out = m_unpack_error;
+        return m_unpack_acgame;
+    }
+
+    // Join and reap the unpack worker (e.g. at teardown).
+    void join_unpack() {
+        if (m_unpack_thread.joinable()) m_unpack_thread.join();
+    }
 };
 
 } // namespace

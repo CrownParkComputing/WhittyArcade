@@ -9,6 +9,7 @@
 #include "sega/model2/model2_rom.h"
 #include "namco/namco_rom.h"
 #include "platform_paths.h"
+#include "rom_library_cache.h"
 #include "sega/system16b/system16b_rom.h"
 #include "taito/taitoz/taitoz_rom.h"
 #include "midway/midway_rom.h"
@@ -305,8 +306,34 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
             return;
         const std::string normalized = normalized_path(candidate);
         if (!seen_paths.insert(normalized).second) return;
-        const identified_archive identified = identify_archive(candidate);
-        if (!identified.manifest) return;
+
+        // A cache hit (same size + mtime) reuses the stored identity without
+        // reopening the archive. readiness_suffix / [current] are dynamic and
+        // re-applied below; the DB holds the stable display name + board.
+        std::error_code sz_error;
+        const std::uintmax_t size = fs::file_size(candidate, sz_error);
+        const std::int64_t mtime = rom_cache::mtime_ns(candidate);
+        rom_cache::entry cached;
+        const bool hit = !sz_error &&
+                         rom_cache::find(normalized, size, mtime, &cached);
+
+        identified_archive identified;
+        if (hit) {
+            identified.manifest = find_supported_rom_set(cached.short_name);
+            identified.board = cached.board;
+        } else {
+            identified = identify_archive(candidate);
+            if (!identified.manifest) return;
+            rom_cache::entry value;
+            value.path = normalized;
+            value.size = size;
+            value.mtime_ns = mtime;
+            value.label = identified.manifest->display_name;
+            value.board = identified.board;
+            value.publisher = identified.manifest->publisher;
+            value.short_name = identified.manifest->short_name;
+            rom_cache::upsert(value);
+        }
         const std::string identity = identified.manifest->short_name;
         if (seen_sets.count(identity) && !prefer) return;
         if (prefer && seen_sets.count(identity)) {
@@ -322,7 +349,8 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
         // - seen_sets above makes sure of it - so the zip was never telling
         // anybody which of two entries was which; it was just "galaxian.zip"
         // written after "Galaxian" on every line of the list.
-        std::string label = identified.manifest->display_name;
+        std::string label = cached.label.empty() ? identified.manifest->display_name
+                                                 : cached.label;
         label += readiness_suffix(candidate, *identified.manifest);
         if (normalized == normalized_current) label += "  [current]";
         choices.push_back({normalized, std::move(label),
@@ -495,6 +523,86 @@ std::vector<rom_choice> discover_library_roms(const std::string& current_path) {
         }
     }
 
+    // System 246/256 squashfs packs. Each game ships as a single .squashfs
+    // image whose manifest names it; MANX lists them squashed and unpacks one
+    // to a cache directory on selection. Scan the ROM library (and the current
+    // directory) for *.squashfs images that contain an .acgame manifest and
+    // surface each as a System 246 choice. A squashfs is self-contained, so it
+    // is always reported ready; the unpack happens at boot, not discovery.
+    //
+    // Probing a pack is expensive: is_squashfs()/squashfs_is_system246()/
+    // squashfs_game_name() each spawn an `unsquashfs` subprocess (~3 per pack,
+    // ~48 packs => ~150 process spawns, ~1-2s on load). The SQLite cache avoids
+    // that: a pack whose file size + mtime are unchanged resolves straight
+    // from the DB; only new/changed packs pay the probe and are re-persisted.
+    {
+        std::vector<fs::path> squashes;
+        auto scan_squash = [&](const fs::path& directory, bool recursive) {
+            std::error_code s_ec;
+            if (directory.empty() || !fs::is_directory(directory, s_ec)) return;
+            auto consider = [&](const fs::path& p) {
+                std::error_code type_error;
+                if (fs::is_regular_file(p, type_error) &&
+                    system246_rom_loader::is_squashfs(p.string()))
+                    squashes.push_back(p);
+            };
+            if (recursive) {
+                fs::recursive_directory_iterator it(
+                    directory, fs::directory_options::skip_permission_denied,
+                    s_ec), end;
+                while (!s_ec && it != end) {
+                    consider(it->path());
+                    it.increment(s_ec);
+                }
+            } else {
+                fs::directory_iterator it(directory, s_ec), end;
+                while (!s_ec && it != end) {
+                    consider(it->path());
+                    it.increment(s_ec);
+                }
+            }
+        };
+        scan_squash(current_directory, false);
+        scan_squash(rom_library_path(), true);
+
+        // A cache hit (unchanged pack) is a ready System 246 choice with the
+        // stored label. Only packs with no cache row are probed here.
+        for (const fs::path& squash : squashes) {
+            const std::string normalized = normalized_path(squash);
+            if (!seen_paths.insert(normalized).second) continue;
+            std::error_code size_error;
+            const std::uintmax_t size = fs::file_size(squash, size_error);
+            const std::int64_t mtime = rom_cache::mtime_ns(squash);
+            rom_cache::entry cached;
+            std::string label;
+            if (!size_error &&
+                rom_cache::find(normalized, size, mtime, &cached)) {
+                label = cached.label;
+            } else {
+                // Cache miss / stale: run the real probes and persist.
+                if (!system246_rom_loader::is_squashfs(squash.string()) ||
+                    !system246_rom_loader::squashfs_is_system246(
+                        squash.string()))
+                    continue;
+                label =
+                    system246_rom_loader::squashfs_game_name(squash.string());
+                rom_cache::entry value;
+                value.path = normalized;
+                value.size = size;
+                value.mtime_ns = mtime;
+                value.label = label;
+                value.board = arcade_board_type::system246;
+                value.publisher = "Namco";
+                value.short_name = squash.stem().string();
+                rom_cache::upsert(value);
+            }
+            label += "  [squashed]";
+            if (normalized == normalized_current) label += "  [current]";
+            choices.push_back({normalized, std::move(label),
+                               arcade_board_type::system246, "Namco"});
+        }
+    }
+
     // Installed game plugins. They are not archives and no loader would claim
     // them, so they are offered directly from what discovery already found -
     // their bundle folder is the path, which is what identify_arcade_game
@@ -540,6 +648,15 @@ rom_audit_result audit_rom_path(const std::string& path) {
         if (!system246_rom_loader::acgame_ready(path, &missing))
             return {false, short_name, "Missing " + missing + "."};
         return {true, short_name, {}};
+    }
+
+    // A System 246/256 squashfs pack is self-contained (manifest + media in
+    // one image) and is unpacked on selection, so it is always audit-ready.
+    if (system246_rom_loader::is_squashfs(path) &&
+        system246_rom_loader::squashfs_is_system246(path)) {
+        const std::string short_name =
+            fs::path(path).stem().string();
+        return {true, short_name, "Squashed System 246/256 pack (unpacks on launch)."};
     }
     const identified_archive identified = identify_archive(fs::path(path));
     if (!identified.manifest)

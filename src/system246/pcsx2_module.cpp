@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -64,6 +65,34 @@ std::atomic<bool> g_vm_running{false};
 std::string g_bin_dir;
 std::string g_bios_dir;
 std::string g_acgame;
+
+// The arcade BIOS filename for a game's platform. The System 246/256 boards
+// share the PS2 core but need different firmware: a System 246 game uses the
+// 2MB r27v1602f.7d BIOS while a System 256 game needs the 4MB 256.BIN. The
+// game's .acgame manifest names its board in the "[game]" section as
+// "platform=246" or "platform=256"; pick the matching BIOS so the wrong
+// firmware (which crashes with a vtlb_MapBlock assert) is never loaded.
+std::string bios_filename_for_acgame(const std::string& acgame) {
+    // Default to the System 246 BIOS, matching the pre-existing behaviour.
+    const char* fallback = "r27v1602f.7d";
+    std::ifstream manifest(acgame);
+    if (!manifest) return fallback;
+    std::string line;
+    while (std::getline(manifest, line)) {
+        const std::size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string value = line.substr(eq + 1);
+        // Strip a trailing \r (the published manifests use CRLF).
+        if (!value.empty() && value.back() == '\r') value.pop_back();
+        if (key == "platform") {
+            const std::string trimmed = value;
+            if (trimmed == "256") return "256.BIN";
+            return fallback;
+        }
+    }
+    return fallback;
+}
 
 // Host-owned copy of the most-recently fetched frame. wa_pcsx2_get_frame returns
 // a pointer into this buffer; only the (single) host caller touches it, so the
@@ -189,8 +218,11 @@ void apply_boot_settings() {
     // Select the actual BIOS file. VMManager::Initialize only builds the BIOS
     // path when BaseFilenames.Bios ([Filenames]/BIOS) is non-empty; our fresh
     // in-memory settings never picked one, so PCSX2 reported "no BIOS" despite
-    // the folder being correct. r27v1602f.7d is the System 246 arcade BIOS.
-    si.SetStringValue("Filenames", "BIOS", "r27v1602f.7d");
+    // the folder being correct. r27v1602f.7d is the System 246 arcade BIOS; a
+    // System 256 game instead needs 256.BIN (see bios_filename_for_acgame).
+    si.SetStringValue("Filenames", "BIOS",
+                      bios_filename_for_acgame(g_acgame).c_str());
+    rrv_diag(("BIOS selected: " + bios_filename_for_acgame(g_acgame)).c_str());
 }
 
 void cpu_thread_main(VMBootParameters params) {
@@ -242,6 +274,14 @@ extern "C" int wa_pcsx2_start(const char* acgame, const char* bios_dir,
 
     std::remove("/tmp/rrv_diag.log");
     rrv_diag("wa_pcsx2_start: begin");
+
+    // The module stays resident across games, so per-game host state (boot
+    // stage, capture counters, published frame sequence) must be reset for
+    // every launch -- not just the first. Without this, a second game's
+    // loading screen would report the previous game's boot stage/counts and
+    // its first frame could be mistaken for the old game's last one.
+    MANXHost::ResetBootState();
+    g_host_frame_seq = 0;
 
     g_acgame = acgame ? acgame : "";
     g_bios_dir = bios_dir ? bios_dir : "";

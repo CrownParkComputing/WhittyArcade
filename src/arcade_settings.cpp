@@ -84,6 +84,14 @@ emulator_settings load_settings() {
         else if (key == "vsync") parse_boolean(value, settings.vsync);
         else if (key == "integer_scaling") parse_boolean(value, settings.integer_scaling);
         else if (key == "linear_filtering") parse_boolean(value, settings.linear_filtering);
+        else if (key == "aspect") {
+            if (value == "4:3") settings.aspect = aspect_mode::standard_4_3;
+            else if (value == "16:9")
+                settings.aspect = aspect_mode::widescreen_16_9;
+            else settings.aspect = aspect_mode::native;
+        }
+        else if (key == "bezel_enabled")
+            parse_boolean(value, settings.bezel_enabled);
         else if (key == "show_fps") parse_boolean(value, settings.show_fps);
         else if (key == "show_renderer")
             parse_boolean(value, settings.show_renderer);
@@ -149,6 +157,8 @@ bool save_settings(const emulator_settings& settings) {
            << "vsync=" << settings.vsync << '\n'
            << "integer_scaling=" << settings.integer_scaling << '\n'
            << "linear_filtering=" << settings.linear_filtering << '\n'
+           << "aspect=" << aspect_mode_name(settings.aspect) << '\n'
+           << "bezel_enabled=" << settings.bezel_enabled << '\n'
            << "show_fps=" << settings.show_fps << '\n'
            << "show_renderer=" << settings.show_renderer << '\n'
            << "network_play=" << settings.network_play << '\n'
@@ -180,4 +190,13 @@ const char* output_mode_name(output_mode mode) {
     case output_mode::single: return "single";
     }
     return "single";
+}
+
+const char* aspect_mode_name(aspect_mode mode) {
+    switch (mode) {
+    case aspect_mode::standard_4_3: return "4:3";
+    case aspect_mode::widescreen_16_9: return "16:9";
+    case aspect_mode::native: return "native";
+    }
+    return "native";
 }

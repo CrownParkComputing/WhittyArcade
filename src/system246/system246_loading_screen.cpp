@@ -102,7 +102,8 @@ void draw_text(std::vector<std::uint32_t>& pixels, int width, int height,
 
 void render(std::vector<std::uint32_t>& pixels, int width, int height,
             const std::string& title, double seconds,
-            const std::string& status, unsigned long long frames) {
+            const std::string& status, unsigned long long frames,
+            float progress) {
     if (width <= 0 || height <= 0) return;
     pixels.assign(static_cast<std::size_t>(width) * height, 0xff101014u);
 
@@ -124,9 +125,6 @@ void render(std::vector<std::uint32_t>& pixels, int width, int height,
               (width - text_width(label, label_scale)) / 2,
               height / 2 - 10, label, label_scale, grey);
 
-    // A block sweeping along a track: it keeps moving for as long as the wait
-    // lasts, so it cannot look stalled the way a percentage would if the
-    // estimate were wrong.
     const int track_width = width / 2;
     const int track_x = (width - track_width) / 2;
     const int track_y = height / 2 + 30;
@@ -135,6 +133,28 @@ void render(std::vector<std::uint32_t>& pixels, int width, int height,
         plot(pixels, width, height, track_x + x, track_y, grey);
         plot(pixels, width, height, track_x + x, track_y + track_height, grey);
     }
+
+    if (progress >= 0.0f) {
+        // Unpacking a squashed game: a real percentage bar, so the player can
+        // see extraction is advancing rather than waiting blind.
+        const float clamped = progress < 0.0f ? 0.0f :
+                              (progress > 1.0f ? 1.0f : progress);
+        const int fill = static_cast<int>(clamped * (track_width - 2));
+        for (int x = 1; x <= fill && x < track_width - 1; ++x)
+            for (int y = 1; y < track_height; ++y)
+                plot(pixels, width, height, track_x + x, track_y + y, amber);
+        char pct[32];
+        std::snprintf(pct, sizeof(pct), "UNPACKING %d%%",
+                      static_cast<int>(clamped * 100.0f + 0.5f));
+        draw_text(pixels, width, height,
+                  (width - text_width(pct, 1)) / 2, track_y + 30, pct, 1,
+                  amber);
+        return;
+    }
+
+    // A block sweeping along a track: it keeps moving for as long as the wait
+    // lasts, so it cannot look stalled the way a percentage would if the
+    // estimate were wrong.
     const int block_width = track_width / 6;
     const double cycle = std::fmod(seconds, 2.0) / 2.0;
     const double eased = 0.5 - 0.5 * std::cos(cycle * 2.0 * 3.14159265);

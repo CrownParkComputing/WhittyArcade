@@ -177,6 +177,9 @@ private:
     bezel::library m_bezels;
     std::string m_bezel_board;
     std::vector<uint8_t> m_bezel_pixels;
+    int m_bezel_width{};
+    int m_bezel_height{};
+    bezel::cutout m_bezel_window{};
     // Arcade wall: whether this column currently holds keyboard focus, and a
     // one-shot flag telling the host loop to apply the resulting volume.
     bool m_initialized{false};

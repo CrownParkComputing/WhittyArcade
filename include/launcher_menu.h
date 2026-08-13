@@ -32,6 +32,15 @@ public:
     // Returned when the player asks for the page's information panel
     // (the "i" chip, I key or controller X).
     static constexpr int info_request = -6;
+    // Returned by a publisher page when the player asks to narrow it by
+    // board/system (B key / controller right trigger): the caller shows a
+    // board picker for the current publisher and re-filters the page.
+    static constexpr int board_filter_request = -9;
+    // Returned by a publisher page when the player cycles up/down between
+    // the boards of the current publisher (vertical axis on a publisher
+    // page). The caller moves the board narrowing to the previous/next board.
+    static constexpr int board_prev = -10;
+    static constexpr int board_next = -11;
     // Distinct from Back: the OS close button must terminate the launcher,
     // not reopen the menu that was underneath the current screen.
     static constexpr int exit_requested = -7;
@@ -213,6 +222,11 @@ public:
                     // the grid then offers the "i" chip and returns
                     // info_request when it is asked for.
                     bool info = false,
+                    // True on a publisher page: the grid offers a board
+                    // filter (F / right trigger) that returns
+                    // board_filter_request so the caller can narrow the
+                    // publisher to one board/system.
+                    bool board_filter = false,
                     // True renders the page as a single-column list with
                     // small thumbnails instead of the cover-art card grid -
                     // forty games scan faster as rows than as posters.

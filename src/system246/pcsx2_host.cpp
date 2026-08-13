@@ -168,6 +168,25 @@ void MANXHost::GetCaptureCounts(std::uint64_t& frames,
 	with_content = s_captured_with_content.load(std::memory_order_relaxed);
 }
 
+void MANXHost::ResetBootState()
+{
+	// Boot stage back to Starting. SetBootStage only ever moves forward, so a
+	// second game would otherwise stay stuck at Drawing and its loading screen
+	// would never show boot progress.
+	s_boot_stage.store(static_cast<int>(BootStage::Starting),
+		std::memory_order_relaxed);
+	// Capture counters back to zero so the new game's boot status reports its
+	// own progress, not the previous game's accumulated totals.
+	s_captured_frames.store(0, std::memory_order_relaxed);
+	s_captured_with_content.store(0, std::memory_order_relaxed);
+	// Frame sequence back to zero so the first frame the new game produces is
+	// recognised as new (GetLatestFrame treats sequence==0 as "no frame yet").
+	{
+		std::lock_guard<std::mutex> lock(s_wa_frame_mutex);
+		s_wa_frame_sequence = 0;
+	}
+}
+
 void MANXHost::SetRenderWindow(const WindowInfo& wi)
 {
 	std::lock_guard<std::mutex> lock(s_wa_window_mutex);

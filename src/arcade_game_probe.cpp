@@ -16,10 +16,27 @@
 #include "midway/midway_rom.h"
 
 #include <filesystem>
+#include <map>
+#include <mutex>
+#include <optional>
+#include <string>
 namespace fs = std::filesystem;
 
 std::optional<arcade_game_identity> identify_arcade_game(
         const std::string& path) {
+    // Probing a System 246/256 squashfs pack runs an `unsquashfs -ll`
+    // subprocess to list the image, which is far too expensive to repeat for
+    // the same path on every browse pass (a publisher page with 48 packs
+    // would spawn 48 subprocesses). Memoize by path so each game is probed
+    // once per process.
+    static std::mutex cache_mutex;
+    static std::map<std::string, std::optional<arcade_game_identity>> cache;
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        const auto found = cache.find(path);
+        if (found != cache.end()) return found->second;
+    }
+    const auto compute = [&]() -> std::optional<arcade_game_identity> {
     const ridge_racer_rom_set system22 = rom_loader::identify_set(path);
     if (system22 != ridge_racer_rom_set::unknown)
         return arcade_game_identity{arcade_board_type::system22,
@@ -50,6 +67,15 @@ std::optional<arcade_game_identity> identify_arcade_game(
         system246_rom_loader::acgame_short_name(path);
     if (!acgame_key.empty())
         return arcade_game_identity{arcade_board_type::system246, acgame_key};
+
+    // A System 246/256 squashfs pack is a single self-contained image that
+    // boots through the same board. It carries no stable MAME short name (the
+    // image stem is the only key), but it is unambiguously a System 246/256
+    // title when it contains an .acgame manifest, so route it to that board.
+    if (system246_rom_loader::is_squashfs(path) &&
+        system246_rom_loader::squashfs_is_system246(path))
+        return arcade_game_identity{arcade_board_type::system246,
+                                    fs::path(path).stem().string()};
 
     const model1_rom_set model1 = model1_rom_loader::identify_set(path);
     if (model1 != model1_rom_set::unknown)
@@ -104,4 +130,11 @@ std::optional<arcade_game_identity> identify_arcade_game(
             midway_rom_loader::set_short_name(midway_set)};
 
     return std::nullopt;
+    };
+    const std::optional<arcade_game_identity> result = compute();
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        cache[path] = result;
+    }
+    return result;
 }

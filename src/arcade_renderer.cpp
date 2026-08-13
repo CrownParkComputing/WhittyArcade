@@ -887,10 +887,10 @@ void main() {
 )GLSL";
 
 constexpr int settings_width = 560;
-constexpr int settings_height = 510;
+constexpr int settings_height = 570;
 constexpr int settings_row_top = 58;
-constexpr int settings_row_height = 29;
-constexpr int settings_row_count = 15;
+constexpr int settings_row_height = 27;
+constexpr int settings_row_count = 17;
 constexpr int pause_menu_row_count = 6;
 constexpr int menu_axis_threshold = 16000;
 
@@ -1527,6 +1527,12 @@ arcade_host_action polygon_renderer_gpu::process_events() {
                 key_down && event.key.key == SDLK_ESCAPE ? 1 : 0);
             return host_action;
         }
+        // Ctrl+Q quits the whole application from anywhere, including mid-game.
+        if (key_down && !event.key.repeat && event.key.key == SDLK_Q &&
+            (event.key.mod & SDL_KMOD_CTRL)) {
+            manx_wall_log::note("host stop requested: ctrl+q");
+            return arcade_host_action::exit_application;
+        }
         // On an arcade wall every column keeps running, but only the one you
         // are looking at should be heard. Following keyboard focus means the
         // flip needs no messaging between the processes: each mutes itself
@@ -1822,6 +1828,9 @@ void polygon_renderer_gpu::set_board_name(std::string short_name) {
     m_bezel_board = std::move(short_name);
     // The previous board's artwork must not frame this one.
     m_bezel_pixels.clear();
+    m_bezel_width = 0;
+    m_bezel_height = 0;
+    m_bezel_window = {};
     if (m_alternate_presenter) m_alternate_presenter->set_bezel({});
     m_bezels.request(m_bezel_board);
 }
@@ -2026,6 +2035,7 @@ bool polygon_renderer_gpu::take_settings_change(emulator_settings& settings) {
 void polygon_renderer_gpu::apply_display_settings(
     const emulator_settings& settings) {
     emulator_settings applied = settings;
+    const bool bezel_was_enabled = m_display_settings.bezel_enabled;
     m_settings_texture_dirty = true;
     if (m_headless || !m_ctx) {
         m_display_settings = applied;
@@ -2044,6 +2054,20 @@ void polygon_renderer_gpu::apply_display_settings(
     if (m_alternate_presenter) {
         m_alternate_presenter->apply_settings(
             effective_presenter_settings(settings));
+        if (!applied.bezel_enabled) {
+            m_alternate_presenter->set_bezel({});
+        } else if (!bezel_was_enabled && !m_bezel_pixels.empty() &&
+                   m_bezel_window.valid) {
+            bezel_frame frame;
+            frame.pixels = m_bezel_pixels.data();
+            frame.width = m_bezel_width;
+            frame.height = m_bezel_height;
+            frame.cutout_x = m_bezel_window.x;
+            frame.cutout_y = m_bezel_window.y;
+            frame.cutout_width = m_bezel_window.width;
+            frame.cutout_height = m_bezel_window.height;
+            m_alternate_presenter->set_bezel(frame);
+        }
         m_alternate_presenter->drawable_size(m_ctx->width, m_ctx->height);
     } else if (settings.fullscreen) {
         SDL_SetWindowMinimumSize(window, 1, 1);
@@ -2283,13 +2307,34 @@ void polygon_renderer_gpu::adjust_setting(int direction) {
                 output_mode::dual : output_mode::single;
         break;
     case 12:
+        if (direction < 0) {
+            m_display_settings.aspect =
+                m_display_settings.aspect == aspect_mode::native ?
+                    aspect_mode::widescreen_16_9 :
+                m_display_settings.aspect == aspect_mode::standard_4_3 ?
+                    aspect_mode::native : aspect_mode::standard_4_3;
+        } else {
+            m_display_settings.aspect =
+                m_display_settings.aspect == aspect_mode::native ?
+                    aspect_mode::standard_4_3 :
+                m_display_settings.aspect == aspect_mode::standard_4_3 ?
+                    aspect_mode::widescreen_16_9 : aspect_mode::native;
+        }
+        display_changed = true;
+        break;
+    case 13:
+        m_display_settings.bezel_enabled =
+            !m_display_settings.bezel_enabled;
+        display_changed = true;
+        break;
+    case 14:
         resume_game();
         return;
-    case 13:
+    case 15:
         m_game_picker_requested = true;
         m_settings_texture_dirty = true;
         return;
-    case 14:
+    case 16:
         m_pause_menu_visible = false;
         m_rom_menu_visible = false;
         m_operator_menu_visible = true;
@@ -3367,6 +3412,10 @@ void polygon_renderer_gpu::poll_bezel() {
         // Held because the presenter uploads from this memory and the
         // library hands ownership over.
         m_bezel_pixels = std::move(ready.rgba);
+        m_bezel_width = ready.width;
+        m_bezel_height = ready.height;
+        m_bezel_window = ready.window;
+        if (!m_display_settings.bezel_enabled) continue;
         bezel_frame frame;
         frame.pixels = m_bezel_pixels.data();
         frame.width = ready.width;
@@ -3483,6 +3532,13 @@ void polygon_renderer_gpu::present_rgba_frame(const uint8_t* pixels,
                               pixels ? 1 : 0, width, height, m_headless ? 1 : 0,
                               m_ctx ? 1 : 0, m_alternate_presenter ? 1 : 0);
     if (!pixels || width <= 0 || height <= 0 || m_headless || !m_ctx) return;
+    if (m_display_settings.aspect == aspect_mode::standard_4_3) {
+        display_width = 4;
+        display_height = 3;
+    } else if (m_display_settings.aspect == aspect_mode::widescreen_16_9) {
+        display_width = 16;
+        display_height = 9;
+    }
     if (m_title_capture_countdown > 0 && !m_title_capture_name.empty() &&
         --m_title_capture_countdown == 0) {
         // The board's own frame, before bezels or overlays: the launcher
@@ -4178,6 +4234,7 @@ void polygon_renderer_gpu::update_settings_texture() {
             "Window size", "VSync", "Integer scaling",
             "Filtering", "Output backend", "Show renderer", "Show FPS",
             "Screen output",
+            "Aspect ratio", "Bezel",
             "Play / Resume game", "Go Arcade / Games", "Operator / DIP settings",
         };
         for (int row = 0; row < settings_row_count; ++row) {
@@ -4229,13 +4286,24 @@ void polygon_renderer_gpu::update_settings_texture() {
                         m_display_settings.output == output_mode::dual ?
                             "DUAL SCREEN" : "SINGLE";
                 break;
-            case 12: value = m_paused ? "PAUSED" : "RUNNING"; break;
+            case 12: {
+                value = aspect_mode_name(m_display_settings.aspect);
+                std::transform(value.begin(), value.end(), value.begin(),
+                               [](unsigned char c) {
+                                   return static_cast<char>(std::toupper(c));
+                               });
+                break;
+            }
+            case 13:
+                value = m_display_settings.bezel_enabled ? "ON" : "OFF";
+                break;
+            case 14: value = m_paused ? "PAUSED" : "RUNNING"; break;
             default: break;
             }
             if (!value.empty())
                 draw_text(300, y, value, white);
         }
-        draw_text(24, 472,
+        draw_text(24, 542,
                   "STICK / D-PAD: CHANGE  A: APPLY",
                   muted);
     }

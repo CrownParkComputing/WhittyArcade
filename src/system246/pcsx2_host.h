@@ -62,4 +62,12 @@ namespace MANXHost
 	// "not drawing yet" from "drawing".
 	void NoteCapturedFrame(bool has_content);
 	void GetCaptureCounts(std::uint64_t& frames, std::uint64_t& with_content);
+
+	// Reset all per-game host state so a freshly-started game boots cleanly:
+	// the boot stage back to Starting, the capture counters to zero, and the
+	// published frame sequence to zero (so the first frame of the new game is
+	// recognised as new rather than mistaken for the previous game's last one).
+	// The module stays resident across games, so this must run at the start of
+	// every wa_pcsx2_start, not just the first.
+	void ResetBootState();
 } // namespace MANXHost

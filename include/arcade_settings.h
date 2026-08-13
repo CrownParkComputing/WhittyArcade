@@ -17,6 +17,14 @@ enum class output_mode {
     dual,
 };
 
+// Native follows the board/plugin. The fixed modes change only the shape of
+// the host viewport; they do not resize or alter the emulated framebuffer.
+enum class aspect_mode {
+    native,
+    standard_4_3,
+    widescreen_16_9,
+};
+
 struct emulator_settings {
     int master_volume{100};
     int music_volume{100};
@@ -26,6 +34,8 @@ struct emulator_settings {
     bool vsync{true};
     bool integer_scaling{true};
     bool linear_filtering{false};
+    aspect_mode aspect{aspect_mode::native};
+    bool bezel_enabled{true};
     bool show_fps{false};
     bool show_renderer{true};
     renderer_backend renderer{renderer_backend::opengl};
@@ -73,6 +83,7 @@ struct emulator_settings {
 
 const char* renderer_backend_name(renderer_backend backend);
 const char* output_mode_name(output_mode mode);
+const char* aspect_mode_name(aspect_mode mode);
 
 emulator_settings load_settings();
 bool save_settings(const emulator_settings& settings);

@@ -71,6 +71,14 @@ public:
     static bool acgame_ready(const std::string& path,
                              std::string* missing = nullptr);
 
+    // Like acgame_ready, but checks only the in-pack files that determine a
+    // squashfs cache can boot: the elf and the media (mediasrc/card). The
+    // dongle is centralized in the memcards directory (never beside a squashfs
+    // manifest), so it is excluded. A squashfs cache is only "ready" when these
+    // exist, so a partial unpack (missing the big media CHD) re-extracts.
+    static bool acgame_pack_ready(const std::string& path,
+                                  std::string* missing = nullptr);
+
     // The game's short name: the lowercased basename of its ".acgame" manifest
     // (e.g. "tekken5"), resolving a directory selection to the manifest inside
     // it. Empty when the selection has no manifest. This is what lets ANY
@@ -85,4 +93,47 @@ public:
     // whole collection work with no per-title code - so the two-player launch
     // options have to be answered from here instead of from a manifest.
     static bool acgame_two_player(const std::string& short_name);
+
+    // ---- Squashfs (packed collection) support ---------------------------
+    //
+    // The Batocera/Namco System 246/256 packs ship each game as a single
+    // .squashfs image containing its <name>.acgame manifest plus the ELF
+    // loader, dongle image and disc/HDD media. MANX keeps these images
+    // squashed on disk (30 GB across the set) and only unpacks one to a
+    // per-game cache directory on game selection.
+
+    // True when a path names a .squashfs image (case-insensitive).
+    static bool is_squashfs(const std::string& path);
+
+    // The display name of a squashed game, read from its <name>.acgame
+    // manifest's "name =" line via `unsquashfs -cat` (no full extraction).
+    // Falls back to the image stem when the manifest cannot be read.
+    static std::string squashfs_game_name(const std::string& squashfs_path);
+
+    // True when the squashed game has a <name>.acgame manifest and is a
+    // System 246/256 title, so a pack that is not the target platform can be
+    // skipped during discovery.
+    static bool squashfs_is_system246(const std::string& squashfs_path);
+
+    // Deterministic per-game cache directory for an unpacked image
+    // (e.g. <data_root>/MANX/squashfs/<image-stem>/). Empty on failure.
+    static std::string squashfs_cache_dir(const std::string& squashfs_path);
+
+    // Extract one squashed game into its cache directory (unsquashfs -f).
+    // Returns the path of the unpacked <name>.acgame manifest, or empty if
+    // the image could not be unpacked or has no manifest. Idempotent: if the
+    // cached copy is already present it is reused. When `progress` is given it
+    // is called with a fraction in [0,1] as extraction advances, so a caller
+    // can show a real progress bar instead of a blank wait.
+    using squashfs_progress_fn =
+        void (*)(float fraction, void* user);
+    static std::string squashfs_unpack(const std::string& squashfs_path,
+                                       std::string* error = nullptr,
+                                       squashfs_progress_fn progress = nullptr,
+                                       void* progress_user = nullptr);
+
+    // Path of an already-unpacked game's <name>.acgame manifest in the cache,
+    // or empty when the game is not yet unpacked (so a caller can avoid a
+    // redundant extract when the boot path already resolves).
+    static std::string squashfs_cached_acgame(const std::string& squashfs_path);
 };

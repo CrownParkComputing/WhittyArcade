@@ -143,8 +143,11 @@ struct library::worker {
 
             const fs::path cached =
                 fs::path(artwork_path(bezel_root().string(), short_name));
-            std::string bytes = known_missing ? std::string() : read_file(cached);
-            bool publish_generated = known_missing;
+            // A locally supplied bezel always wins, including when an older
+            // network lookup put the short name in missing.txt. This is what
+            // lets later custom artwork replace the generated surround.
+            std::string bytes = read_file(cached);
+            bool publish_generated = known_missing && bytes.empty();
             if (!known_missing && bytes.empty()) {
                 bytes = fetch(artwork_url(short_name));
                 if (stop.load()) return;

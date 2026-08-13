@@ -1335,6 +1335,91 @@ int browse_library_grid(
         // library with one game in it.
         bool page_picked = false;
         int remembered = 0;
+        // When browsing by publisher, the player can narrow a publisher page
+        // to a single board/system. -1 = show all boards for the current
+        // publisher.
+        int publisher_board_narrow = -1;
+        // When true, the next publisher page shown should auto-open its board
+        // picker (a publisher spanning several boards asks which one up front
+        // rather than dumping all its games in one flat grid).
+        bool pending_board_pick = false;
+        // Boards for a publisher, ordered by ascending game count (the board
+        // holding the fewest games first). This is the canonical order used
+        // everywhere a publisher's boards are listed, picked, or cycled.
+        const auto publisher_boards =
+            [&](const std::string& publisher) -> std::vector<int> {
+            std::map<int, int> counts;
+            for (const browse_entry& entry : entries) {
+                const rom_choice& choice = choices[entry.index];
+                if (publisher_group_of(choice) != publisher) continue;
+                const int slot = board_slot(choice.board);
+                if (slot >= 0) ++counts[slot];
+            }
+            std::vector<int> slots;
+            slots.reserve(counts.size());
+            for (const auto& [slot, count] : counts)
+                slots.push_back(slot);
+            std::stable_sort(slots.begin(), slots.end(),
+                             [&](int a, int b) { return counts[a] < counts[b]; });
+            return slots;
+        };
+        // Build and show the board picker for the current publisher. Returns
+        // true if a board was chosen (or "All boards"), false if the player
+        // backed out. Used both automatically (a publisher spanning several
+        // boards opens the picker on arrival) and on demand (F / right paddle).
+        const auto pick_board_for_publisher =
+            [&](const std::string& publisher) -> bool {
+            std::map<int, int> board_counts_on_page;
+            for (const browse_entry& entry : entries) {
+                const rom_choice& choice = choices[entry.index];
+                if (publisher_group_of(choice) != publisher) continue;
+                const int slot = board_slot(choice.board);
+                if (slot >= 0) ++board_counts_on_page[slot];
+            }
+            if (board_counts_on_page.empty()) return false;
+            // A publisher is browsed as its boards, not as one flat list, so
+            // there is no "All boards" entry - just the boards themselves,
+            // fewest games first.
+            const std::vector<int> slots = publisher_boards(publisher);
+            std::vector<std::string> labels;
+            labels.reserve(slots.size());
+            for (const int slot : slots)
+                labels.push_back(
+                    std::string(arcade_boards()[
+                        static_cast<std::size_t>(slot)].display_name) +
+                    "  (" + std::to_string(board_counts_on_page[slot]) + ")");
+            // A publisher that only ever used one board needs no picker: go
+            // straight to it.
+            if (slots.size() == 1) {
+                publisher_board_narrow = slots.front();
+                remembered = 0;
+                return true;
+            }
+            const int picked = menu.select(
+                publisher + " - Board",
+                "Choose a board/system.",
+                labels, "Back to Games");
+            if (picked >= 0 && picked < static_cast<int>(slots.size()))
+                publisher_board_narrow = slots[static_cast<std::size_t>(picked)];
+            remembered = 0;
+            return picked >= 0;
+        };
+        // Cycle the current publisher's board narrowing to the previous/next
+        // board (up/down on a publisher page). Wraps around. The order is the
+        // same ascending-count order used for opening and the picker, so up
+        // and down walk the platforms in a consistent sequence.
+        const auto cycle_publisher_board = [&](const std::string& publisher,
+                                               int direction) {
+            const std::vector<int> slots = publisher_boards(publisher);
+            if (slots.empty()) return;
+            int current = 0;
+            for (std::size_t i = 0; i < slots.size(); ++i)
+                if (slots[i] == publisher_board_narrow) { current = static_cast<int>(i); break; }
+            const int next = (current + direction + static_cast<int>(slots.size())) %
+                             static_cast<int>(slots.size());
+            publisher_board_narrow = slots[static_cast<std::size_t>(next)];
+            remembered = 0;
+        };
         for (;;) {
             // The pages that exist under the current style filter, rebuilt every
             // lap so a style change never leaves an empty page behind.
@@ -1431,6 +1516,9 @@ int browse_library_grid(
                 }
                 if (board_narrow >= 0 &&
                     board_slot(choice.board) != board_narrow)
+                    continue;
+                if (publisher_board_narrow >= 0 &&
+                    board_slot(choice.board) != publisher_board_narrow)
                     continue;
                 if (!publisher_narrow.empty() &&
                     (page_mode == 3 ? initial_of(choice)
@@ -1552,10 +1640,36 @@ int browse_library_grid(
                     }
                 } else {
                     page_title = publisher_narrow;
+                    if (publisher_board_narrow >= 0)
+                        page_title += "  /  " +
+                            std::string(arcade_boards()[
+                                static_cast<std::size_t>(
+                                    publisher_board_narrow)].display_name);
                     banner_key = "pub_" + publisher_narrow;
                     banners.request(banner_key,
                                     banner::library::kind::commons_logo,
                                     publisher_narrow);
+                    // Picking a publisher should also say which board/system
+                    // its games run on. Collect the distinct boards among the
+                    // games on this page and list them behind the "i" chip,
+                    // so a publisher page reads as "Namco -> Namco System
+                    // 246/256, Namco System 22" rather than a bare name.
+                    std::vector<int> boards_on_page;
+                    for (const browse_entry& entry : visible) {
+                        const int slot = board_slot(choices[entry.index].board);
+                        if (slot < 0) continue;
+                        if (std::find(boards_on_page.begin(),
+                                      boards_on_page.end(), slot) ==
+                            boards_on_page.end())
+                            boards_on_page.push_back(slot);
+                    }
+                    std::sort(boards_on_page.begin(), boards_on_page.end());
+                    for (const int slot : boards_on_page) {
+                        if (!board_info.empty()) board_info += "\n";
+                        board_info += "System:  " +
+                            std::string(arcade_boards()[
+                                static_cast<std::size_t>(slot)].display_name);
+                    }
                 }
                 const auto found = banner_pixels.find(banner_key);
                 if (found != banner_pixels.end() && found->second.valid()) {
@@ -1564,6 +1678,21 @@ int browse_library_grid(
                     banner_cover.height = found->second.height;
                 }
                 banner_ptr = &banner_cover;
+            }
+            // A publisher page opens on its first board (not a flat list of
+            // every game). Up/down then cycles the boards; B shows the board
+            // list. Only auto-select once per arrival.
+            if (pending_board_pick && page_mode == 2 &&
+                !publisher_narrow.empty()) {
+                pending_board_pick = false;
+                if (publisher_board_narrow < 0) {
+                    // Pick the board with the fewest games for this
+                    // publisher first.
+                    const std::vector<int> slots =
+                        publisher_boards(publisher_narrow);
+                    if (!slots.empty())
+                        publisher_board_narrow = slots.front();
+                }
             }
             const int selected_game = menu.select_grid(
                 page_title,
@@ -1617,6 +1746,7 @@ int browse_library_grid(
                 },
                 interrupt, page_mode != 0, banner_ptr,
                 !board_info.empty(),
+                /*board_filter=*/page_mode == 2,
                 /*list_view=*/false,
                 /*marquee_view=*/media_category == "marquee",
                 /*coverflow_view=*/media_category == "coverflow",
@@ -1753,11 +1883,31 @@ int browse_library_grid(
                 menu.show_text(page_title, board_info, "Back to Games");
                 continue;
             }
+            if (selected_game == launcher_menu::board_filter_request) {
+                // Only a publisher page can be narrowed by board.
+                if (page_mode == 2 && !publisher_narrow.empty())
+                    pick_board_for_publisher(publisher_narrow);
+                continue;
+            }
+            if (selected_game == launcher_menu::board_prev ||
+                selected_game == launcher_menu::board_next) {
+                // Up/down on a publisher page cycles between its boards.
+                if (page_mode == 2 && !publisher_narrow.empty())
+                    cycle_publisher_board(
+                        publisher_narrow,
+                        selected_game == launcher_menu::board_prev ? -1 : 1);
+                continue;
+            }
             if (selected_game == launcher_menu::page_back ||
                 selected_game == launcher_menu::page_forward) {
                 page_index +=
                     selected_game == launcher_menu::page_back ? -1 : 1;
                 remembered = 0;
+                // A different publisher page: drop any board narrowing so
+                // the new publisher shows all its boards again, and ask
+                // which board it should show up front.
+                publisher_board_narrow = -1;
+                pending_board_pick = true;
                 continue;
             }
             if (selected_game == launcher_menu::view_change) {
@@ -1825,6 +1975,9 @@ int browse_library_grid(
                     const int wanted = picked - first_group;
                     page_mode = wanted == 3 ? 0 : wanted + 1;
                     page_index = 0;
+                    // Switching to publisher view asks which board to show
+                    // first, rather than dumping every game in one grid.
+                    pending_board_pick = (page_mode == 2);
                     emulator_settings settings = load_settings();
                     settings.browse_group = names[wanted];
                     save_settings(settings);

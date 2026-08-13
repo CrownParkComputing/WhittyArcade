@@ -22,6 +22,8 @@ int main() {
                << "show_renderer=false\n"
                << "window_width=1100\n"
                << "vsync=false\n"
+               << "aspect=4:3\n"
+               << "bezel_enabled=false\n"
                << "rom_directory=/games/arcade/roms\n"
                << "chd_directory=/games/arcade/chd\n"
                << "media_directory=/nas/Roms/v3_0.285/media\n"
@@ -32,6 +34,8 @@ int main() {
     if (settings.master_volume != 125 ||
         settings.renderer != renderer_backend::software ||
         !settings.show_fps || settings.show_renderer || settings.vsync ||
+        settings.aspect != aspect_mode::standard_4_3 ||
+        settings.bezel_enabled ||
         settings.window_width != 1100 ||
         settings.rom_directory != "/games/arcade/roms" ||
         settings.chd_directory != "/games/arcade/chd" ||
@@ -49,9 +53,13 @@ int main() {
 
     settings.renderer = renderer_backend::vulkan;
     settings.show_fps = false;
+    settings.aspect = aspect_mode::widescreen_16_9;
+    settings.bezel_enabled = true;
     if (!save_settings(settings)) return 3;
     const emulator_settings saved = load_settings();
     if (saved.renderer != renderer_backend::vulkan || saved.show_fps ||
+        saved.aspect != aspect_mode::widescreen_16_9 ||
+        !saved.bezel_enabled ||
         saved.rom_directory != "/games/arcade/roms" ||
         saved.chd_directory != "/games/arcade/chd" ||
         saved.media_directory != "/nas/Roms/v3_0.285/media" ||
