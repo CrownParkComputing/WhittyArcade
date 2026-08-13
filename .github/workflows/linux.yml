@@ -39,6 +39,7 @@ jobs:
             glew \
             zlib \
             minizip \
+            sqlite \
             vulkan-headers \
             vulkan-icd-loader \
             glslang \

@@ -50,7 +50,7 @@ jobs:
                 build-essential ca-certificates cmake git ninja-build \
                 pkg-config libgl1-mesa-dev libsdl3-dev libsdl3-ttf-dev \
                 libopenal-dev libglew-dev libglm-dev zlib1g-dev \
-                libminizip-dev libvulkan-dev libmpg123-dev \
+                libminizip-dev libsqlite3-dev libvulkan-dev libmpg123-dev \
                 glslang-tools fonts-dejavu-core
               ;;
             dnf)
@@ -59,7 +59,7 @@ jobs:
                 pkgconf-pkg-config libglvnd-devel mesa-libGL-devel \
                 SDL3-devel SDL3_ttf-devel openal-soft-devel glew-devel \
                 glm-devel zlib-ng-compat-devel minizip-ng-compat-devel \
-                vulkan-loader-devel mpg123-devel glslang \
+                sqlite-devel vulkan-loader-devel mpg123-devel glslang \
                 dejavu-sans-fonts
               ;;
             zypper)
@@ -68,7 +68,7 @@ jobs:
                 ca-certificates gcc gcc-c++ cmake git ninja pkgconf-pkg-config \
                 Mesa-libGL-devel SDL3-devel SDL3_ttf-devel \
                 openal-soft-devel glew-devel glm-devel zlib-devel \
-                minizip-devel vulkan-devel mpg123-devel glslang-devel \
+                minizip-devel sqlite3-devel vulkan-devel mpg123-devel glslang-devel \
                 dejavu-fonts
               ;;
           esac
